@@ -1,0 +1,93 @@
+# 📈 StockSphere Roadmap
+
+## Vision
+
+Build the world's best platform to analyze every financial asset.
+
+Supported Assets:
+
+- Stocks
+- ETFs
+- Mutual Funds
+- Indices
+- Crypto
+- Commodities
+- Forex
+- Bonds
+- Options
+- Futures
+
+---
+
+## Sprint 1 — Core Data Engine
+
+### ✅ Completed
+
+- Next.js Setup
+- Dashboard
+- Stock Page
+- Watchlist
+- Discussion
+- Bull/Bear Votes
+- Charts
+- API Layer
+- Provider Layer
+- Service Layer
+
+### 🔄 In Progress
+
+- Asset Model
+- Adapter Layer
+- Company Module
+- Historical Module
+- News Module
+
+### ⏳ Pending
+
+- Financial Statements
+- Earnings
+- Dividends
+- Analyst Ratings
+- Events
+
+---
+
+## Sprint 2
+
+- Authentication
+- Supabase
+- Portfolio
+- Watchlist Sync
+- Notifications
+
+---
+
+## Sprint 3
+
+- Community
+- Posts
+- Comments
+- Profiles
+- Reputation
+
+---
+
+## Sprint 4
+
+- AI
+- AI Summary
+- AI Portfolio
+- AI Chat
+
+---
+
+## Version Goals
+
+### v0.1
+Friends Beta (10–15 users)
+
+### v0.5
+College Demo & Hackathons
+
+### v1.0
+Public Launch
