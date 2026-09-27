@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { addRecentlyViewed } from "@/lib/utils/recentlyViewed";
 
 export default function RecentSearchTracker({
   symbol,
@@ -8,21 +9,14 @@ export default function RecentSearchTracker({
   symbol: string;
 }) {
   useEffect(() => {
-    const existing = JSON.parse(
-      localStorage.getItem("recentSearches") || "[]"
-    );
-
-    const updated = [
+    addRecentlyViewed({
       symbol,
-      ...existing.filter(
-        (item: string) => item !== symbol
-      ),
-    ].slice(0, 5);
-
-    localStorage.setItem(
-      "recentSearches",
-      JSON.stringify(updated)
-    );
+      type: "stock",
+      market: symbol.endsWith(".NS")
+        ? "INDIA"
+        : "US",
+      viewedAt: Date.now(),
+    });
   }, [symbol]);
 
   return null;
