@@ -1,33 +1,12 @@
-import { getFinancialMetrics } from "../apis/finnhubFinancials";
+import { fetchFinancials } from "../providers/financials";
 
 export async function getFinancials(
   symbol: string
 ) {
-  const data =
-    await getFinancialMetrics(symbol);
+  const result =
+    await fetchFinancials(symbol);
 
-  if (!data?.metric) return null;
+  if (!result) return null;
 
-  return {
-    marketCap:
-      data.metric.marketCapitalization,
-
-    pe:
-      data.metric.peTTM,
-
-    eps:
-      data.metric.epsTTM,
-
-    dividendYield:
-      data.metric.dividendYieldIndicatedAnnual,
-
-    week52High:
-      data.metric["52WeekHigh"],
-
-    week52Low:
-      data.metric["52WeekLow"],
-
-    roe:
-      data.metric.roeTTM,
-  };
+  return result.data;
 }
