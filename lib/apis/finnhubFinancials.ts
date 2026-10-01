@@ -4,7 +4,9 @@ export async function getFinancialMetrics(
   symbol: string
 ) {
   const response = await fetch(
-    `https://finnhub.io/api/v1/stock/metric?symbol=${symbol}&metric=all&token=${API_KEY}`,
+    `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(
+      symbol
+    )}&metric=all&token=${API_KEY}`,
     {
       cache: "no-store",
     }

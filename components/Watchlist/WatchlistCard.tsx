@@ -76,7 +76,7 @@ export default function WatchlistCard({
   async function loadPrice() {
     try {
       const response = await fetch(
-        `/api/market?symbol=${symbol}`
+        `/api/market?symbol=${encodeURIComponent(symbol)}`
       );
 
       const data = await response.json();

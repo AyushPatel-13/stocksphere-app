@@ -180,9 +180,9 @@ function requestFor(symbol?: string): Request {
  * The Indian leg of the market-wide payload is not injectable — it goes through
  * getIndianMarketQuotes() to the real Upstox client — so stubbing fetch is how
  * "Upstox did not answer" is produced without a request. The console is
- * captured because lib/apis/upstox.ts and lib/apis/twelvedata.ts log on the way
- * through, and lib/apis/twelvedata.ts logs the API key it is configured with.
- * Nothing captured is asserted on or printed.
+ * captured because lib/apis/upstox.ts and lib/apis/twelvedata.ts log the
+ * provider responses they receive on the way through. Nothing captured is
+ * asserted on or printed.
  */
 async function withoutNetwork<T>(fn: () => Promise<T>): Promise<T> {
   const originalFetch = globalThis.fetch;

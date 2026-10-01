@@ -9,13 +9,11 @@ const BASE_URL =
 export async function getCompanyProfile(
   symbol: string
 ) {
-  console.log(
-    "Finnhub Key:",
-    API_KEY
-  );
-
+  // The API key is deliberately never logged. It used to be, on every call.
   const response = await fetch(
-    `${BASE_URL}/stock/profile2?symbol=${symbol}&token=${API_KEY}`,
+    `${BASE_URL}/stock/profile2?symbol=${encodeURIComponent(
+      symbol
+    )}&token=${API_KEY}`,
     {
       cache: "no-store",
     }
@@ -51,7 +49,9 @@ export async function getCompanyNews(
   from.setDate(today.getDate() - 7);
 
   const response = await fetch(
-    `https://finnhub.io/api/v1/company-news?symbol=${symbol}&from=${from
+    `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(
+      symbol
+    )}&from=${from
       .toISOString()
       .split("T")[0]}&to=${today
       .toISOString()

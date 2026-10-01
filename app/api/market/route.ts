@@ -12,6 +12,8 @@ import { getStockQuote as getTwelveQuote } from "@/lib/apis/twelvedata";
 import { getStockQuote as getAlphaQuote } from "@/lib/apis/alphavantage";
 import { getYahooQuote } from "@/lib/apis/yahoo";
 
+import { isValidSymbol } from "@/lib/validation/symbol";
+
 export const revalidate = 60;
 
 const US_SYMBOLS = {
@@ -390,6 +392,32 @@ export async function GET(
   const symbol = new URL(request.url).searchParams
     .get("symbol")
     ?.trim();
+
+  // A value that is not a symbol never reaches a provider.
+  //
+  // Before this it was passed through verbatim and interpolated into provider
+  // URLs, so "AAPL&outputsize=5000" became extra query parameters on the
+  // upstream request. The provider clients now percent-encode their values as
+  // well; this refuses the malformed value outright rather than relying on
+  // that alone.
+  //
+  // 400 is new, and it is additive: a symbol that *is* a symbol still takes
+  // exactly the 200/404/503/500 paths below, unchanged.
+  //
+  // The rejected value is deliberately not echoed back — a failure body that
+  // repeats caller-supplied text is a reflection nothing here needs, which is
+  // why `symbol` is null rather than the input.
+  if (symbol && !isValidSymbol(symbol)) {
+    return NextResponse.json(
+      {
+        success: false,
+        symbol: null,
+        quote: null,
+        error: "Invalid symbol",
+      },
+      { status: 400 }
+    );
+  }
 
   if (symbol) {
     return getSingleQuote(

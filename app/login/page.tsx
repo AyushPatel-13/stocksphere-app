@@ -150,6 +150,32 @@ function GoogleMark() {
   );
 }
 
+/**
+ * Where Supabase sends the user back to after Google sign-in.
+ *
+ * This used to be the literal "http://localhost:3000". That worked on a dev
+ * server and broke every production sign-in, because Google returned the user
+ * to their own machine instead of the deployed site.
+ *
+ * NEXT_PUBLIC_SITE_URL is the explicit setting: a deployment sets it to its own
+ * origin (https://example.com). It is a NEXT_PUBLIC_ variable because this runs
+ * in the browser — it carries a public origin, never anything secret.
+ *
+ * With nothing configured the browser's own origin is used, which is correct by
+ * construction rather than by guessing: on a dev server it is
+ * http://localhost:3000, and on a deployed site it is that site's origin. That
+ * is why there is no hardcoded fallback — a fallback to a domain we picked
+ * would be a guess, and a wrong one would send sign-ins somewhere nobody
+ * intended. Read when the button is pressed, so it is the origin the user is
+ * actually on.
+ */
+function getOAuthRedirectUrl(): string {
+  return (
+    process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
+    window.location.origin
+  );
+}
+
 export default function LoginPage() {
   const [redirecting, setRedirecting] = useState(false);
 
@@ -181,11 +207,12 @@ export default function LoginPage() {
     setRedirecting(true);
 
     try {
-      // Unchanged: same provider, same redirect target.
+      // Unchanged: same provider, same flow. Only the redirect target is now
+      // configuration instead of a hardcoded localhost origin.
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: "http://localhost:3000",
+          redirectTo: getOAuthRedirectUrl(),
         },
       });
 
