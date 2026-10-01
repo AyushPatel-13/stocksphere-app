@@ -2,6 +2,10 @@ import { getFinancialMetrics } from "../apis/finnhubFinancials";
 import { searchUpstoxEquity } from "../apis/upstox";
 import { getUpstoxKeyRatios } from "../apis/upstoxFundamentals";
 import { normalizeUpstoxFinancials } from "../adapters/financials";
+import {
+  bareIndianSymbol,
+  isIndianEquitySymbol,
+} from "../data/instruments/india";
 
 /**
  * The provider-level payload the financials tool consumes.
@@ -52,22 +56,25 @@ export type GlobalMetricsLookup = (
   symbol: string
 ) => Promise<GlobalMetricsPayload | null | undefined>;
 
-// Mirrors the routing rule in lib/providers/market.provider.ts, where
-// isIndianSymbol/normalizeIndianSymbol are module-private and therefore not
-// importable. Kept identical so the financials path, the quote path and the
-// company path all agree on what counts as an Indian symbol.
+// A symbol is Indian if it carries the ".NS"/".BSE" convention OR if it is a
+// bare symbol in the app's Indian instrument universe
+// (lib/data/instruments/india.ts), which is the single place this decision is
+// made. The suffix test alone let a bare "TCS" leave this path and be answered
+// by Finnhub instead, whose market-cap figure for it is in a different unit
+// entirely (1.0008625 — a currency amount, not a valuation).
 function isIndianSymbol(symbol: string): boolean {
   return (
     symbol.endsWith(".NS") ||
-    symbol.endsWith(".BSE")
+    symbol.endsWith(".BSE") ||
+    isIndianEquitySymbol(symbol)
   );
 }
 
+// The bare NSE trading symbol Upstox's instrument search expects. Shared with
+// the rest of the app so "TCS", "tcs" and "TCS.NS" cannot normalise differently
+// in different callers.
 function normalizeIndianSymbol(symbol: string): string {
-  return symbol
-    .replace(".NS", "")
-    .replace(".BSE", "")
-    .toUpperCase();
+  return bareIndianSymbol(symbol);
 }
 
 /**

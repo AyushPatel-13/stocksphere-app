@@ -39,8 +39,6 @@ export async function getUpstoxQuotes(
 
     const data = await response.json();
 
-    console.log("Upstox Response:", data);
-
     return data;
   } catch (error) {
     console.error("Upstox Request Error:", error);

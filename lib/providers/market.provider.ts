@@ -17,24 +17,47 @@ import {
 
 import {
   NIFTY_50_SYMBOLS,
+  bareIndianSymbol,
+  isIndianEquitySymbol,
 } from "../data/instruments/india";
 
+/**
+ * The three global quote lookups getMarketQuote() falls back through, named so
+ * tests can inject fakes — the same convention lib/providers/price.ts uses for
+ * its own global chain (YahooPriceLookup / TwelvePriceLookup).
+ *
+ * These exist because the chain's third provider, Yahoo, is not fetch-based:
+ * yahoo-finance2 talks to the network through its own client, so stubbing
+ * globalThis.fetch cannot reach it. Without injectable lookups a test of the
+ * fallback would have to make a real request to Yahoo.
+ */
+export type TwelveQuoteLookup = typeof getTwelveQuote;
+export type AlphaQuoteLookup = typeof getAlphaQuote;
+export type YahooQuoteLookup = typeof getYahooQuote;
+
+// A symbol is Indian if it carries the ".NS"/".BSE" convention OR if it is a
+// bare symbol in the app's Indian instrument universe
+// (lib/data/instruments/india.ts), which is the single place this decision is
+// made. The suffix test alone used to send a bare Indian ticker down the global
+// chain below (TwelveData → Alpha Vantage → Yahoo), where it is a different
+// security.
 function isIndianSymbol(
   symbol: string
 ): boolean {
   return (
     symbol.endsWith(".NS") ||
-    symbol.endsWith(".BSE")
+    symbol.endsWith(".BSE") ||
+    isIndianEquitySymbol(symbol)
   );
 }
 
+// The bare NSE trading symbol Upstox's instrument search expects. Shared with
+// the rest of the app so "TCS", "tcs" and "TCS.NS" cannot normalise differently
+// in different callers.
 function normalizeIndianSymbol(
   symbol: string
 ): string {
-  return symbol
-    .replace(".NS", "")
-    .replace(".BSE", "")
-    .toUpperCase();
+  return bareIndianSymbol(symbol);
 }
 
 /**
@@ -195,9 +218,16 @@ export async function getNifty50Quotes(): Promise<
  *   Yahoo → last resort
  */
 export async function getMarketQuote(
-  symbol: string
+  symbol: string,
+  lookupTwelve: TwelveQuoteLookup = getTwelveQuote,
+  lookupAlpha: AlphaQuoteLookup = getAlphaQuote,
+  lookupYahoo: YahooQuoteLookup = getYahooQuote
 ): Promise<AssetQuote | null> {
   // 🇮🇳 INDIA → UPSTOX PRIMARY
+  //
+  // Unchanged, and deliberately not routed through the injectable lookups
+  // above: the Indian branch resolves through Upstox and answers null rather
+  // than falling back to any global provider.
   if (isIndianSymbol(symbol)) {
     return getIndianMarketQuote(
       symbol
@@ -209,7 +239,7 @@ export async function getMarketQuote(
 
   try {
     const twelve =
-      await getTwelveQuote(symbol);
+      await lookupTwelve(symbol);
 
     if (twelve?.close) {
       return fromTwelveData(
@@ -227,14 +257,19 @@ export async function getMarketQuote(
 
   try {
     const alpha =
-      await getAlphaQuote(symbol);
+      await lookupAlpha(symbol);
 
-    if (
-      alpha?.["Global Quote"]
-    ) {
-      return fromAlphaVantage(
-        alpha
-      );
+    // No "is Global Quote present?" test here any more. That check was the bug:
+    // a symbol Alpha Vantage cannot resolve still comes back as
+    // {"Global Quote": {}}, and an empty object is truthy — so the guard passed
+    // and fromAlphaVantage() was handed nothing to normalize. The adapter now
+    // answers null for a response with no price, which is the only test that
+    // actually distinguishes "a quote" from "an envelope".
+    const quote =
+      fromAlphaVantage(alpha);
+
+    if (quote) {
+      return quote;
     }
   } catch (error) {
     console.error(
@@ -247,7 +282,7 @@ export async function getMarketQuote(
 
   try {
     const yahoo =
-      await getYahooQuote(symbol);
+      await lookupYahoo(symbol);
 
     if (yahoo?.price) {
       return fromYahoo(yahoo);

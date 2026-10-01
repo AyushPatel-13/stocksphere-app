@@ -15,6 +15,54 @@ type Props = {
     historicalData: any[];
 };
 
+/**
+ * The six range buttons used to be white text on #1e293b, with #2563eb for the
+ * current range — a slate/blue pair that appears nowhere else in the app, at an
+ * 8px radius and with no hover or focus-visible treatment. They are now the
+ * app's dark surface and border, with the current range on the primary green,
+ * and the card matches the Company Overview card beside it.
+ *
+ * The range state, the six options and the series they select are untouched.
+ */
+const SC_STYLES = `
+.sc-range {
+  padding: 8px 16px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  color: #c9c9c9;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+.sc-range:hover {
+  background: #242424;
+  border-color: #3a3a3a;
+  color: #fff;
+}
+.sc-range:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
+}
+/* Black on green-500, the app's primary idiom, so which series the chart is
+   drawn from is unambiguous at a glance. */
+.sc-range-current,
+.sc-range-current:hover {
+  background: #22c55e;
+  border-color: #22c55e;
+  color: #000;
+}
+.sc-range-current:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-range { transition: none; }
+}
+`;
+
 export default function StockChart({
     historicalData,
 }: Props) {
@@ -60,17 +108,35 @@ export default function StockChart({
         <div
             style={{
                 background: "#111",
-                padding: "30px",
-                borderRadius: "20px",
                 border: "1px solid #222",
+                padding: "24px",
+                borderRadius: "16px",
                 width: "100%",
             }}
         >
-            <h2>Price Chart</h2>
+            <style>{SC_STYLES}</style>
+
+            <h2
+                style={{
+                    margin: 0,
+                    fontSize: "22px",
+                    fontWeight: 700,
+                    letterSpacing: "-0.01em",
+                }}
+            >
+                Price Chart
+            </h2>
 
             <div
                 style={{
                     display: "flex",
+                    // The six range buttons are fixed-width (8px/16px padding
+                    // plus two characters), so on a narrow viewport they used
+                    // to paint past this row and past the card — 417px of
+                    // document against a 390px viewport. Wrapping keeps every
+                    // button visible and in reach; `gap` already supplies the
+                    // 10px between rows as well as within one.
+                    flexWrap: "wrap",
                     gap: "10px",
                     margin: "20px 0",
                 }}
@@ -79,16 +145,11 @@ export default function StockChart({
                     <button
                         key={item}
                         onClick={() => setRange(item)}
-                        style={{
-                            background:
-                                range === item ? "#2563eb" : "#1e293b",
-                            color: "white",
-                            border: "none",
-                            padding: "8px 16px",
-                            borderRadius: "8px",
-                            cursor: "pointer",
-                            transition: "0.2s",
-                        }}
+                        className={
+                            range === item
+                                ? "sc-range sc-range-current"
+                                : "sc-range"
+                        }
                     >
                         {item}
                     </button>

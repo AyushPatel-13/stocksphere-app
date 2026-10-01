@@ -12,7 +12,21 @@ export interface RunAgentDeps {
   getChatCompletion: typeof defaultGetChatCompletion;
 }
 
-const MAX_ITERATIONS = 5;
+// How many turns may request tools.
+//
+// This is a budget of *tool calls*, not of rounds. The model asks for one tool
+// per turn far more often than it batches them, so the previous cap of five
+// bought exactly five tool calls: a single-stock price question fits in that,
+// and a two-stock comparison does not. A live "Compare TCS and Infosys."
+// stopped at five having resolved both companies and priced only the first.
+//
+// Raising the number is a small part of the fix and would be worthless alone —
+// it only moves the wall the request dies against. It is paired with three
+// changes that make the rounds go further: the system prompt now asks for
+// independent calls together in one turn, an identical call is answered from
+// the first result instead of being re-fetched, and the final answer is no
+// longer one of the rounds being spent (see the reserved turn at the bottom).
+const MAX_TOOL_ROUNDS = 8;
 
 const FALLBACK_ANSWER =
   "I wasn't able to finish gathering the data needed to answer that. Please try rephrasing your question or asking about one stock at a time.";
@@ -43,7 +57,12 @@ export async function runAgent(
   const sources = new Set<string>();
   const warnings: string[] = [];
 
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+  // Identical (tool, arguments) pairs already fetched during this request.
+  // Re-running one can only re-fetch what the model has already been given,
+  // and every repeat spends a round that a comparison needs elsewhere.
+  const fetched = new Map<string, ToolResult<unknown>>();
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const completion = await deps.getChatCompletion(messages, AGENT_TOOLS);
 
     if (!completion.toolCalls || completion.toolCalls.length === 0) {
@@ -110,7 +129,25 @@ export async function runAgent(
         };
       } else {
         inputForTrace = validation.data as Record<string, unknown>;
+
+        // The same tool with the same arguments, already run in this request.
+        // The tool message still has to be answered — every tool_call id needs
+        // a reply — so the earlier result is replayed to the model, and no
+        // second chip is recorded, because no second fetch happened.
+        const cacheKey = `${tool.name}:${JSON.stringify(inputForTrace)}`;
+        const previously = fetched.get(cacheKey);
+
+        if (previously) {
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            content: JSON.stringify(previously),
+          });
+          continue;
+        }
+
         result = await tool.execute(validation.data);
+        fetched.set(cacheKey, result);
       }
 
       toolCallTrace.push({
@@ -134,6 +171,37 @@ export async function runAgent(
         content: JSON.stringify(result),
       });
     }
+  }
+
+  // The tool budget is spent, but everything gathered so far is real and is
+  // already sitting in `messages`. Ending here would throw it away and tell the
+  // user the agent "wasn't able to finish gathering the data" while it is
+  // holding both companies' figures — which is exactly what the live
+  // "Compare TCS and Infosys." did, with nine tool results in hand.
+  //
+  // So the last word goes to the model, once, with tool calling withheld: it
+  // must answer from what it has, and say plainly which values it could not
+  // retrieve. Nothing is invented here — the same tool results are all it can
+  // see, and its instructions not to guess are unchanged.
+  try {
+    const finalCompletion = await deps.getChatCompletion(messages, AGENT_TOOLS, {
+      toolChoice: "none",
+    });
+    const finalAnswer = finalCompletion.content?.trim();
+
+    if (finalAnswer) {
+      return {
+        answer: finalAnswer,
+        toolCalls: toolCallTrace,
+        sources: Array.from(sources),
+        warnings,
+        conversationId,
+      };
+    }
+  } catch (error) {
+    // A provider that rejects the withheld-tool turn must not turn a partial
+    // answer into a 500; fall through to the same fallback as before.
+    console.error("Agent: the reserved final-answer turn failed:", error);
   }
 
   warnings.push(

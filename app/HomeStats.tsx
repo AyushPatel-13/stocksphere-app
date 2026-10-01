@@ -75,40 +75,62 @@ setEvents(savedEvents.slice(0, 3));
 
   return (
     <>
-      <section className="px-10 mt-16">
-        <h2 className="text-3xl font-bold mb-6">
+      <section className="mt-14">
+        <h2 className="text-[22px] sm:text-[26px] font-bold tracking-tight mb-5">
           🔥 Trending Stocks
         </h2>
 
-        <div className="grid md:grid-cols-3 gap-6">
-          {trending.map((stock) => (
-            <div
+        {trending.length === 0 ? (
+          <p className="rounded-xl bg-[#151515] p-4 text-sm text-[#888]">
+            No discussions yet — trending stocks appear once people
+            start talking about them.
+          </p>
+        ) : (
+          <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
+            {trending.map((stock) => (
+              <div
   key={stock.symbol}
   onClick={() =>
     router.push(`/stock/${stock.symbol}`)
   }
   className="
-    bg-gray-900
-    p-6
-    rounded-xl
+    rounded-2xl
+    border
+    border-[#222]
+    bg-[#111]
+    p-5
     cursor-pointer
-    hover:bg-gray-800
+    transition-colors
+    hover:border-[#2e2e2e]
+    hover:bg-[#161616]
   "
 >
-              {stock.symbol} - {stock.count} Discussions
-            </div>
-          ))}
-        </div>
+                <p className="text-[15px] font-semibold">
+                  {stock.symbol}
+                </p>
+
+                <p className="mt-1 text-sm tabular-nums text-[#888]">
+                  {stock.count} Discussions
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
-      <section className="px-10 mt-16">
-        <h2 className="text-3xl font-bold mb-6">
+      <section className="mt-14">
+        <h2 className="text-[22px] sm:text-[26px] font-bold tracking-tight mb-5">
           🏆 Top Predictors
         </h2>
 
-        <div className="grid md:grid-cols-3 gap-6">
-          {leaders.map((user: any) => (
-            <div
+        {leaders.length === 0 ? (
+          <p className="rounded-xl bg-[#151515] p-4 text-sm text-[#888]">
+            No predictions recorded yet.
+          </p>
+        ) : (
+          <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
+            {leaders.map((user: any) => (
+              <div
   key={user.username}
   onClick={() =>
     router.push(
@@ -116,46 +138,63 @@ setEvents(savedEvents.slice(0, 3));
     )
   }
   className="
-    bg-gray-900
-    p-6
-    rounded-xl
+    rounded-2xl
+    border
+    border-[#222]
+    bg-[#111]
+    p-5
     cursor-pointer
-    hover:bg-gray-800
+    transition-colors
+    hover:border-[#2e2e2e]
+    hover:bg-[#161616]
   "
 >
-              {user.username}
-              <br />
-              ✅ {user.correct} Correct
-            </div>
-          ))}
-        </div>
+                <p className="truncate text-[15px] font-semibold">
+                  {user.username}
+                </p>
+
+                <p className="mt-1 text-sm tabular-nums text-[#4ade80]">
+                  ✅ {user.correct} Correct
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
-      <section className="px-10 mt-16">
-  <h2 className="text-3xl font-bold mb-6">
+      <section className="mt-14">
+  <h2 className="text-[22px] sm:text-[26px] font-bold tracking-tight mb-5">
     📅 Upcoming Events
   </h2>
 
-  <div className="grid md:grid-cols-3 gap-6">
-    {events.map(
-      (event: any, index) => (
-        <div
-          key={index}
-          className="bg-gray-900 p-6 rounded-xl"
-        >
-          <h3>{event.symbol}</h3>
+  {events.length === 0 ? (
+    <p className="rounded-xl bg-[#151515] p-4 text-sm text-[#888]">
+      No upcoming events.
+    </p>
+  ) : (
+    <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
+      {events.map(
+        (event: any, index) => (
+          <div
+            key={index}
+            className="rounded-2xl border border-[#222] bg-[#111] p-5"
+          >
+            <p className="text-[15px] font-semibold">
+              {event.symbol}
+            </p>
 
-          <p>
-            📌 {event.eventType}
-          </p>
+            <p className="mt-2 text-sm text-[#888]">
+              📌 {event.eventType}
+            </p>
 
-          <p>
-            📅 {event.eventDate}
-          </p>
-        </div>
-      )
-    )}
-  </div>
+            <p className="mt-1 text-sm text-[#888]">
+              📅 {event.eventDate}
+            </p>
+          </div>
+        )
+      )}
+    </div>
+  )}
 </section>
 
     </>

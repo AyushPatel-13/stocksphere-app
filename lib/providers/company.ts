@@ -2,6 +2,10 @@ import { getCompanyProfile } from "../apis/finnhub";
 import { getCompanyOverview } from "../apis/alphavantage";
 import { searchUpstoxEquity } from "../apis/upstox";
 import {
+  bareIndianSymbol,
+  isIndianEquitySymbol,
+} from "../data/instruments/india";
+import {
   normalizeFinnhubCompany,
   normalizeAlphaCompany,
   normalizeUpstoxCompany,
@@ -20,22 +24,20 @@ export type IndianEquitySearch = (
   symbol: string
 ) => Promise<UpstoxCompanyRow | null>;
 
-// Mirrors the routing rule in lib/providers/market.provider.ts, where
-// isIndianSymbol/normalizeIndianSymbol are module-private and therefore not
-// importable. Kept identical so the company path and the quote path agree on
-// what counts as an Indian symbol.
+// A symbol is Indian if it carries the ".NS"/".BSE" convention OR if it is a
+// bare symbol in the app's Indian instrument universe
+// (lib/data/instruments/india.ts). The suffix test alone let a bare "INFY"
+// leave this path and be answered by a global provider instead.
 function isIndianSymbol(symbol: string): boolean {
   return (
     symbol.endsWith(".NS") ||
-    symbol.endsWith(".BSE")
+    symbol.endsWith(".BSE") ||
+    isIndianEquitySymbol(symbol)
   );
 }
 
 function normalizeIndianSymbol(symbol: string): string {
-  return symbol
-    .replace(".NS", "")
-    .replace(".BSE", "")
-    .toUpperCase();
+  return bareIndianSymbol(symbol);
 }
 
 export async function fetchCompany(
@@ -71,6 +73,16 @@ export async function fetchCompany(
         };
       }
     } catch {}
+
+    // A recognised Indian equity answers through Upstox or not at all.
+    //
+    // This is the one provider where the two chains used to be reachable in
+    // sequence rather than instead of each other: a ".NS" symbol was rejected
+    // by both global providers, so falling through was harmless and went
+    // unnoticed — but a bare "TCS" is a different company in Finnhub's and
+    // Alpha Vantage's namespaces, and answering with it would be exactly the
+    // silent substitution this rule exists to prevent.
+    return null;
   }
 
   // Finnhub (Primary)

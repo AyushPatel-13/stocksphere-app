@@ -3,6 +3,10 @@ import { searchUpstoxEquity } from "../apis/upstox";
 import { getUpstoxNews, type UpstoxNewsItem } from "../apis/upstoxNews";
 import { normalizeUpstoxNews } from "../adapters/news";
 import { NewsArticle } from "../types/news";
+import {
+  bareIndianSymbol,
+  isIndianEquitySymbol,
+} from "../data/instruments/india";
 
 /**
  * Injected lookups, following the same convention as
@@ -22,26 +26,25 @@ export type GlobalNewsLookup = (
   symbol: string
 ) => Promise<NewsArticle[] | null>;
 
-// Mirrors the routing rule in lib/providers/market.provider.ts, where
-// isIndianSymbol/normalizeIndianSymbol are module-private and therefore not
-// importable. Kept identical so the news path, the quote path, the company path
-// and the financials path all agree on what counts as an Indian symbol.
-//
-// Note this is case-sensitive, so "tcs.ns" is not recognised as Indian — an
-// inherited limitation of the rule, not a new one, and the symbol resolver
-// canonicalises to upper case before any tool reaches here.
+// A symbol is Indian if it carries the ".NS"/".BSE" convention OR if it is a
+// bare symbol in the app's Indian instrument universe
+// (lib/data/instruments/india.ts), which is the single place this decision is
+// made. The suffix test alone let a bare "INFY" leave this path and be answered
+// by Finnhub instead, which tags its articles by the ticker it was asked about
+// and returned unrelated global and crypto headlines for it.
 function isIndianSymbol(symbol: string): boolean {
   return (
     symbol.endsWith(".NS") ||
-    symbol.endsWith(".BSE")
+    symbol.endsWith(".BSE") ||
+    isIndianEquitySymbol(symbol)
   );
 }
 
+// The bare NSE trading symbol Upstox's instrument search expects. Shared with
+// the rest of the app so "TCS", "tcs" and "TCS.NS" cannot normalise differently
+// in different callers.
 function normalizeIndianSymbol(symbol: string): string {
-  return symbol
-    .replace(".NS", "")
-    .replace(".BSE", "")
-    .toUpperCase();
+  return bareIndianSymbol(symbol);
 }
 
 /**

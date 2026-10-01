@@ -19,6 +19,31 @@ const navigation = [
   { label: "Heatmap", href: "/heatmap", icon: "🗺️" },
 ];
 
+/**
+ * The navbar's own stylesheet.
+ *
+ * The nav strip carried `overflow-x-auto scrollbar-hide`, but `scrollbar-hide`
+ * is not a Tailwind v4 utility and nothing in the app defines it, so it did
+ * nothing — Chrome painted a native 15px horizontal scrollbar inside the navbar
+ * at every width (measured at 390, 768 and 1440). That bare grey bar was the
+ * only part of the navbar that did not look deliberate.
+ *
+ * Hiding it keeps the strip scrollable — the ten links need 1092px and only fit
+ * above roughly 1650px — while dropping the stray chrome. It changes what the
+ * strip looks like, not what it does.
+ */
+const NAVBAR_STYLES = `
+.navbar-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.navbar-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+`;
+
 export default function Navbar() {
   const [user, setUser] = useState<User | null>(null);
 
@@ -44,13 +69,15 @@ export default function Navbar() {
     null;
 
   return (
-    <header className="sticky top-0 z-50 border-b border-gray-800 bg-black/95 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-[1600px] items-center gap-6 px-5">
+    <header className="sticky top-0 z-50 border-b border-[#222] bg-black/95 backdrop-blur">
+      <style>{NAVBAR_STYLES}</style>
+
+      <div className="mx-auto flex h-16 max-w-[1600px] items-center gap-4 px-4 sm:gap-6 sm:px-5">
 
         {/* Logo */}
         <Link
           href="/"
-          className="flex shrink-0 items-center gap-3"
+          className="flex shrink-0 items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
         >
           <Image
             src="/stocksphere-logo.png"
@@ -65,19 +92,19 @@ export default function Navbar() {
   Stock<span className="text-green-500">Sphere</span>
 </div>
 
-            <div className="text-[10px] text-gray-500">
+            <div className="text-[10px] text-[#777]">
               Where Investors Think Together
             </div>
           </div>
         </Link>
 
         {/* Navigation */}
-        <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-hide">
+        <nav className="navbar-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {navigation.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-300 transition hover:bg-gray-900 hover:text-white"
+              className="flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
             >
               <span className="text-sm">
                 {item.icon}
@@ -91,7 +118,7 @@ export default function Navbar() {
         </nav>
 
         {/* User */}
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
 
           {user ? (
             <>
@@ -101,10 +128,10 @@ export default function Navbar() {
                   alt={fullName}
                   width={38}
                   height={38}
-                  className="h-[38px] w-[38px] rounded-full border border-gray-700 object-cover"
+                  className="h-[38px] w-[38px] rounded-full border border-[#222] object-cover"
                 />
               ) : (
-                <div className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-gray-700 bg-gray-900 font-semibold text-green-500">
+                <div className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-[#222] bg-[#111] font-semibold text-green-500">
                   {fullName.charAt(0).toUpperCase()}
                 </div>
               )}
@@ -115,7 +142,7 @@ export default function Navbar() {
 
               <button
                 onClick={logout}
-                className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-400 transition hover:bg-red-500 hover:text-white"
+                className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-400 transition-colors hover:bg-red-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50"
               >
                 Logout
               </button>
@@ -123,7 +150,7 @@ export default function Navbar() {
           ) : (
             <Link
               href="/login"
-              className="rounded-lg bg-green-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-green-400"
+              className="rounded-lg bg-green-500 px-4 py-2 text-sm font-semibold text-black transition-colors hover:bg-green-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
             >
               Login
             </Link>

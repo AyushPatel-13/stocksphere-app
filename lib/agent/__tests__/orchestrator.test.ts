@@ -74,18 +74,47 @@ test("runAgent records a warning for invalid tool arguments instead of throwing"
   assert.ok(result.warnings.some((w) => w.includes("Invalid arguments")));
 });
 
-test("runAgent stops after the iteration cap and returns a graceful fallback", async () => {
+test("runAgent stops after the iteration cap and answers from the data it gathered", async () => {
   const infiniteToolCall: LLMCompletionResult = {
     content: null,
     toolCalls: [
       { id: "call_x", name: "resolve_symbol", arguments: JSON.stringify({ query: "a" }) },
     ],
   };
-  const getChatCompletion = fakeLLM(Array(5).fill(infiniteToolCall));
+
+  // Eight tool rounds, then the reserved turn that withholds tools. The model
+  // no longer has to produce its answer out of the tool budget itself, which is
+  // what used to turn a cap into "I wasn't able to finish".
+  const getChatCompletion = fakeLLM([
+    ...Array(8).fill(infiniteToolCall),
+    { content: "Answered from what was gathered.", toolCalls: null },
+  ]);
 
   const result = await runAgent({ message: "hi" }, { getChatCompletion });
 
-  assert.equal(result.toolCalls.length, 5);
+  // The repeated identical call is served from the first result, so the trace
+  // records a single fetch even though the model asked eight times.
+  assert.equal(result.toolCalls.length, 1);
+  assert.equal(result.answer, "Answered from what was gathered.");
+  assert.ok(
+    !result.warnings.some((w) => w.includes("maximum number of tool-calling steps"))
+  );
+});
+
+test("runAgent still falls back when the reserved final turn produces no answer", async () => {
+  const infiniteToolCall: LLMCompletionResult = {
+    content: null,
+    toolCalls: [
+      { id: "call_x", name: "resolve_symbol", arguments: JSON.stringify({ query: "a" }) },
+    ],
+  };
+  const getChatCompletion = fakeLLM([
+    ...Array(8).fill(infiniteToolCall),
+    { content: null, toolCalls: null },
+  ]);
+
+  const result = await runAgent({ message: "hi" }, { getChatCompletion });
+
   assert.ok(result.warnings.some((w) => w.includes("maximum number of tool-calling steps")));
   assert.match(result.answer, /wasn't able to finish/);
 });

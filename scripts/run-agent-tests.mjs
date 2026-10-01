@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Discovers *.test.ts files under lib/agent and app/api/agent, then runs
-// them via `tsx --test <files...>`.
+// Discovers *.test.ts files under TEST_ROOTS (below), then runs them via
+// `tsx --test <files...>`.
 //
 // Why this exists: `tsx --test <directory>` fails with
 // ERR_UNSUPPORTED_DIR_IMPORT (Node doesn't resolve a bare directory as a
@@ -8,13 +8,30 @@
 // doesn't recurse by default (bash) or doesn't exist at all (Windows
 // cmd.exe). Walking the filesystem in plain Node avoids both problems and
 // behaves the same on Windows, macOS, and Linux.
+//
+// lib/providers was added with Step 3F so the price routing tests run as part
+// of the suite instead of only when invoked by hand. app/api/market was added
+// for the same reason, for the market movers endpoint's failure handling.
+// lib/services was added because the market-movers summary that both the Agent
+// tool and /api/market/movers rank from lives in lib/services/marketMovers.ts,
+// and a shared module tested only through its callers is not covered on its own
+// terms. components was added for the answer renderer's table width rules, which
+// are arithmetic and checkable without a DOM even though they live in a
+// component file.
 
 import { readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 
-const TEST_ROOTS = ["lib/agent", "app/api/agent"];
+const TEST_ROOTS = [
+  "lib/agent",
+  "lib/providers",
+  "lib/services",
+  "app/api/agent",
+  "app/api/market",
+  "components",
+];
 
 function findTestFiles(dir) {
   const found = [];

@@ -7,6 +7,15 @@ type Props = {
   onRemove: () => void;
 };
 
+/**
+ * Pre-existing hardcoded metadata, reproduced unchanged.
+ *
+ * It covers three symbols and nothing else; every other symbol — including all
+ * of the Indian ones — falls through to the block below and shows the symbol as
+ * its own name, "Unknown" as its sector and no exchange. That gap predates this
+ * change and is left exactly as it was: filling it in would mean inventing
+ * company data, and no endpoint this card is allowed to call returns it.
+ */
 const companyData: Record<
   string,
   {
@@ -32,14 +41,30 @@ const companyData: Record<
   },
 };
 
+/** The quote's own currency. USD is what every card showed before. */
+function currencySymbol(currency?: string) {
+  return currency === "INR" ? "₹" : "$";
+}
+
+type Quote = {
+  price: number;
+  change?: number;
+  changePercent?: number;
+  currency?: string;
+};
+
 export default function WatchlistCard({
   symbol,
   onRemove,
 }: Props) {
+  const [quote, setQuote] = useState<Quote | null>(null);
 
-  const [hovered, setHovered] = useState(false);
-
-  const [price, setPrice] = useState<number | null>(null);
+  /**
+   * A request that failed, or answered success:false. Distinct from quote being
+   * null while the request is still in flight, so the card cannot sit on
+   * "Loading" forever — the same reason the page keeps its own flag.
+   */
+  const [quoteFailed, setQuoteFailed] = useState(false);
 
   const info = companyData[symbol] ?? {
     name: symbol,
@@ -56,127 +81,98 @@ export default function WatchlistCard({
 
       const data = await response.json();
 
-      setPrice(data.price);
+      // This route answers { success, symbol, quote } — the price is on quote,
+      // not at the top level. Reading data.price always produced undefined, and
+      // the old `price !== null` test passed that undefined straight into
+      // toFixed(), which threw during render. A missing quote is now an
+      // unavailable card instead of a crash.
+      //
+      // The change and changePercent shown beside it come from that same
+      // response, through the same single request.
+      if (data?.quote?.price != null) {
+        setQuote(data.quote);
+      } else {
+        setQuoteFailed(true);
+      }
     } catch (err) {
       console.error(err);
+
+      setQuoteFailed(true);
     }
   }
 
   loadPrice();
 }, [symbol]);
 
+  const changePercent = quote?.changePercent;
+
+  const tone =
+    changePercent == null
+      ? null
+      : changePercent > 0
+      ? "up"
+      : changePercent < 0
+      ? "down"
+      : "flat";
+
+  const changeText =
+    changePercent == null
+      ? null
+      : `${changePercent > 0 ? "+" : ""}${changePercent.toFixed(2)}%`;
+
   return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        background: "#111",
-        borderRadius: "18px",
-        padding: "22px",
-        border: hovered ? "1px solid #2563eb" : "1px solid #222",
-        transition: "all 0.3s ease",
-        transform: hovered
-          ? "translateY(-8px)"
-          : "translateY(0)",
-        boxShadow: hovered
-          ? "0 15px 35px rgba(37,99,235,0.35)"
-          : "0 0 0 rgba(0,0,0,0)",
-      }}
-    >
-      <div
-        style={{
-          width: "55px",
-          height: "55px",
-          borderRadius: "50%",
-          background: "#2563eb",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          color: "white",
-          fontSize: "22px",
-          fontWeight: "bold",
-          marginBottom: "15px",
-        }}
-      >
+    <article className="wl-card">
+      {/* The symbol is spelled out below, so the monogram is decoration. */}
+      <div className="wl-monogram" aria-hidden="true">
         {symbol[0]}
       </div>
 
-      <h3>{info.name}</h3>
+      <h3 className="wl-name">{info.name}</h3>
 
-      <div
-        style={{
-          color: "#888",
-          marginTop: "5px",
-        }}
-      >
-        {symbol} • {info.exchange}
+      {/* The exchange is the placeholder "-" for every symbol the hardcoded map
+          does not cover, so it is dropped rather than left dangling off a
+          bullet. */}
+      <p className="wl-meta">
+        {symbol}
+        {info.exchange !== "-" ? ` • ${info.exchange}` : ""}
+      </p>
+
+      {quote ? (
+        <p className="wl-price">
+          {currencySymbol(quote.currency)}
+          {quote.price.toFixed(2)}
+        </p>
+      ) : quoteFailed ? (
+        <p className="wl-price wl-price-missing">Unavailable</p>
+      ) : (
+        <p className="wl-price" role="status" aria-label="Loading price">
+          <span className="wl-skeleton" aria-hidden="true" />
+        </p>
+      )}
+
+      {/* Only when the quote actually carries a move. This replaces a hardcoded
+          green "▲ Live Price Coming Soon" printed under the live price; the
+          real change was in the response this card was already fetching. */}
+      {tone && changeText ? (
+        <p className={`wl-change wl-${tone}`}>{changeText}</p>
+      ) : null}
+
+      <p className="wl-sector">{info.sector}</p>
+
+      <div className="wl-actions">
+        <button
+          className="wl-btn wl-btn-primary"
+          onClick={() =>
+            (window.location.href = `/stock/${symbol}`)
+          }
+        >
+          Open Stock →
+        </button>
+
+        <button className="wl-btn wl-btn-remove" onClick={onRemove}>
+          Remove
+        </button>
       </div>
-
-      <h2
-  style={{
-    marginTop: "20px",
-    color: "#22c55e",
-  }}
->
-  {price !== null
-    ? `$${price.toFixed(2)}`
-    : "Loading..."}
-</h2>
-
-      <p
-        style={{
-          color: "#16a34a",
-        }}
-      >
-        ▲ Live Price Coming Soon
-      </p>
-
-      <p
-        style={{
-          marginTop: "20px",
-          color: "#888",
-        }}
-      >
-        {info.sector}
-      </p>
-
-      <button
-        onClick={() =>
-          (window.location.href = `/stock/${symbol}`)
-        }
-        style={{
-          width: "100%",
-          marginTop: "25px",
-          padding: "12px",
-          background: hovered ? "#1d4ed8" : "#2563eb",
-          transition: "all 0.3s ease",
-          transform: hovered ? "scale(1.02)" : "scale(1)",
-          border: "none",
-          borderRadius: "10px",
-          color: "white",
-          cursor: "pointer",
-        }}
-      >
-        Open Stock →
-      </button>
-
-      <button
-        onClick={onRemove}
-        style={{
-          width: "100%",
-          marginTop: "10px",
-          padding: "12px",
-          background: hovered ? "#b91c1c" : "#dc2626",
-          transition: "all 0.3s ease",
-          transform: hovered ? "scale(1.02)" : "scale(1)",
-          border: "none",
-          borderRadius: "10px",
-          color: "white",
-          cursor: "pointer",
-        }}
-      >
-        Remove
-      </button>
-    </div>
+    </article>
   );
 }

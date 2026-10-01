@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { stocks } from "@/lib/stocks";
 import type { UpstoxEquityCandidate } from "@/lib/apis/upstox";
 import {
+  companyNameTokens,
   createSymbolResolverTool,
   stripIndianSuffix,
   symbolResolverTool,
@@ -132,6 +133,152 @@ test("ranking: exact symbol, then symbol prefix, then name match, then the rest"
     "ZZZ.NS",
     "QQQ.NS",
   ]);
+});
+
+test("ranking: an exact company-name match outranks a name that merely contains the query", async () => {
+  // The "Compare TCS and Infosys." case. Both names contain "infosys", but only
+  // one IS Infosys, and returning them at the same rank made the agent stop and
+  // ask which one was meant instead of answering.
+  const { search } = fakeSearch([
+    row("HCL-INSYS", "HCL Infosystems Ltd"),
+    row("INFY", "Infosys"),
+  ]);
+  const tool = createSymbolResolverTool(search);
+
+  const result = await tool.execute({ query: "Infosys" });
+
+  assert.equal(result.data?.candidates[0].symbol, "INFY.NS");
+  assert.equal(result.data?.candidates[1].symbol, "HCL-INSYS.NS");
+});
+
+// --- Natural company names ------------------------------------------------------------------
+//
+// Upstox stores the legal name ("Reliance Industries Ltd."), so a query a person
+// would call the exact company name is only ever a *token* match against it. The
+// rows below use the real registry spellings, because fixtures with tidy names
+// ("Infosys") hid a production bug: with the real "Infosys Ltd", INFY and
+// HCL-INSYS both merely contained "infosys" and tied, so HCL Infosystems came
+// back first for a search that named Infosys.
+
+const relianceRows = [
+  row("RPOWER", "Reliance Power Ltd."),
+  row("RIIL", "Reliance Industrial Infrastructure Ltd."),
+  row("RELCHEMQ", "Reliance Chemotex Industries Ltd."),
+  row("RELIANCE", "Reliance Industries Ltd."),
+];
+
+test("'Reliance' resolves to RELIANCE, not to another Reliance-named company", async () => {
+  const { search } = fakeSearch(relianceRows);
+  const tool = createSymbolResolverTool(search);
+
+  const result = await tool.execute({ query: "Reliance" });
+
+  assert.equal(result.data?.candidates[0].symbol, "RELIANCE.NS");
+  assert.equal(result.data?.candidates[0].name, "Reliance Industries Ltd.");
+});
+
+test("'Reliance Industries' resolves to RELIANCE: the legal form is the only difference", async () => {
+  const { search } = fakeSearch(relianceRows);
+  const tool = createSymbolResolverTool(search);
+
+  const result = await tool.execute({ query: "Reliance Industries" });
+
+  assert.equal(result.data?.candidates[0].symbol, "RELIANCE.NS");
+  // ...and the companies that merely share the first word stay behind it.
+  assert.deepEqual(symbolsOf(result.data?.candidates).slice(1), [
+    "RPOWER.NS",
+    "RIIL.NS",
+    "RELCHEMQ.NS",
+  ]);
+});
+
+test("'Infosys' beats 'HCL Infosystems' against the names the registry actually stores", async () => {
+  const { search } = fakeSearch([row("HCL-INSYS", "HCL Infosystems Ltd"), row("INFY", "Infosys Ltd")]);
+  const tool = createSymbolResolverTool(search);
+
+  const byName = await tool.execute({ query: "Infosys" });
+  const byTicker = await tool.execute({ query: "INFY" });
+
+  assert.deepEqual(symbolsOf(byName.data?.candidates), ["INFY.NS", "HCL-INSYS.NS"]);
+  assert.equal(byTicker.data?.candidates[0].symbol, "INFY.NS");
+});
+
+test("'Tata Consultancy Services' resolves to TCS against the stored legal name", async () => {
+  const { search } = fakeSearch([
+    row("TATAFAKE", "Tata Fake Industries Ltd"),
+    row("TCS", "Tata Consultancy Services Ltd"),
+  ]);
+  const tool = createSymbolResolverTool(search);
+
+  const result = await tool.execute({ query: "Tata Consultancy Services" });
+
+  assert.equal(result.data?.candidates[0].symbol, "TCS.NS");
+});
+
+test("'HDFC Bank' and 'ICICI Bank' resolve to their own bank, not to a sibling with the same first word", async () => {
+  const bankSearch = fakeSearch([
+    row("HDFCLIFE", "HDFC Life Insurance Company Ltd"),
+    row("HDFCBANK", "HDFC Bank Ltd"),
+  ]).search;
+  const iciciSearch = fakeSearch([
+    row("ICICIGI", "ICICI Lombard General Insurance Company Ltd"),
+    row("ICICIBANK", "ICICI Bank Ltd"),
+  ]).search;
+
+  const hdfc = await createSymbolResolverTool(bankSearch).execute({ query: "HDFC Bank" });
+  const icici = await createSymbolResolverTool(iciciSearch).execute({ query: "ICICI Bank" });
+
+  assert.equal(hdfc.data?.candidates[0].symbol, "HDFCBANK.NS");
+  assert.equal(icici.data?.candidates[0].symbol, "ICICIBANK.NS");
+});
+
+test("genuinely ambiguous queries stay ambiguous rather than silently picking one", async () => {
+  // Three real companies begin with "Tata". None of them IS "Tata", so the
+  // resolver must not promote one of them to a confident single answer.
+  const { search } = fakeSearch([
+    row("TATAMOTORS", "Tata Motors Ltd"),
+    row("TATASTEEL", "Tata Steel Ltd"),
+    row("TCS", "Tata Consultancy Services Ltd"),
+  ]);
+  const tool = createSymbolResolverTool(search);
+
+  const result = await tool.execute({ query: "Tata" });
+
+  assert.deepEqual(symbolsOf(result.data?.candidates), [
+    "TATAMOTORS.NS",
+    "TATASTEEL.NS",
+    "TCS.NS",
+  ]);
+  assert.equal(result.data?.authoritative, false);
+});
+
+test("a distinctive word is never stripped: 'Reliance Power' is not 'Reliance Industries'", async () => {
+  const { search } = fakeSearch(relianceRows);
+  const tool = createSymbolResolverTool(search);
+
+  const result = await tool.execute({ query: "Reliance Power" });
+
+  // Only one candidate matches the whole name; the others fall back to search
+  // order rather than being promoted by the shared first word.
+  assert.equal(result.data?.candidates[0].symbol, "RPOWER.NS");
+  assert.ok(symbolsOf(result.data?.candidates).includes("RELIANCE.NS"));
+  assert.notEqual(result.data?.candidates[1].symbol, "RELIANCE.NS");
+});
+
+test("companyNameTokens drops punctuation and only trailing legal forms", () => {
+  assert.deepEqual(companyNameTokens("Reliance Industries Ltd."), ["reliance", "industries"]);
+  assert.deepEqual(companyNameTokens("HDFC Bank Ltd"), ["hdfc", "bank"]);
+  assert.deepEqual(companyNameTokens("Infosys"), ["infosys"]);
+  assert.deepEqual(companyNameTokens("Mahindra & Mahindra Ltd"), ["mahindra", "mahindra"]);
+  assert.deepEqual(companyNameTokens("HCL Infosystems Ltd"), ["hcl", "infosystems"]);
+
+  // "Industries", "Power", "Motors" distinguish companies and must survive.
+  assert.deepEqual(companyNameTokens("Reliance Power Ltd"), ["reliance", "power"]);
+  assert.deepEqual(companyNameTokens("Tata Motors Limited"), ["tata", "motors"]);
+
+  // A legal form in the middle is part of the name; only the end is decoration.
+  assert.deepEqual(companyNameTokens("Limited Brands Inc"), ["limited", "brands"]);
+  assert.deepEqual(companyNameTokens("Ltd"), []);
 });
 
 test("deduplication: the same symbol from Upstox (twice) and the local list appears once, with the Upstox name", async () => {

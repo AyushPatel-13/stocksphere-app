@@ -2,6 +2,59 @@
 
 import { useEffect, useState } from "react";
 
+/**
+ * The input and the Post button now use the app's form idiom — .ev-input and
+ * the primary green button — instead of a #444 border on #222 and white text
+ * on #22c55e (1.9:1). The card and heading match the Company Overview card
+ * beside them.
+ *
+ * The comment list, the localStorage key and the submit behaviour are
+ * untouched.
+ */
+const SD_STYLES = `
+.sd-input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 12px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  transition: border-color 150ms ease;
+}
+.sd-input::placeholder { color: #666; }
+.sd-input:hover { border-color: #333; }
+.sd-input:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 1px;
+  border-color: #22c55e;
+}
+.sd-submit {
+  flex: none;
+  padding: 11px 18px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: #22c55e;
+  color: #000;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease;
+}
+.sd-submit:hover { background: #1ea34d; }
+.sd-submit:active { transform: translateY(1px); }
+.sd-submit:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sd-input, .sd-submit { transition: none; }
+}
+`;
+
 export default function StockDiscussion({
   symbol,
 }: {
@@ -56,11 +109,23 @@ export default function StockDiscussion({
       style={{
         marginTop: "30px",
         background: "#111",
-        padding: "20px",
-        borderRadius: "10px",
+        border: "1px solid #222",
+        padding: "24px",
+        borderRadius: "16px",
       }}
     >
-      <h2>💬 Discussion</h2>
+      <style>{SD_STYLES}</style>
+
+      <h2
+        style={{
+          margin: 0,
+          fontSize: "22px",
+          fontWeight: 700,
+          letterSpacing: "-0.01em",
+        }}
+      >
+        💬 Discussion
+      </h2>
 
       <div
         style={{
@@ -77,29 +142,12 @@ export default function StockDiscussion({
             )
           }
           placeholder={`Discuss ${symbol}...`}
-          style={{
-            flex: 1,
-            padding: "12px",
-            background: "#222",
-            color: "white",
-            border:
-              "1px solid #444",
-            borderRadius: "8px",
-          }}
+          className="sd-input"
         />
 
         <button
           onClick={addComment}
-          style={{
-            background:
-              "#22c55e",
-            color: "white",
-            border: "none",
-            padding:
-              "12px 20px",
-            borderRadius: "8px",
-            cursor: "pointer",
-          }}
+          className="sd-submit"
         >
           Post
         </button>

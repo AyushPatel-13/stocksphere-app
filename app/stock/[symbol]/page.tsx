@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import WatchlistButton from "../../WatchlistButton";
 import RecentSearchTracker from "@/app/RecentSearchTracker";
 import StockDiscussion
@@ -8,6 +10,7 @@ import StockEvents from "@/app/StockEvents";
 import StockHeader from "@/components/Stock/StockHeader";
 import StockChart from "@/components/Stock/StockChart";
 import CompanyOverview from "@/components/Stock/CompanyOverview";
+import AgentAssistant from "@/components/Agent/AgentAssistant";
 import { getPrice } from "@/lib/services/price";
 import { getCompany } from "@/lib/services/company";
 import { getHistorical } from "@/lib/services/historical";
@@ -19,6 +22,235 @@ import {
   formatPercent,
   formatVolume,
 } from "@/lib/utils/format";
+
+/**
+ * One key statistic: a small uppercase label over its value.
+ *
+ * Presentational only. Each value is the same expression the grid used to
+ * render inline, including its own "N/A" fallback — nothing here decides what
+ * a statistic is, only how the pair is laid out.
+ */
+function Stat({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="sp-stat">
+      <dt className="sp-stat-label">{label}</dt>
+      <dd className="sp-stat-value">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Stock page styling.
+ *
+ * These are the states inline styles cannot express — hover, focus-visible, the
+ * loading shimmer and the breakpoints — so they live in one scoped block, keyed
+ * to sp- classes. The tokens are the ones the rest of the app uses: #111
+ * surfaces on #222 borders, #888 muted text, #22c55e for a gain. The card
+ * geometry (radius 16, 20px padding) is deliberately the same as the portfolio
+ * page's, so the two read as one product.
+ */
+const SP_STYLES = `
+.sp-root {
+  background: #000;
+  color: #fff;
+  /* The navbar is in the root layout and renders 65px: 64px from the h-16 class
+     plus its own 1px bottom border. Subtracting 64 leaves 1px over. */
+  min-height: calc(100vh - 65px);
+  padding: 24px 16px 72px;
+}
+.sp-shell {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+/* ---------- header ---------- */
+.sp-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 16px;
+  padding: 20px;
+}
+.sp-symbol {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.sp-company {
+  margin: 6px 0 0;
+  color: #888;
+  font-size: 15px;
+}
+.sp-quote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.sp-price {
+  margin: 0;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.sp-price-missing {
+  display: inline-block;
+  margin: 0;
+  padding: 6px 14px;
+  background: #171717;
+  border: 1px solid #262626;
+  border-radius: 999px;
+  color: #8a8a8a;
+  font-size: 15px;
+  font-weight: 500;
+}
+.sp-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sp-change-pct { font-weight: 500; opacity: 0.85; }
+.sp-up { color: #4ade80; }
+.sp-down { color: #f87171; }
+.sp-change.sp-up {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.sp-change.sp-down {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.sp-actions { margin-top: 16px; }
+
+/* ---------- sections ---------- */
+.sp-section { margin-top: 30px; }
+.sp-section-title {
+  margin: 40px 0 18px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.sp-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 30px 0 0;
+}
+.sp-stat {
+  min-width: 0;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 16px;
+  padding: 14px 16px;
+  transition: border-color 150ms ease;
+}
+.sp-stat:hover { border-color: #2e2e2e; }
+.sp-stat-label {
+  margin-bottom: 6px;
+  color: #777;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sp-stat-value {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.sp-news {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.sp-news-card {
+  display: flex;
+  flex-direction: column;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 16px;
+  overflow: hidden;
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.sp-news-card:hover {
+  border-color: #2e2e2e;
+  transform: translateY(-2px);
+}
+.sp-news-image {
+  display: block;
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  background: #1a1a1a;
+}
+.sp-news-body { padding: 16px 18px; }
+.sp-news-headline {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.sp-news-source {
+  margin: 8px 0 0;
+  color: #888;
+  font-size: 13px;
+}
+
+.sp-empty {
+  margin: 0;
+  padding: 18px 20px;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 16px;
+  color: #888;
+  font-size: 14px;
+}
+
+@media (min-width: 700px) {
+  .sp-root { padding: 40px 32px 96px; }
+  .sp-hero {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 28px;
+    padding: 26px 28px;
+  }
+  .sp-quote { align-items: flex-end; }
+  .sp-symbol { font-size: 34px; }
+  .sp-price { font-size: 46px; }
+  .sp-section-title { font-size: 26px; }
+  .sp-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+}
+
+@media (min-width: 1000px) {
+  .sp-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+`;
 
 export default async function StockPage({
   params,
@@ -48,83 +280,13 @@ export default async function StockPage({
   console.log("QUOTE:", quote);
 
   console.log(quote);
-  const stockData: any = {
-    RELIANCE: {
-      name: "Reliance Industries Ltd.",
-      price: "₹2,850.00",
-      change: "+45.20 (+1.61%)",
-    },
-
-    TCS: {
-      name: "Tata Consultancy Services",
-      price: "₹4,150.00",
-      change: "+25.10 (+0.61%)",
-    },
-
-    INFY: {
-      name: "Infosys Ltd.",
-      price: "₹1,620.00",
-      change: "-12.40 (-0.76%)",
-    },
-
-    // ADD THESE ↓↓↓
-
-    BEL: {
-      name: "Bharat Electronics Ltd.",
-      price: "₹385.00",
-      change: "+4.20%",
-    },
-
-    HAL: {
-      name: "Hindustan Aeronautics Ltd.",
-      price: "₹5,420.00",
-      change: "+3.85%",
-    },
-
-    TRENT: {
-      name: "Trent Ltd.",
-      price: "₹6,120.00",
-      change: "+3.12%",
-    },
-
-    AAPL: {
-      name: "Apple Inc.",
-      price: "$201.50",
-      change: "+2.35 (+1.18%)",
-      description:
-        "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and services worldwide.",
-    },
-
-    NVDA: {
-      name: "NVIDIA Corporation",
-      price: "$158.90",
-      change: "+3.42 (+2.20%)",
-      description:
-        "NVIDIA is a global leader in graphics processing units (GPUs), AI computing, gaming, and data center technologies.",
-    },
-
-    MSFT: {
-      name: "Microsoft Corporation",
-      price: "$503.30",
-      change: "+1.62 (+0.32%)",
-      description:
-        "Microsoft develops software, cloud computing services, AI products, and enterprise technologies including Windows and Azure.",
-
-    },
-
-    TSLA: {
-      name: "Tesla Inc.",
-      price: "$327.11",
-      change: "-4.10 (-1.24%)",
-      description:
-        "Tesla designs and manufactures electric vehicles, battery storage systems, and clean energy products.",
-    },
-
-  };
-
-  const stock =
-    stockData[symbol.toUpperCase()] ||
-    stockData.RELIANCE;
+  // This page used to carry a hardcoded stockData table (ten entries: name,
+  // price, change, and a description for four of them) plus a `stock` fallback
+  // that read it. Both are gone. Prices and changes have come from the live
+  // quote for a while, and CompanyOverview now takes the live company profile,
+  // so the table's last property — a description for the four US symbols — was
+  // the only thing it still supplied, and the live profile is the honest
+  // source for that even when it comes back empty.
   const livePrice =
     quote?.price;
 
@@ -145,271 +307,169 @@ export default async function StockPage({
       ? "$"
       : "₹";
 
+  // The change is rendered only when it is a real number. It used to be printed
+  // unconditionally, so a quote that arrived without one rendered a bare "()"
+  // in red underneath the price. The condition is on what can be displayed, not
+  // on what was fetched: no quote value is altered or invented here.
+  const changeValue = Number(liveChange);
+  const changePercentValue = Number(liveChangePercent);
+
+  const hasChange = Number.isFinite(changeValue);
+  const changeIsUp = hasChange && changeValue >= 0;
+
   return (
-    <div
-      style={{
-        background: "#000",
-        color: "white",
-        minHeight: "100vh",
-        padding: "40px",
-      }}
-    >
+    <div className="sp-root">
+      <style>{SP_STYLES}</style>
+
       <RecentSearchTracker symbol={symbol} />
-      <h1 style={{ fontSize: "40px", fontWeight: "bold" }}>
-        {symbol}
-      </h1>
-      <h3 style={{ color: "#888" }}>
-        {company?.name || stock.name}
-      </h3>
 
-      <h2>
-        {livePrice
-          ? formatCurrency(
-            livePrice,
-            currencySymbol
-          )
-          : stock.price}
-      </h2>
+      <div className="sp-shell">
+        <header className="sp-hero">
+          <div>
+            <h1 className="sp-symbol">{symbol}</h1>
 
-      <p
-        style={{
-          color:
-            Number(liveChange) >= 0
-              ? "lime"
-              : "red",
-        }}
-      >
-        {liveChange}
-        ({liveChangePercent})
-      </p>
-      <WatchlistButton symbol={symbol} />
+            {company?.name ? (
+              <p className="sp-company">{company.name}</p>
+            ) : null}
+          </div>
 
-      <BullBearVote symbol={symbol} />
+          <div className="sp-quote">
+            {livePrice ? (
+              <>
+                <p className="sp-price">
+                  {formatCurrency(
+                    livePrice,
+                    currencySymbol
+                  )}
+                </p>
 
-      <StockDiscussion symbol={symbol} />
+                {hasChange ? (
+                  <p
+                    className={
+                      "sp-change " +
+                      (changeIsUp ? "sp-up" : "sp-down")
+                    }
+                  >
+                    <span aria-hidden="true">
+                      {changeIsUp ? "▲" : "▼"}
+                    </span>
+                    {`${changeIsUp ? "+" : ""}${changeValue.toFixed(2)}`}
+                    {Number.isFinite(changePercentValue) ? (
+                      <span className="sp-change-pct">
+                        ({formatPercent(changePercentValue)})
+                      </span>
+                    ) : null}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="sp-price-missing">
+                Price unavailable
+              </p>
+            )}
+          </div>
+        </header>
 
-      <CompanyOverview company={stock} />
-
-      <div
-        style={{
-          marginTop: "30px",
-          background: "#111",
-          borderRadius: "20px",
-          padding: "25px",
-        }}
-      >
-        <StockChart
-          historicalData={
-            historical?.values || []
-          }
-        />
-      </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "20px",
-          marginTop: "30px",
-        }}
-      >
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>Open</h3>
-          <p>{open || "N/A"}</p>
+        <div className="sp-actions">
+          <WatchlistButton symbol={symbol} />
         </div>
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>High</h3>
-          <p>{high || "N/A"}</p>
+        <AgentAssistant symbol={symbol} companyName={company?.name} />
+
+        <BullBearVote symbol={symbol} />
+
+        <StockDiscussion symbol={symbol} />
+
+        <CompanyOverview company={company} />
+
+        <div className="sp-section">
+          <StockChart
+            historicalData={
+              historical?.values || []
+            }
+          />
         </div>
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>Low</h3>
-          <p>{low || "N/A"}</p>
-        </div>
+        <dl className="sp-stats">
+          <Stat label="Open" value={open || "N/A"} />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>Previous Close</h3>
-          <p>{previousClose || "N/A"}</p>
-        </div>
+          <Stat label="High" value={high || "N/A"} />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>Volume</h3>
-          <p>
-            {formatVolume(volume ?? null)}
-          </p>
-        </div>
+          <Stat label="Low" value={low || "N/A"} />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>Market Cap</h3>
-          <p>
-            {formatLargeNumber(
+          <Stat
+            label="Previous Close"
+            value={previousClose || "N/A"}
+          />
+
+          <Stat
+            label="Volume"
+            value={formatVolume(volume ?? null)}
+          />
+
+          <Stat
+            label="Market Cap"
+            value={formatLargeNumber(
               financials?.marketCap ?? null
             )}
-          </p>
-        </div>
+          />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>52W High</h3>
-          <p>
-            {financials?.week52High ?? "N/A"}
-          </p>
-        </div>
+          <Stat
+            label="52W High"
+            value={financials?.week52High ?? "N/A"}
+          />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>52W Low</h3>
-          <p>
-            {financials?.week52Low ?? "N/A"}
-          </p>
-        </div>
+          <Stat
+            label="52W Low"
+            value={financials?.week52Low ?? "N/A"}
+          />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>P/E Ratio</h3>
-          <p>
-            {financials?.pe?.toFixed(2) ?? "N/A"}
-          </p>
-        </div>
+          <Stat
+            label="P/E Ratio"
+            value={financials?.pe?.toFixed(2) ?? "N/A"}
+          />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>EPS</h3>
-          <p>
-            {financials?.eps?.toFixed(2) ?? "N/A"}
-          </p>
-        </div>
+          <Stat
+            label="EPS"
+            value={financials?.eps?.toFixed(2) ?? "N/A"}
+          />
 
-        <div
-          style={{
-            background: "#111",
-            padding: "20px",
-            borderRadius: "10px",
-          }}
-        >
-          <h3>Dividend Yield</h3>
-          <p>
-            {formatPercent(
+          <Stat
+            label="Dividend Yield"
+            value={formatPercent(
               financials?.dividendYield ?? null
             )}
-          </p>
+          />
+        </dl>
+
+        <h2 className="sp-section-title">Latest News</h2>
+
+        <div className="sp-news">
+          {news.slice(0, 10).map((item: any) => (
+            <article className="sp-news-card" key={item.id}>
+              <img
+                className="sp-news-image"
+                src={item.image}
+                alt={item.headline}
+              />
+
+              <div className="sp-news-body">
+                <h3 className="sp-news-headline">{item.headline}</h3>
+
+                <p className="sp-news-source">{item.source}</p>
+              </div>
+            </article>
+          ))}
+
+          {news.length === 0 ? (
+            <p className="sp-empty">
+              No recent news available for this symbol.
+            </p>
+          ) : null}
         </div>
 
+        <StockEvents symbol={symbol} />
       </div>
-
-      <h2
-        style={{
-          marginTop: "40px",
-          marginBottom: "20px",
-          fontSize: "28px",
-        }}
-      >
-        Latest News
-      </h2>
-
-      <div
-        style={{
-          display: "grid",
-          gap: "15px",
-        }}
-      >
-        {news.slice(0, 10).map((item: any) => (
-          <div
-            key={item.id}
-            style={{
-              background: "#111",
-              borderRadius: "12px",
-              overflow: "hidden",
-            }}
-          >
-            <img
-              src={item.image}
-              alt={item.headline}
-              style={{
-                width: "100%",
-                height: "220px",
-                objectFit: "cover",
-              }}
-            />
-
-            <div
-              style={{
-                padding: "20px",
-              }}
-            >
-              <h3>{item.headline}</h3>
-
-              <p
-                style={{
-                  color: "#888",
-                  marginTop: "10px",
-                }}
-              >
-                {item.source}
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <StockEvents symbol={symbol} />
-
     </div>
   );
 }

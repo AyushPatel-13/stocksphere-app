@@ -3,7 +3,7 @@ import { LLMMessage, LLMCompletionResult, LLMToolCallRequest, ToolDefinition } f
 import { LLMError } from "../errors";
 
 // Configurable via env so the model can be changed without a code change.
-const DEFAULT_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const DEFAULT_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 let cachedClient: Groq | null = null;
 
@@ -66,9 +66,21 @@ function toGroqTools(tools: ToolDefinition[]): Groq.Chat.Completions.ChatComplet
   }));
 }
 
+export interface ChatCompletionOptions {
+  /**
+   * "none" withholds tool calling for this one turn, so the model must answer
+   * in prose from the conversation it already has. The orchestrator uses it to
+   * ask for a final answer once its tool budget is spent, instead of
+   * discarding the data it gathered and returning a failure. Defaults to
+   * "auto", which is the behaviour every other caller already had.
+   */
+  toolChoice?: "auto" | "none";
+}
+
 export async function getChatCompletion(
   messages: LLMMessage[],
-  tools: ToolDefinition[]
+  tools: ToolDefinition[],
+  options: ChatCompletionOptions = {}
 ): Promise<LLMCompletionResult> {
   const groq = getClient();
 
@@ -78,7 +90,7 @@ export async function getChatCompletion(
       model: DEFAULT_MODEL,
       messages: toGroqMessages(messages),
       tools: toGroqTools(tools),
-      tool_choice: "auto",
+      tool_choice: options.toolChoice ?? "auto",
       temperature: 0.2,
       max_tokens: 1024,
     });
