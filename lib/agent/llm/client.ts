@@ -95,10 +95,13 @@ export async function getChatCompletion(
       max_tokens: 1024,
     });
   } catch (error) {
-    throw new LLMError(
-      error instanceof Error ? error.message : "Unknown error contacting the LLM provider."
-    );
-  }
+  console.error("🔥🔥🔥 GROQ ERROR 🔥🔥🔥");
+  console.error(error);
+
+  throw new LLMError(
+    error instanceof Error ? error.message : "Unknown error contacting the LLM provider."
+  );
+}
 
   const choice = completion.choices?.[0]?.message;
   if (!choice) {
