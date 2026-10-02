@@ -58,8 +58,12 @@ const tcsKeyRatios = [
 const FINANCIAL_METRIC_KEYS = [
   "dividendYield",
   "eps",
+  "evToEbitda",
   "marketCap",
+  "pb",
   "pe",
+  "roa",
+  "roce",
   "roe",
   "week52High",
   "week52Low",
@@ -134,7 +138,7 @@ test("normalizeUpstoxFinancials leaves the metrics Upstox cannot supply as null"
   assert.equal(result.week52High, null);
   assert.equal(result.week52Low, null);
   // "ROE" is present in the response but is not enabled in this step.
-  assert.equal(result.roe, null);
+  assert.equal(result.roe, 45.89);
 });
 
 test("normalizeUpstoxFinancials returns exactly the contract shape, leaking no Upstox metadata", () => {
@@ -319,7 +323,9 @@ test("provider failures resolve to null instead of throwing", async () => {
 
 test("an Indian key-ratios payload with no usable metric yields an all-null result, not an error", async () => {
   const instrument = spyInstrument({ isin: "INE467B01029" });
-  const ratios = spyKeyRatios([{ name: "ROE", company_value: "45.89%" }]);
+  const ratios = spyKeyRatios([
+  { name: "UNKNOWN", company_value: "45.89%" },
+]);
 
   const result = await fetchIndianFinancials("TCS.NS", instrument.lookup, ratios.lookup);
 
@@ -327,13 +333,17 @@ test("an Indian key-ratios payload with no usable metric yields an all-null resu
   // tool's hasAnyMetric() gate is what turns it into a failure result.
   assert.equal(result?.provider, "Upstox");
   assert.deepEqual(result?.data, {
-    marketCap: null,
-    pe: null,
-    eps: null,
-    dividendYield: null,
-    week52High: null,
-    week52Low: null,
-    roe: null,
+  marketCap: null,
+  pe: null,
+  pb: null,
+  eps: null,
+  dividendYield: null,
+  week52High: null,
+  week52Low: null,
+  roe: null,
+  roa: null,
+  roce: null,
+  evToEbitda: null,
   });
   assert.equal(mapFinancialMetrics(result!.data).pe, null);
 });

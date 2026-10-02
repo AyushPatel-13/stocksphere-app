@@ -97,11 +97,15 @@ export interface NormalizedHistoricalPoint {
 export interface FinancialMetrics {
   marketCap: number | null;
   pe: number | null;
+  pb: number | null;
   eps: number | null;
   dividendYield: number | null;
   week52High: number | null;
   week52Low: number | null;
   roe: number | null;
+  roa: number | null;
+  roce: number | null;
+  evToEbitda: number | null;
 }
 
 export interface SymbolCandidate {

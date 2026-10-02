@@ -80,7 +80,8 @@ export function findUpstoxRatioValue(
 /**
  * Map Upstox key-ratios onto FinancialMetrics.
  *
- * Only `pe` is populated. Every other field is null, and each for a reason:
+  * `pe` and `roe` are populated when Upstox provides those ratios.
+ * Every other field is null, and each for a reason:
  *
  *  - `marketCap`: Upstox reports crore INR in
  *    profile.sector_market_cap_inr, while the contract carries no unit or
@@ -89,24 +90,22 @@ export function findUpstoxRatioValue(
  *    so it stays null.
  *  - `eps`, `dividendYield`, `week52High`, `week52Low`: not exposed by the
  *    Upstox fundamentals endpoints at all.
- *  - `roe`: Upstox does return "ROE", but it is not enabled in this step.
+  *  - `roe`: Upstox returns "ROE" in the key-ratios response.
  */
 export function normalizeUpstoxFinancials(
   rows: UpstoxKeyRatioRow[] | null | undefined
 ): FinancialMetrics {
   return {
-    marketCap: null,
-
-    pe: findUpstoxRatioValue(rows, PE_RATIO_NAME),
-
-    eps: null,
-
-    dividendYield: null,
-
-    week52High: null,
-
-    week52Low: null,
-
-    roe: null,
-  };
+  marketCap: null,
+  pe: findUpstoxRatioValue(rows, PE_RATIO_NAME),
+  pb: findUpstoxRatioValue(rows, "P/B"),
+  eps: null,
+  dividendYield: null,
+  week52High: null,
+  week52Low: null,
+  roe: findUpstoxRatioValue(rows, "ROE"),
+  roa: findUpstoxRatioValue(rows, "ROA"),
+  roce: findUpstoxRatioValue(rows, "ROCE"),
+  evToEbitda: findUpstoxRatioValue(rows, "EV/EBITDA"),
+};
 }

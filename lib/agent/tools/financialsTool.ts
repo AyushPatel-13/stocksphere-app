@@ -23,21 +23,29 @@ function toNullable(value: unknown): number | null {
 export function mapFinancialMetrics(raw: {
   marketCap?: unknown;
   pe?: unknown;
+  pb?: unknown;
   eps?: unknown;
   dividendYield?: unknown;
   week52High?: unknown;
   week52Low?: unknown;
   roe?: unknown;
+  roa?: unknown;
+  roce?: unknown;
+  evToEbitda?: unknown;
 }): FinancialMetrics {
   return {
-    marketCap: toNullable(raw.marketCap),
-    pe: toNullable(raw.pe),
-    eps: toNullable(raw.eps),
-    dividendYield: toNullable(raw.dividendYield),
-    week52High: toNullable(raw.week52High),
-    week52Low: toNullable(raw.week52Low),
-    roe: toNullable(raw.roe),
-  };
+  marketCap: toNullable(raw.marketCap),
+  pe: toNullable(raw.pe),
+  pb: toNullable(raw.pb),
+  eps: toNullable(raw.eps),
+  dividendYield: toNullable(raw.dividendYield),
+  week52High: toNullable(raw.week52High),
+  week52Low: toNullable(raw.week52Low),
+  roe: toNullable(raw.roe),
+  roa: toNullable(raw.roa),
+  roce: toNullable(raw.roce),
+  evToEbitda: toNullable(raw.evToEbitda),
+};
 }
 
 function hasAnyMetric(metrics: FinancialMetrics): boolean {
