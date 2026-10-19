@@ -1,8 +1,12 @@
 @import "tailwindcss";
 
+/* StockSphere is a dark-only interface: every page paints #000 with #111
+   cards, so the document itself is dark too (no white flash on overscroll or
+   while a page loads, whatever the OS theme). */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #000000;
+  --foreground: #ededed;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -12,15 +16,16 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Geist is loaded in app/layout.tsx; this used to be Arial, which silently
+     overrode it on every page. */
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(34, 197, 94, 0.35);
+  color: #fff;
 }

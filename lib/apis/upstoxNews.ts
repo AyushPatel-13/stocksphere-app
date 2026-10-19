@@ -129,3 +129,78 @@ export async function getUpstoxNews(
     return null;
   }
 }
+
+/**
+ * News for up to 30 instruments in one request, keyed by instrument key.
+ *
+ * Upstox has no market-wide news category (only instrument_keys, positions and
+ * holdings), so the Market News page asks for the Nifty 50's largest names
+ * this way. Same validation as getUpstoxNews(): null when the response cannot
+ * be read; a key with no news is simply absent.
+ */
+export async function getUpstoxNewsForKeys(
+  instrumentKeys: string[]
+): Promise<Record<string, UpstoxNewsItem[]> | null> {
+  if (!ACCESS_TOKEN) {
+    throw new Error("UPSTOX_ACCESS_TOKEN is missing from environment variables");
+  }
+
+  const keys = instrumentKeys.map((key) => key.trim()).filter(Boolean).slice(0, 30);
+  if (keys.length === 0) return {};
+
+  try {
+    const params = new URLSearchParams({
+      category: "instrument_keys",
+      instrument_keys: keys.join(","),
+      page_size: "100",
+    });
+
+    const response = await fetch(`https://api.upstox.com/v2/news?${params.toString()}`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) {
+      console.error(`Upstox News Error ${response.status}:`, await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (
+      data?.status !== "success" ||
+      !data?.data ||
+      typeof data.data !== "object" ||
+      Array.isArray(data.data)
+    ) {
+      return null;
+    }
+
+    const result: Record<string, UpstoxNewsItem[]> = {};
+
+    for (const key of keys) {
+      const bucket: unknown = (data.data as Record<string, unknown>)[key];
+      if (!Array.isArray(bucket)) continue;
+
+      result[key] = bucket
+        .filter((row): row is Record<string, unknown> => !!row && typeof row === "object")
+        .map((entry) => ({
+          heading: entry.heading,
+          summary: entry.summary,
+          thumbnail: entry.thumbnail,
+          article_link: entry.article_link,
+          published_time: entry.published_time,
+        }));
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Upstox News Error [multi]:", error);
+    return null;
+  }
+}

@@ -6,6 +6,7 @@ import {
   type UpstoxEquityCandidate,
 } from "@/lib/apis/upstox";
 import { ToolDefinition, SymbolCandidate, SymbolResolution, okResult } from "../types";
+import { companyNameTokens, matchTier } from "@/lib/search/rank";
 
 // IMPORTANT: results are best-effort candidates, never confirmed matches.
 // Indian equities come from Upstox's NSE instrument search; everything else
@@ -88,96 +89,17 @@ function candidatesFromUpstox(rows: UpstoxEquityCandidate[]): SymbolCandidate[] 
   return candidates;
 }
 
-// The words a registry decorates a company name with that say nothing about
-// *which* company it is: "Reliance Industries Ltd" and "Reliance Industries" are
-// the same name to someone typing it. Only these trailing forms are dropped —
-// never a distinguishing word. "Industries" is what separates Reliance
-// Industries from Reliance Power, so stripping it would merge two companies.
-const LEGAL_FORM_TOKENS = new Set([
-  "ltd",
-  "limited",
-  "inc",
-  "incorporated",
-  "corp",
-  "corporation",
-  "co",
-  "company",
-  "plc",
-  "llp",
-  "pvt",
-  "private",
-]);
+// Ranking lives in lib/search/rank.ts, shared with the search box so the
+// assistant and /api/search order matches identically. companyNameTokens is
+// re-exported here because this tool's tests import it from this module.
+export { companyNameTokens };
 
-const NAME_SEPARATORS = /[^a-z0-9]+/g;
-
-/**
- * A company name reduced to comparable words: lower-cased, punctuation dropped,
- * trailing legal forms removed. "HDFC Bank Ltd" and "HDFC Bank" both become
- * ["hdfc", "bank"].
- *
- * Exported for direct unit testing.
- */
-export function companyNameTokens(name: string): string[] {
-  const tokens = name.toLowerCase().split(NAME_SEPARATORS).filter(Boolean);
-
-  while (tokens.length > 0 && LEGAL_FORM_TOKENS.has(tokens[tokens.length - 1])) {
-    tokens.pop();
-  }
-
-  return tokens;
-}
-
-/** Whether `name` begins with the query as a whole run of words, not mid-word. */
-function startsWithTokenRun(nameTokens: string[], queryTokens: string[]): boolean {
-  return (
-    queryTokens.length > 0 &&
-    queryTokens.length <= nameTokens.length &&
-    queryTokens.every((token, index) => nameTokens[index] === token)
-  );
-}
-
-// Ordered by how much the match actually proves:
-//
-//   0  the query IS the ticker                    "TCS"          -> TCS
-//   1  the query is the start of the ticker       "RELI"         -> RELIANCE
-//   2  the query IS the company name              "Infosys"      -> Infosys Ltd
-//   3  the name starts with the query as words    "HDFC Bank"    -> HDFC Bank Ltd
-//   4  the name contains the query                "Infosys"      -> HCL Infosystems
-//   5  anything else (e.g. symbol merely contains the query)
-//
-// Tiers 2 and 3 compare *words with the legal form set aside*, not raw strings.
-// Comparing raw strings made both of them almost unreachable in production: the
-// registry spells the name out ("Infosys Ltd", "HDFC Bank Ltd"), so a query
-// that a person would call an exact company name never equalled the stored one
-// and fell through to "contains". That is what put HCL-INSYS above INFY for
-// "Infosys" — both merely *contain* it — and left the resolver with no tier at
-// all for "Reliance" -> "Reliance Industries Ltd".
-//
-// Tier 2 stays separate from tier 3 for the same reason it always was: two
-// candidates at one rank read to the model as equally likely, so the company
-// that *is* the thing asked for must outrank the one that merely begins with it.
-// Tier 3 is the honest home of real ambiguity — "Tata" leaves TATAMOTORS,
-// TATASTEEL and TCS tied, and they should stay tied.
 function rankTier(
   candidate: SymbolCandidate,
   lowerSearchTerm: string,
   queryTokens: string[]
 ): number {
-  const bareSymbol = stripIndianSuffix(candidate.symbol).toLowerCase();
-
-  if (bareSymbol === lowerSearchTerm) return 0;
-  if (bareSymbol.startsWith(lowerSearchTerm)) return 1;
-
-  const nameTokens = companyNameTokens(candidate.name);
-
-  if (nameTokens.length > 0 && nameTokens.join(" ") === queryTokens.join(" ")) return 2;
-  if (startsWithTokenRun(nameTokens, queryTokens)) return 3;
-
-  const lowerName = candidate.name.toLowerCase();
-
-  if (lowerName === lowerSearchTerm) return 2;
-  if (lowerName.includes(lowerSearchTerm)) return 4;
-  return 5;
+  return matchTier(stripIndianSuffix(candidate.symbol), candidate.name, lowerSearchTerm, queryTokens);
 }
 
 // Upstox candidates are listed first, so when the same symbol comes from both

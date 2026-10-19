@@ -2,12 +2,18 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import SearchModal from "@/components/Search/SearchModal";
 
 const navigation = [
-  { label: "Markets", href: "/dashboard", icon: "📊" },
+  { label: "Markets", href: "/explore", icon: "📊" },
+  { label: "Indices", href: "/indices", icon: "🌐" },
+  { label: "ETFs", href: "/etfs", icon: "📦" },
+  { label: "Crypto", href: "/crypto", icon: "₿" },
+  { label: "Bonds", href: "/bonds", icon: "🏛️" },
   { label: "Watchlist", href: "/watchlist", icon: "⭐" },
   { label: "Portfolio", href: "/portfolio", icon: "💼" },
   { label: "Community", href: "/community", icon: "🌍" },
@@ -46,6 +52,7 @@ const NAVBAR_STYLES = `
 
 export default function Navbar() {
   const [user, setUser] = useState<User | null>(null);
+  const pathname = usePathname();
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -100,11 +107,19 @@ export default function Navbar() {
 
         {/* Navigation */}
         <nav className="navbar-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {navigation.map((item) => (
+          {navigation.map((item) => {
+            const active =
+              pathname === item.href ||
+              pathname.startsWith(`${item.href}/`);
+
+            return (
             <Link
               key={item.href}
               href={item.href}
-              className="flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
+              aria-current={active ? "page" : undefined}
+              className={`flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors hover:bg-[#1a1a1a] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40 ${
+                active ? "bg-[#161616] text-white" : "text-[#c9c9c9]"
+              }`}
             >
               <span className="text-sm">
                 {item.icon}
@@ -114,11 +129,13 @@ export default function Navbar() {
                 {item.label}
               </span>
             </Link>
-          ))}
+            );
+          })}
         </nav>
 
         {/* User */}
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <SearchModal />
 
           {user ? (
             <>

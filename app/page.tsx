@@ -2,14 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useEffect, type ReactNode } from "react";
-import {
-  getRecentlyViewed,
-  type RecentlyViewedAsset,
-} from "@/lib/utils/recentlyViewed";
+import RecentlyViewed from "@/components/Markets/RecentlyViewed";
 import Image from "next/image";
-import { stocks } from "../lib/stocks";
+import SearchBox from "@/components/Search/SearchBox";
 import HomeStats from "./HomeStats";
 import AgentHome from "@/components/Agent/AgentHome";
+import IndicesBar from "@/components/IndicesBar";
 
 /**
  * One figure in the US market row: a small label over the provider's price and
@@ -162,23 +160,6 @@ function UnavailableNote({ children }: { children: ReactNode }) {
 
 export default function Home() {
   const router = useRouter();
-  const [symbol, setSymbol] = useState("");
-  const filteredStocks =
-  symbol.length > 0
-    ? stocks.filter(
-        (stock) =>
-          stock.symbol
-            .toLowerCase()
-            .includes(
-              symbol.toLowerCase()
-            ) ||
-          stock.name
-            .toLowerCase()
-            .includes(
-              symbol.toLowerCase()
-            )
-      )
-    : [];
 
 const [trendingStocks, setTrendingStocks] =
   useState<any[]>([]);
@@ -245,12 +226,7 @@ const [events, setEvents] =
    */
   const [moversUnavailable, setMoversUnavailable] = useState(false);
 
-const [recentlyViewed, setRecentlyViewed] =
-  useState<RecentlyViewedAsset[]>([]);
-
 useEffect(() => {
-  setRecentlyViewed(getRecentlyViewed());
-
   fetch("/api/market")
     .then((res) => res.json())
     .then((data) =>
@@ -454,89 +430,11 @@ useEffect(() => {
       Explore stocks, ETFs, crypto, indices and global markets.
     </p>
 
-    {/* Search */}
+    {/* Search: instrument autocomplete across Indian and US stocks, ETFs,
+        indices, crypto and bonds (components/Search/SearchBox.tsx). It
+        replaces a filter over a hardcoded list of 23 stocks. */}
     <div className="relative mx-auto mt-8 max-w-2xl">
-
-      <input
-        type="text"
-        role="combobox"
-        aria-expanded={symbol.trim().length > 0}
-        aria-controls="home-search-results"
-        aria-autocomplete="list"
-        placeholder="Search stocks, ETFs, crypto, indices..."
-        value={symbol}
-        onChange={(e) => setSymbol(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && symbol.trim()) {
-            router.push(
-              `/stock/${symbol.toUpperCase()}`
-            );
-          }
-        }}
-        className="w-full rounded-2xl border border-[#222] bg-[#111] px-5 py-4 text-white outline-none transition-colors placeholder:text-[#666] focus:border-green-500 focus:ring-1 focus:ring-green-500"
-      />
-
-      {/* Search Results.
-          Gated on a trimmed query rather than on there being matches, so a
-          query with no hits can say so — while an empty (or whitespace-only)
-          input still renders nothing at all. */}
-      {symbol.trim().length > 0 && (
-        <div
-          id="home-search-results"
-          role={filteredStocks.length > 0 ? "listbox" : undefined}
-          aria-label={filteredStocks.length > 0 ? "Search results" : undefined}
-          className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-2xl border border-[#222] bg-[#111] text-left shadow-2xl"
-        >
-          {filteredStocks.length > 0 ? (
-            filteredStocks
-              .slice(0, 5)
-              .map((stock) => (
-                <div
-                  key={stock.symbol}
-                  role="option"
-                  aria-selected={false}
-                  tabIndex={0}
-                  onClick={() =>
-                    router.push(
-                      `/stock/${stock.symbol}`
-                    )
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      // Same navigation target as the click handler.
-                      e.preventDefault();
-                      router.push(
-                        `/stock/${stock.symbol}`
-                      );
-                    } else if (e.key === " ") {
-                      // Space must not scroll the page or act on the row.
-                      // role="option" has no Space activation, so the only
-                      // thing to suppress here is the default scroll.
-                      e.preventDefault();
-                    }
-                  }}
-                  className="cursor-pointer border-b border-[#1e1e1e] px-5 py-4 transition-colors last:border-b-0 hover:bg-[#1a1a1a] focus-visible:bg-[#1a1a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-green-500/40"
-                >
-                  <div className="font-semibold text-white">
-                    {stock.symbol}
-                  </div>
-
-                  <div className="mt-1 text-sm text-[#888]">
-                    {stock.name}
-                  </div>
-                </div>
-              ))
-          ) : (
-            <p
-              role="status"
-              className="px-5 py-4 text-sm text-[#888]"
-            >
-              No stocks found.
-            </p>
-          )}
-        </div>
-      )}
-
+      <SearchBox variant="hero" />
     </div>
 
     {/* Trending */}
@@ -569,46 +467,15 @@ useEffect(() => {
   </div>
 </section>
 
+{/* Market Indices */}
+<IndicesBar />
+
 {/* The rest of the page sits in one centred shell so every section lines up
     with the portfolio and stock pages instead of running the full window. */}
 <div className="mx-auto w-full max-w-[1080px] px-4 pb-24 sm:px-6 lg:px-8">
 
-{/* Recently Viewed */}
-{recentlyViewed.length > 0 && (
-  <section className="mt-4">
-    <div className="flex items-center justify-between mb-4">
-      <h2 className="text-[18px] font-semibold tracking-tight">
-        Recently Viewed
-      </h2>
-    </div>
-
-    <div className="flex gap-4 overflow-x-auto pb-2">
-      {recentlyViewed.map((asset) => (
-        <div
-          key={`${asset.type}-${asset.symbol}`}
-          onClick={() =>
-            router.push(`/stock/${asset.symbol}`)
-          }
-          className="min-w-[190px] cursor-pointer rounded-2xl border border-[#222] bg-[#111] p-4 transition-colors hover:border-[#2e2e2e] hover:bg-[#161616]"
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-white">
-              {asset.symbol}
-            </span>
-
-            <span className="text-xs text-[#777]">
-              {asset.market}
-            </span>
-          </div>
-
-          <p className="mt-2 text-sm text-[#888]">
-            {asset.type.toUpperCase()}
-          </p>
-        </div>
-      ))}
-    </div>
-  </section>
-)}
+{/* Recently Viewed: live prices, Groww-style row. */}
+<RecentlyViewed className="mt-4" />
 
 {/* US Markets */}
 <section className="mt-14">

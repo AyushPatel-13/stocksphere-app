@@ -252,3 +252,72 @@ export async function searchUpstoxEquityCandidates(
     return null;
   }
 }
+
+export async function searchUpstoxIndex(
+  query: string,
+  exchange: "NSE" | "BSE" = "NSE"
+) {
+  if (!ACCESS_TOKEN) {
+    throw new Error(
+      "UPSTOX_ACCESS_TOKEN is missing from environment variables"
+    );
+  }
+
+  try {
+    const params = new URLSearchParams({
+      query,
+      exchanges: exchange,
+      segments: "INDEX",
+      instrument_types: "INDEX",
+      page_number: "1",
+      records: "30",
+    });
+
+    const response = await fetch(
+      `https://api.upstox.com/v2/instruments/search?${params.toString()}`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+        },
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      console.error(
+        `Upstox Index Search Error ${response.status}:`,
+        errorText
+      );
+
+      return null;
+    }
+
+    const data = await response.json();
+
+    const instrument = data?.data?.find(
+      (item: {
+        segment?: string;
+        instrument_type?: string;
+        instrument_key?: string;
+        trading_symbol?: string;
+      }) =>
+        item.segment === `${exchange}_INDEX` &&
+        item.instrument_type === "INDEX" &&
+        item.instrument_key &&
+        item.trading_symbol
+    );
+
+    return instrument ?? null;
+  } catch (error) {
+    console.error(
+      `Upstox Index Search Error [${query}]:`,
+      error
+    );
+
+    return null;
+  }
+}

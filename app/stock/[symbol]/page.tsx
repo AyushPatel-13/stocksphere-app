@@ -2,18 +2,15 @@ import type { ReactNode } from "react";
 
 import WatchlistButton from "../../WatchlistButton";
 import RecentSearchTracker from "@/app/RecentSearchTracker";
-import StockDiscussion
-  from "@/app/StockDiscussion";
-import BullBearVote
-  from "@/app/BullBearVote";
+import StockBoard from "@/components/Community/StockBoard";
 import StockEvents from "@/app/StockEvents";
 import StockHeader from "@/components/Stock/StockHeader";
-import StockChart from "@/components/Stock/StockChart";
+import PriceChart from "@/components/Charts/PriceChart";
 import CompanyOverview from "@/components/Stock/CompanyOverview";
 import AgentAssistant from "@/components/Agent/AgentAssistant";
+import { StockAvatar } from "@/components/Markets/StockBits";
 import { getPrice } from "@/lib/services/price";
 import { getCompany } from "@/lib/services/company";
-import { getHistorical } from "@/lib/services/historical";
 import { getNews } from "@/lib/services/news";
 import { getFinancials } from "@/lib/services/financials";
 import {
@@ -264,8 +261,8 @@ export default async function StockPage({
   const company =
     await getCompany(symbol);
 
-  const historical =
-    await getHistorical(symbol)
+  // Price history is loaded by the chart itself (/api/history), per range,
+  // so the page no longer waits for a year of candles before rendering.
 
   console.log(company);
 
@@ -321,16 +318,19 @@ export default async function StockPage({
     <div className="sp-root">
       <style>{SP_STYLES}</style>
 
-      <RecentSearchTracker symbol={symbol} />
+      <RecentSearchTracker symbol={symbol} name={company?.name} />
 
       <div className="sp-shell">
         <header className="sp-hero">
-          <div>
-            <h1 className="sp-symbol">{symbol}</h1>
+          <div className="flex items-center gap-3">
+            <StockAvatar symbol={decodeURIComponent(symbol)} size={48} />
+            <div>
+              <h1 className="sp-symbol">{symbol}</h1>
 
-            {company?.name ? (
-              <p className="sp-company">{company.name}</p>
-            ) : null}
+              {company?.name ? (
+                <p className="sp-company">{company.name}</p>
+              ) : null}
+            </div>
           </div>
 
           <div className="sp-quote">
@@ -374,21 +374,18 @@ export default async function StockPage({
           <WatchlistButton symbol={symbol} />
         </div>
 
+        <div className="sp-section">
+          <PriceChart type="stock" symbol={symbol} />
+        </div>
+
         <AgentAssistant symbol={symbol} companyName={company?.name} />
 
-        <BullBearVote symbol={symbol} />
-
-        <StockDiscussion symbol={symbol} />
+        {/* Community board: sentiment from real posts, then the stock's
+            discussion. Replaces the per-device BullBearVote and
+            StockDiscussion, which nobody else could see. */}
+        <StockBoard symbol={symbol} />
 
         <CompanyOverview company={company} />
-
-        <div className="sp-section">
-          <StockChart
-            historicalData={
-              historical?.values || []
-            }
-          />
-        </div>
 
         <dl className="sp-stats">
           <Stat label="Open" value={open || "N/A"} />

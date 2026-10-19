@@ -1,274 +1,115 @@
 "use client";
-import { useState, useEffect } from "react";
-export default function CommunityPage() {
 
-  const getRank = (likes: number) => {
-  if (likes >= 100)
-    return "👑 Market Legend";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
-  if (likes >= 50)
-    return "🏆 Market Analyst";
+import Feed from "@/components/Community/Feed";
+import { StockAvatar } from "@/components/Markets/StockBits";
+import { PageHeader, PageShell } from "@/components/ui/Page";
+import { fetchTrending, useCommunityUser } from "@/lib/community/client";
+import type { TrendingSymbol } from "@/lib/community/types";
 
-  if (likes >= 25)
-    return "💼 Active Investor";
+/**
+ * The community floor: every post on StockSphere in one place — views on
+ * single stocks (tagged with $CASHTAGS) and on the market as a whole — with
+ * the most-discussed stocks of the day alongside. Each stock also has its own
+ * board on its stock page.
+ */
 
-  if (likes >= 10)
-    return "📈 Rookie Investor";
+function Trending({ refresh }: { refresh: number }) {
+  const [trending, setTrending] = useState<TrendingSymbol[] | null | undefined>(undefined);
 
-  return "🌱 Newcomer";
-};
+  useEffect(() => {
+    let cancelled = false;
+    fetchTrending().then((result) => {
+      if (!cancelled) setTrending(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
 
-  const [posts, setPosts] = useState<any[]>([]);
-
-const [newPost, setNewPost] = useState("");
-
-const [username, setUsername] = useState("");
-
-useEffect(() => {
-  const savedUsername =
-  localStorage.getItem("username");
-
-if (savedUsername) {
-  setUsername(savedUsername);
-}
-  const savedPosts = JSON.parse(
-    localStorage.getItem("communityPosts") || "[]"
-  );
-
-  if (savedPosts.length > 0) {
-    setPosts(savedPosts);
-  } else {
-    setPosts([
-      {
-        title: "Is BEL still undervalued?",
-        author: "Ayush",
-        likes: 12,
-        comments: 5,
-      },
-      {
-        title: "Will NIFTY hit 30,000?",
-        author: "Investor123",
-        likes: 20,
-        comments: 11,
-      },
-    ]);
-  }
-}, []);
+  if (trending === null) return null;
 
   return (
-    <div
-      style={{
-        background: "#000",
-        color: "white",
-        minHeight: "100vh",
-        padding: "40px",
-      }}
-    >
-      <h1>🌍 StockSphere Community</h1>
-      <div style={{ marginTop: "20px" }}>
-  <input
-    value={username}
-    onChange={(e) => {
-      setUsername(e.target.value);
+    <section className="rounded-2xl border border-[#222] bg-[#111]">
+      <h2 className="border-b border-[#1d1d1d] px-5 py-3.5 font-semibold">🔥 Trending today</h2>
+      {trending === undefined ? (
+        <div className="space-y-2 p-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-9 animate-pulse rounded-lg bg-[#161616]" />
+          ))}
+        </div>
+      ) : trending.length === 0 ? (
+        <p className="px-5 py-6 text-sm text-[#888]">
+          Nothing trending yet. Tag stocks with $TICKER in your posts.
+        </p>
+      ) : (
+        <ol>
+          {trending.map((entry, index) => (
+            <li key={entry.symbol} className="border-b border-[#1b1b1b] last:border-b-0">
+              <Link
+                href={`/stock/${encodeURIComponent(entry.symbol)}`}
+                className="group flex items-center gap-3 px-5 py-2.5 transition-colors hover:bg-[#151515]"
+              >
+                <span className="w-4 text-xs tabular-nums text-[#666]">{index + 1}</span>
+                <StockAvatar symbol={entry.symbol} size={28} />
+                <span className="flex-1 font-semibold group-hover:text-[#22c55e]">${entry.symbol}</span>
+                <span className="text-xs text-[#888]">
+                  {entry.posts} {entry.posts === 1 ? "post" : "posts"}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
 
-      localStorage.setItem(
-        "username",
-        e.target.value
-      );
-    }}
-    placeholder="Choose Username"
-    style={{
-      padding: "12px",
-      background: "#111",
-      color: "white",
-      border: "1px solid #333",
-      borderRadius: "8px",
-    }}
-  />
-</div>
-      <div
-  style={{
-    marginTop: "20px",
-    marginBottom: "30px",
-  }}
->
-  <input
-  value={newPost}
-  onChange={(e) =>
-    setNewPost(e.target.value)
-  }
-  placeholder="Share your market thoughts..."
-  style={{
-    padding: "12px",
-    width: "400px",
-    maxWidth: "100%",
-    background: "#111",
-    color: "white",
-    border: "1px solid #333",
-    borderRadius: "8px",
-  }}
-/>
-
-  <button
-    onClick={() => {
-      if (!newPost.trim()) return;
-
-      const updatedPosts = [
-  {
-    title: newPost,
-    author: username || "Anonymous",
-    likes: 0,
-    comments: 0,
-  },
-  ...posts,
+const RULES = [
+  "Share your own view and why you hold it.",
+  "No tips for money, “sure-shot targets” or group links.",
+  "Tag stocks with $TICKER so others can find your post.",
+  "Report spam — moderators review every report.",
 ];
 
-setPosts(updatedPosts);
+export default function CommunityPage() {
+  const user = useCommunityUser();
+  const [refresh, setRefresh] = useState(0);
 
-localStorage.setItem(
-  "communityPosts",
-  JSON.stringify(updatedPosts)
-);
+  return (
+    <PageShell>
+      <PageHeader
+        eyebrow="Community"
+        title="What investors are saying"
+        description="Views on every stock and on the market as a whole. Each stock also has its own discussion board on its page."
+      />
 
-      setNewPost("");
-    }}
-    style={{
-      marginLeft: "10px",
-      background: "#22c55e",
-      color: "white",
-      border: "none",
-      padding: "12px 20px",
-      borderRadius: "8px",
-      cursor: "pointer",
-    }}
-  >
-    Post
-  </button>
-</div>
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0">
+          <Feed user={user} onPosted={() => setRefresh((n) => n + 1)} />
+        </div>
 
-      <div style={{ marginTop: "30px" }}>
-        {posts.map((post, index) => (
-          <div
-            key={index}
-            style={{
-              background: "#111",
-              padding: "20px",
-              borderRadius: "10px",
-              marginBottom: "15px",
-            }}
-          >
-            <h2>{post.title}</h2>
+        <aside className="space-y-6">
+          <Trending refresh={refresh} />
 
-            <div
-  style={{
-    color: "#888",
-    marginBottom: "10px",
-  }}
->
-  <p> <a
-  href={`/profile/${post.author}`}
-  style={{
-    color: "#22c55e",
-  }}
->
-  {post.author}
-</a> </p>
-
-  <p
-    style={{
-      color: "#22c55e",
-      fontWeight: "bold",
-    }}
-  >
-    {getRank(post.likes || 0)}
-  </p>
-</div>
-
-            <div
-  style={{
-    display: "flex",
-    gap: "15px",
-    marginTop: "10px",
-  }}
->
-  <button
-    onClick={() => {
-      const updatedPosts = [...posts];
-
-      updatedPosts[index].likes += 1;
-
-      setPosts(updatedPosts);
-
-      localStorage.setItem(
-        "communityPosts",
-        JSON.stringify(updatedPosts)
-      );
-    }}
-    style={{
-      background: "#222",
-      color: "white",
-      border: "none",
-      padding: "8px 12px",
-      borderRadius: "6px",
-      cursor: "pointer",
-    }}
-  >
-    👍 {post.likes}
-  </button>
-
-  <span>
-    💬 {post.comments}
-  </span>
-</div>
-<div style={{ marginTop: "15px" }}>
-  <input
-    placeholder="Add a comment..."
-    onKeyDown={(e) => {
-      if (e.key === "Enter") {
-        const updatedPosts = [...posts];
-
-        if (!updatedPosts[index].commentsList) {
-          updatedPosts[index].commentsList = [];
-        }
-
-        updatedPosts[index].commentsList.push(
-          e.currentTarget.value
-        );
-
-        setPosts(updatedPosts);
-
-        localStorage.setItem(
-          "communityPosts",
-          JSON.stringify(updatedPosts)
-        );
-
-        e.currentTarget.value = "";
-      }
-    }}
-    style={{
-      padding: "10px",
-      width: "100%",
-      background: "#222",
-      color: "white",
-      border: "1px solid #444",
-      borderRadius: "8px",
-    }}
-  />
-
-  <div style={{ marginTop: "10px" }}>
-    {post.commentsList?.map(
-      (comment: string, i: number) => (
-        <p key={i}>
-          💬 {comment}
-        </p>
-      )
-    )}
-  </div>
-</div>
-          </div>
-        ))}
+          <section className="rounded-2xl border border-[#222] bg-[#111] p-5">
+            <h2 className="font-semibold">Community rules</h2>
+            <ul className="mt-3 space-y-2 text-[13px] leading-relaxed text-[#9a9a9a]">
+              {RULES.map((rule) => (
+                <li key={rule} className="flex gap-2">
+                  <span aria-hidden="true" className="text-[#22c55e]">•</span>
+                  {rule}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-[11px] text-[#666]">
+              Posts are members&apos; opinions, not investment advice.
+            </p>
+          </section>
+        </aside>
       </div>
-    </div>
-    
+    </PageShell>
   );
 }

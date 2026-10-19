@@ -1,3 +1,5 @@
+import { isIndianEquitySymbol } from "../data/instruments/india";
+
 export interface RecentlyViewedAsset {
   symbol: string;
   name?: string;
@@ -7,7 +9,18 @@ export interface RecentlyViewedAsset {
 }
 
 const STORAGE_KEY = "stocksphere-recently-viewed";
-const MAX_ITEMS = 8;
+const MAX_ITEMS = 10;
+
+/**
+ * Which market a viewed symbol belongs to. A bare Indian ticker ("TCS") is
+ * Indian too: checking only the ".NS" suffix used to label it "US".
+ */
+export function marketForSymbol(symbol: string): "INDIA" | "US" {
+  const upper = symbol.toUpperCase();
+  return upper.endsWith(".NS") || upper.endsWith(".BSE") || upper.endsWith(".BO") || isIndianEquitySymbol(upper)
+    ? "INDIA"
+    : "US";
+}
 
 export function getRecentlyViewed(): RecentlyViewedAsset[] {
   if (typeof window === "undefined") {
@@ -39,6 +52,12 @@ export function addRecentlyViewed(
   try {
     const existing = getRecentlyViewed();
 
+    const previous = existing.find(
+      (item) =>
+        item.symbol.toUpperCase() === asset.symbol.toUpperCase() &&
+        item.type === asset.type
+    );
+
     const filtered = existing.filter(
       (item) =>
         !(
@@ -51,6 +70,8 @@ export function addRecentlyViewed(
     const updated = [
       {
         ...asset,
+        // Keep a name learned on an earlier visit if this one has none.
+        name: asset.name || previous?.name,
         viewedAt: Date.now(),
       },
       ...filtered,

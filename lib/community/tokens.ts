@@ -1,0 +1,50 @@
+/**
+ * Split a post body into plain text, $CASHTAG, @mention and link tokens so the
+ * UI can render links as React elements. No HTML is ever produced from a post.
+ */
+
+export type Token =
+  | { type: "text"; value: string }
+  | { type: "cashtag"; value: string; symbol: string }
+  | { type: "mention"; value: string; handle: string }
+  | { type: "link"; value: string; href: string };
+
+const TOKEN_PATTERN =
+  /(\$[A-Za-z][A-Za-z0-9&.-]{0,19})|(@[a-z][a-z0-9_]{2,19})\b|((?:https?:\/\/)[^\s<>"']+)/gi;
+
+export function tokenize(body: string): Token[] {
+  const tokens: Token[] = [];
+  let last = 0;
+
+  for (const match of body.matchAll(TOKEN_PATTERN)) {
+    const index = match.index ?? 0;
+    let value = match[0];
+
+    // Trailing punctuation belongs to the sentence, not the token.
+    const trailing = value.match(/[.,!?;:)\]]+$/)?.[0] ?? "";
+    if (trailing && !match[2]) value = value.slice(0, value.length - trailing.length);
+
+    if (index > last) tokens.push({ type: "text", value: body.slice(last, index) });
+
+    if (match[1]) {
+      tokens.push({ type: "cashtag", value, symbol: value.slice(1).replace(/[.-]+$/, "").toUpperCase() });
+    } else if (match[2]) {
+      tokens.push({ type: "mention", value, handle: value.slice(1).toLowerCase() });
+    } else {
+      let safe: string | null = null;
+      try {
+        const url = new URL(value);
+        safe = url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+      } catch {
+        safe = null;
+      }
+      tokens.push(safe ? { type: "link", value, href: safe } : { type: "text", value });
+    }
+
+    last = index + value.length;
+  }
+
+  if (last < body.length) tokens.push({ type: "text", value: body.slice(last) });
+
+  return tokens;
+}

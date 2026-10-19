@@ -1,11 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import type { User } from "@supabase/supabase-js";
+
 import AuthGuard from "@/components/AuthGuard";
+import { PageShell, Panel, secondaryButtonClass } from "@/components/ui/Page";
+import { supabase } from "@/lib/supabase";
+
+const LINKS = [
+  { href: "/portfolio", label: "Portfolio", icon: "💼", hint: "Your holdings and P/L" },
+  { href: "/watchlist", label: "Watchlist", icon: "⭐", hint: "Stocks you're following" },
+  { href: "/predictions", label: "Predictions", icon: "🎯", hint: "Your market calls" },
+  { href: "/dashboard", label: "Dashboard", icon: "📊", hint: "Your activity at a glance" },
+];
 
 export default function ProfilePage() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -13,56 +24,75 @@ export default function ProfilePage() {
     });
   }, []);
 
+  const name =
+    user?.user_metadata?.full_name || user?.user_metadata?.name || "Investor";
+  const avatar =
+    user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+
   return (
     <AuthGuard>
-      <div
-        style={{
-          background: "#000",
-          color: "white",
-          minHeight: "100vh",
-          padding: "40px",
-          textAlign: "center",
-        }}
-      >
-        <h1>👤 My Profile</h1>
-
+      <PageShell>
         {user && (
           <>
-            <img
-              src={user.user_metadata.avatar_url}
-              alt="Profile"
-              style={{
-                width: "140px",
-                height: "140px",
-                borderRadius: "50%",
-                marginTop: "30px",
-              }}
-            />
+            <Panel className="flex flex-col items-center gap-5 text-center sm:flex-row sm:text-left">
+              {avatar ? (
+                // eslint-disable-next-line @next/next/no-img-element -- Google avatar host isn't configured for next/image
+                <img
+                  src={avatar}
+                  alt=""
+                  width={88}
+                  height={88}
+                  referrerPolicy="no-referrer"
+                  className="h-[88px] w-[88px] rounded-full border border-[#2a2a2a] object-cover"
+                />
+              ) : (
+                <div className="flex h-[88px] w-[88px] items-center justify-center rounded-full border border-[#2a2a2a] bg-[#151515] text-3xl font-bold text-[#22c55e]">
+                  {name.charAt(0).toUpperCase()}
+                </div>
+              )}
 
-            <h2>{user.user_metadata.full_name}</h2>
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-2xl font-bold tracking-tight">{name}</h1>
+                <p className="mt-1 truncate text-sm text-[#888]">{user.email}</p>
+              </div>
 
-            <p>{user.email}</p>
+              <button
+                type="button"
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  window.location.href = "/login";
+                }}
+                className={`${secondaryButtonClass} hover:border-red-500/40 hover:text-red-400`}
+              >
+                Sign out
+              </button>
+            </Panel>
 
-            <button
-              onClick={async () => {
-                await supabase.auth.signOut();
-                window.location.href = "/login";
-              }}
-              style={{
-                marginTop: "30px",
-                background: "red",
-                color: "white",
-                border: "none",
-                padding: "12px 25px",
-                borderRadius: "10px",
-                cursor: "pointer",
-              }}
-            >
-              Logout
-            </button>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              {LINKS.map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="group flex items-center gap-4 rounded-2xl border border-[#222] bg-[#111] p-4 transition-colors hover:border-[#2f2f2f] hover:bg-[#141414]"
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#262626] bg-[#151515] text-lg">
+                    {link.icon}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-semibold group-hover:text-[#22c55e]">
+                      {link.label}
+                    </span>
+                    <span className="block text-xs text-[#777]">{link.hint}</span>
+                  </span>
+                  <span aria-hidden="true" className="ml-auto text-[#555] group-hover:text-[#22c55e]">
+                    →
+                  </span>
+                </Link>
+              ))}
+            </div>
           </>
         )}
-      </div>
+      </PageShell>
     </AuthGuard>
   );
 }

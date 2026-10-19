@@ -1,147 +1,115 @@
+"use client";
+
+import Link from "next/link";
+
+import {
+  EmptyState,
+  PageHeader,
+  PageShell,
+} from "@/components/ui/Page";
+import {
+  formatQuotePrice,
+  formatSignedPercent,
+  useMarketOverview,
+  type OverviewQuote,
+} from "@/lib/client/useMarketOverview";
+
 /**
  * Market Heatmap.
  *
- * The three tiles below are hardcoded placeholder content that predates this
- * change — they are the page's entire content and are reproduced verbatim.
- * This change is presentation only: the shell, heading, tiles, the responsive
- * grid, and the gain/loss colour treatment.
- *
- * What the original did express, and what is preserved exactly, is the mapping
- * of each tile to a direction: AAPL +1.2% and NVDA +2.4% were green, TSLA -0.8%
- * was red. The direction is still read off the sign that is already in the
- * string, so the mapping is identical — it is not recomputed from anything.
- * The colour itself moves from the raw CSS keywords green/red onto the app's
- * own gain/loss pair (#4ade80 / #f87171), which is the palette used by the
- * portfolio, stock and Home pages.
- *
- * There is no data source on this page to preserve. It fetches nothing. The
- * repo does have a real market-wide endpoint — /api/market/movers, backed by
- * getNifty50Quotes() — but it is consumed by the Home page, not here, and
- * pointing this page at it would be changing the data source and adding
- * functionality this page does not have. So there is no loading, empty or
- * unavailable state to style and no timeframe control to restyle: none of that
- * exists yet, and none of it is invented here.
- *
- * The navbar lives in the root layout and renders 65px (64px h-16 plus its own
- * 1px border), so the shell subtracts 65, not 64.
+ * The tiles used to be three hardcoded strings ("AAPL +1.2%" …). They now show
+ * the live /api/market overview, coloured by the day's move: the stronger the
+ * move, the deeper the colour, capped at ±3% so one outlier cannot wash out
+ * the rest.
  */
-const HEATMAP_STYLES = `
-.hm-root {
-  background: #000;
-  color: #fff;
-  min-height: calc(100vh - 65px);
+function tileStyle(changePercent: number | null) {
+  if (changePercent === null) {
+    return { background: "#111", borderColor: "#222" };
+  }
+
+  const strength = Math.min(Math.abs(changePercent) / 3, 1);
+  const rgb = changePercent >= 0 ? "34, 197, 94" : "239, 68, 68";
+
+  return {
+    background: `rgba(${rgb}, ${0.08 + strength * 0.32})`,
+    borderColor: `rgba(${rgb}, ${0.25 + strength * 0.4})`,
+  };
 }
-/* Same centred 1080px column as Home, Portfolio and News. */
-.hm-shell {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 40px 16px 96px;
+
+function Tile({ quote }: { quote: OverviewQuote }) {
+  return (
+    <Link
+      href={`/stock/${quote.symbol}`}
+      style={tileStyle(quote.changePercent)}
+      className="flex min-h-[124px] flex-col justify-between rounded-2xl border p-4 transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 motion-reduce:transition-none motion-reduce:hover:translate-y-0 sm:p-5"
+    >
+      <div>
+        <p className="text-lg font-bold tracking-tight">{quote.symbol}</p>
+        <p className="truncate text-xs text-white/60">{quote.name}</p>
+      </div>
+      <div className="flex items-end justify-between gap-2">
+        <span className="text-xl font-semibold tabular-nums">
+          {formatSignedPercent(quote.changePercent)}
+        </span>
+        <span className="text-xs tabular-nums text-white/70">
+          {formatQuotePrice(quote.price, quote.currency)}
+        </span>
+      </div>
+    </Link>
+  );
 }
-.hm-title {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-.hm-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
-  margin-top: 32px;
-}
-.hm-tile {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 8px;
-  min-height: 132px;
-  padding: 24px;
-  border: 1px solid #222;
-  border-radius: 16px;
-  background: #111;
-  transition: border-color 150ms ease, transform 150ms ease;
-}
-.hm-tile:hover {
-  transform: translateY(-2px);
-}
-.hm-symbol {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  overflow-wrap: anywhere;
-}
-.hm-change {
-  font-size: 15px;
-  font-weight: 600;
-}
-.hm-tile--up {
-  background: rgba(74, 222, 128, 0.1);
-  border-color: rgba(74, 222, 128, 0.35);
-}
-.hm-tile--up:hover {
-  border-color: rgba(74, 222, 128, 0.6);
-}
-.hm-tile--up .hm-change {
-  color: #4ade80;
-}
-.hm-tile--down {
-  background: rgba(248, 113, 113, 0.1);
-  border-color: rgba(248, 113, 113, 0.35);
-}
-.hm-tile--down:hover {
-  border-color: rgba(248, 113, 113, 0.6);
-}
-.hm-tile--down .hm-change {
-  color: #f87171;
-}
-@media (min-width: 640px) {
-  .hm-shell { padding-left: 24px; padding-right: 24px; }
-  .hm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
-}
-@media (min-width: 1024px) {
-  .hm-shell { padding-left: 32px; padding-right: 32px; }
-  .hm-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .hm-tile { transition: none; }
-  .hm-tile:hover { transform: none; }
-}
-`;
 
 export default function HeatmapPage() {
-  const tiles = ["AAPL +1.2%", "NVDA +2.4%", "TSLA -0.8%"];
+  const overview = useMarketOverview();
 
   return (
-    <div className="hm-root">
-      <style>{HEATMAP_STYLES}</style>
+    <PageShell>
+      <PageHeader
+        eyebrow="Heatmap"
+        title="Market heatmap"
+        description="Today's moves for large caps in the US and India. Deeper colour means a bigger move."
+      />
 
-      <div className="hm-shell">
-        <header>
-          <h1 className="hm-title">🗺️ Market Heatmap</h1>
-        </header>
+      {overview.status === "error" && (
+        <EmptyState
+          icon="📡"
+          title="Market data is unavailable right now"
+          description="Our data providers didn't respond. Please try again in a minute."
+        />
+      )}
 
-        <div className="hm-grid">
-          {tiles.map((tile) => {
-            // Presentation split of the existing string: the same characters,
-            // laid out as two lines so the symbol and the move can be weighted
-            // differently. The sign is read, not recalculated.
-            const cut = tile.lastIndexOf(" ");
-            const symbol = tile.slice(0, cut);
-            const change = tile.slice(cut + 1);
-            const up = !change.startsWith("-");
-
-            return (
-              <article
-                key={tile}
-                className={`hm-tile ${up ? "hm-tile--up" : "hm-tile--down"}`}
-              >
-                <span className="hm-symbol">{symbol}</span>
-                <span className="hm-change">{change}</span>
-              </article>
-            );
-          })}
+      {overview.status === "loading" && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className="min-h-[124px] animate-pulse rounded-2xl border border-[#1f1f1f] bg-[#111]"
+            />
+          ))}
         </div>
-      </div>
-    </div>
+      )}
+
+      {overview.status === "ready" &&
+        (["US", "India"] as const).map((market) => {
+          const quotes = overview.quotes
+            .filter((quote) => quote.market === market)
+            .sort((a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0));
+
+          if (quotes.length === 0) return null;
+
+          return (
+            <section key={market} className="mb-8">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.08em] text-[#888]">
+                {market === "US" ? "United States" : "India · NSE"}
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {quotes.map((quote) => (
+                  <Tile key={quote.symbol} quote={quote} />
+                ))}
+              </div>
+            </section>
+          );
+        })}
+    </PageShell>
   );
 }
