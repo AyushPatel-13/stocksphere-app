@@ -6,15 +6,11 @@ import { useEffect, useMemo, useState } from "react";
 import AuthGuard from "@/components/AuthGuard";
 import MarketsNav from "@/components/Markets/MarketsNav";
 import { StockAvatar, absPercent, toneClass } from "@/components/Markets/StockBits";
-import {
-  EmptyState,
-  PageShell,
-  inputClass,
-  primaryButtonClass,
-  secondaryButtonClass,
-} from "@/components/ui/Page";
+import SearchBox from "@/components/Search/SearchBox";
+import { EmptyState, PageShell, primaryButtonClass } from "@/components/ui/Page";
 import { formatMoney, formatVolume, useQuotes, type LiveQuote } from "@/lib/client/useQuotes";
-import { isValidSymbol } from "@/lib/validation/symbol";
+import { canonicalStockSymbol } from "@/lib/search/canonical";
+import type { SearchResult } from "@/lib/search/instruments";
 import { addToWatchlist, getWatchlist, removeFromWatchlist } from "@/lib/watchlist";
 
 /**
@@ -74,9 +70,7 @@ export default function WatchlistPage() {
   const [symbols, setSymbols] = useState<string[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [search, setSearch] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [newSymbol, setNewSymbol] = useState("");
-  const [addError, setAddError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "company", desc: false });
 
   useEffect(() => {
@@ -105,7 +99,7 @@ export default function WatchlistPage() {
   const { loading: quotesLoading, quotes } = useQuotes(list);
 
   const rows = list
-    .filter((symbol) => symbol.includes(search.trim().toUpperCase()))
+    .filter((symbol) => symbol.includes(search.trim().toUpperCase().replace(/\s+/g, "")))
     .sort((a, b) => {
       const x = sortValue(a, quotes[a] ?? null, sort.key);
       const y = sortValue(b, quotes[b] ?? null, sort.key);
@@ -122,28 +116,32 @@ export default function WatchlistPage() {
     );
   }
 
-  async function add() {
-    const symbol = newSymbol.trim().toUpperCase();
+  /** What a search result is stored as: "RELIANCE", "RPOWER.NS", "AAPL". */
+  function watchSymbol(result: SearchResult): string {
+    return canonicalStockSymbol(result.symbol, result.market);
+  }
 
-    if (!isValidSymbol(symbol)) {
-      setAddError("Enter a valid stock symbol, e.g. TCS or AAPL.");
+  function isAdded(result: SearchResult): boolean {
+    const symbol = watchSymbol(result);
+    return list.includes(symbol) || list.includes(result.symbol.toUpperCase());
+  }
+
+  async function add(result: SearchResult) {
+    const symbol = watchSymbol(result);
+
+    if (isAdded(result)) {
+      setNotice({ tone: "ok", text: `${result.symbol} is already in your watchlist.` });
       return;
     }
-    if (list.includes(symbol)) {
-      setAddError(`${symbol} is already in your watchlist.`);
+
+    const response = await addToWatchlist(symbol);
+    if (!response || response.error) {
+      setNotice({ tone: "error", text: `Couldn't add ${result.symbol} right now. Please try again.` });
       return;
     }
 
-    setAddError(null);
-
-    const result = await addToWatchlist(symbol);
-    if (!result || result.error) {
-      setAddError("Couldn't add it right now. Please try again.");
-      return;
-    }
-
-    setSymbols([...list, symbol]);
-    setNewSymbol("");
+    setSymbols((current) => [...(current ?? []), symbol]);
+    setNotice({ tone: "ok", text: `Added ${result.name} to your watchlist.` });
   }
 
   async function remove(symbol: string) {
@@ -156,7 +154,7 @@ export default function WatchlistPage() {
       <PageShell>
         <MarketsNav />
 
-        <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+        <div className="rounded-2xl border border-[#222] bg-[#111]">
           {/* List header */}
           <div className="flex items-center gap-6 border-b border-[#222] px-5">
             <span className="relative py-4 font-semibold">
@@ -166,56 +164,28 @@ export default function WatchlistPage() {
             <span className="text-sm text-[#777]">{list.length} stocks</span>
           </div>
 
-          {/* Toolbar */}
-          <div className="flex flex-col gap-3 border-b border-[#1d1d1d] p-4 sm:flex-row sm:items-center">
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search your watchlist"
-              aria-label="Search your watchlist"
-              className={`${inputClass} sm:max-w-xs`}
-            />
-            <button
-              type="button"
-              onClick={() => {
-                setAdding((open) => !open);
-                setAddError(null);
-              }}
-              className={`${secondaryButtonClass} sm:ml-auto`}
-            >
-              {adding ? "Close" : "+ Add stocks"}
-            </button>
+          {/* One box: typing filters the list below and suggests stocks to add. */}
+          <div className="border-b border-[#1d1d1d] p-4">
+            <div className="sm:max-w-md">
+              <SearchBox
+                variant="compact"
+                inputId="watchlist-search"
+                placeholder="Search your watchlist or add a stock…"
+                filterTypes={["stock", "etf"]}
+                onQueryChange={(query) => {
+                  setSearch(query);
+                  setNotice(null);
+                }}
+                onSelect={add}
+                isAdded={isAdded}
+              />
+            </div>
+            {notice && (
+              <p role="status" className={`mt-2 text-sm ${notice.tone === "error" ? "text-[#f87171]" : "text-[#4ade80]"}`}>
+                {notice.text}
+              </p>
+            )}
           </div>
-
-          {adding && (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                add();
-              }}
-              className="border-b border-[#1d1d1d] bg-[#0e0e0e] p-4"
-            >
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  value={newSymbol}
-                  onChange={(e) => setNewSymbol(e.target.value)}
-                  placeholder="Symbol, e.g. RELIANCE or NVDA"
-                  aria-label="Stock symbol to add"
-                  autoFocus
-                  className={`${inputClass} sm:max-w-xs`}
-                />
-                <button type="submit" className={primaryButtonClass}>
-                  Add
-                </button>
-              </div>
-              {addError && (
-                <p role="alert" className="mt-2 text-sm text-[#f87171]">
-                  {addError}
-                </p>
-              )}
-            </form>
-          )}
 
           {/* Body */}
           {symbols === null ? (
@@ -235,15 +205,22 @@ export default function WatchlistPage() {
                 title="Your watchlist is empty"
                 description="Add stocks to follow their price and daily move in one place."
                 action={
-                  <button type="button" onClick={() => setAdding(true)} className={primaryButtonClass}>
+                  <button
+                    type="button"
+                    onClick={() => document.getElementById("watchlist-search")?.focus()}
+                    className={primaryButtonClass}
+                  >
                     + Add stocks
                   </button>
                 }
               />
             </div>
           ) : rows.length === 0 ? (
-            <p className="p-8 text-center text-sm text-[#888]">No stocks match “{search}”.</p>
+            <p className="p-8 text-center text-sm text-[#888]">
+              None of your stocks match “{search}” — pick one from the suggestions to add it.
+            </p>
           ) : (
+            <div className="overflow-hidden rounded-b-2xl">
             <table className="w-full text-sm">
               <thead className="border-b border-[#1d1d1d] bg-[#0f0f0f] text-xs text-[#888]">
                 <tr>
@@ -324,6 +301,7 @@ export default function WatchlistPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </PageShell>

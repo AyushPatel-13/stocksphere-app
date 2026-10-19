@@ -4,6 +4,7 @@ import { BONDS, CRYPTO, ETFS } from "../data/assets";
 import { GLOBAL_INDICES, INDIAN_INDICES } from "../data/instruments/indices";
 import { isIndianEquitySymbol } from "../data/instruments/india";
 import { stocks } from "../stocks";
+import { indianStockHref } from "./canonical";
 import { companyNameTokens, matchTier } from "./rank";
 
 /**
@@ -56,15 +57,8 @@ export function normaliseQuery(raw: string | null | undefined): string | null {
 
 /* ------------------------------------------------------------ canonical links */
 
-/**
- * An Indian stock outside StockSphere's known universe must carry ".NS": a
- * bare "/stock/RPOWER" would be routed to the global providers, which may
- * hold a different security under that ticker.
- */
-export function indianStockHref(symbol: string): string {
-  const bare = symbol.toUpperCase();
-  return `/stock/${encodeURIComponent(isIndianEquitySymbol(bare) ? bare : `${bare}.NS`)}`;
-}
+// Canonical links live in ./canonical so the browser can use them too.
+export { indianStockHref };
 
 const ETF_BY_SYMBOL = new Map(ETFS.map((etf) => [etf.symbol, etf]));
 

@@ -75,11 +75,29 @@ export default function SearchBox({
   variant = "hero",
   autoFocus = false,
   onNavigate,
+  onSelect,
+  isAdded,
+  onQueryChange,
+  filterTypes,
+  placeholder = "Search stocks, ETFs, indices, crypto…",
+  inputId,
 }: {
   variant?: "hero" | "compact";
   autoFocus?: boolean;
   /** Called after a result is opened (e.g. to close a modal). */
   onNavigate?: () => void;
+  /**
+   * Pick mode: choosing a result calls this instead of navigating (e.g. "add
+   * to watchlist"). Rows then show "+ Add", or "✓ Added" when isAdded says so.
+   */
+  onSelect?: (result: SearchResult) => void;
+  isAdded?: (result: SearchResult) => boolean;
+  /** Mirror what's typed, e.g. to filter a list on the same page. */
+  onQueryChange?: (query: string) => void;
+  /** Only suggest these instrument types. */
+  filterTypes?: InstrumentType[];
+  placeholder?: string;
+  inputId?: string;
 }) {
   const router = useRouter();
   const listId = useId();
@@ -97,14 +115,18 @@ export default function SearchBox({
 
   const trimmed = query.trim();
   const showingRecent = !trimmed;
-  const list = showingRecent ? recent : results;
+  const pickMode = Boolean(onSelect);
+  const allowed = (result: SearchResult) => !filterTypes || filterTypes.includes(result.type);
+  const list = (showingRecent ? recent : results).filter(allowed);
+  // Ask for a few more results when some will be filtered out.
+  const requestLimit = filterTypes ? 12 : 8;
 
   // Debounced search. State changes happen in the timer/fetch callbacks, never
   // synchronously in the effect body.
   useEffect(() => {
     if (!trimmed) return;
 
-    const key = trimmed.toLowerCase();
+    const key = `${trimmed.toLowerCase()}|${requestLimit}`;
     const cached = cache.get(key);
 
     const timer = window.setTimeout(
@@ -122,7 +144,7 @@ export default function SearchBox({
         setStatus("loading");
 
         try {
-          const response = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}&limit=8`, {
+          const response = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}&limit=${requestLimit}`, {
             signal: controller.signal,
           });
           const data = await response.json();
@@ -151,7 +173,7 @@ export default function SearchBox({
     );
 
     return () => window.clearTimeout(timer);
-  }, [trimmed, attempt]);
+  }, [trimmed, attempt, requestLimit]);
 
   // Abort anything in flight when the box goes away.
   useEffect(() => () => controllerRef.current?.abort(), []);
@@ -168,6 +190,17 @@ export default function SearchBox({
 
   function go(result: SearchResult | undefined) {
     if (!result) return;
+
+    if (onSelect) {
+      onSelect(result);
+      setQuery("");
+      onQueryChange?.("");
+      setResults([]);
+      setStatus("idle");
+      setOpen(false);
+      return;
+    }
+
     controllerRef.current?.abort();
     setOpen(false);
     setQuery("");
@@ -195,6 +228,7 @@ export default function SearchBox({
         setOpen(false);
       } else if (query) {
         setQuery("");
+        onQueryChange?.("");
       }
     } else if (event.key === "Tab") {
       setOpen(false);
@@ -223,11 +257,13 @@ export default function SearchBox({
           autoComplete="off"
           spellCheck={false}
           autoFocus={autoFocus}
-          placeholder="Search stocks, ETFs, indices, crypto…"
+          id={inputId}
+          placeholder={placeholder}
           value={query}
           onChange={(e) => {
             const next = e.target.value;
             setQuery(next);
+            onQueryChange?.(next);
             setOpen(true);
             setActive(-1);
             if (!next.trim()) {
@@ -280,7 +316,7 @@ export default function SearchBox({
             </div>
           )}
 
-          {!showingRecent && status === "ready" && results.length === 0 && (
+          {!showingRecent && status === "ready" && list.length === 0 && (
             <p role="status" className="px-4 py-4 text-sm text-[#888]">
               No matches for “{trimmed}”. Try a ticker like TCS or AAPL, or a company name.
             </p>
@@ -311,6 +347,14 @@ export default function SearchBox({
                   <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_STYLE[result.type]}`}>
                     {TYPE_LABEL[result.type]}
                   </span>
+                  {pickMode &&
+                    (isAdded?.(result) ? (
+                      <span className="shrink-0 text-xs font-medium text-[#777]">✓ Added</span>
+                    ) : (
+                      <span className="shrink-0 rounded-lg border border-[#22c55e]/50 px-2 py-0.5 text-xs font-semibold text-[#4ade80]">
+                        + Add
+                      </span>
+                    ))}
                 </li>
               ))}
             </ul>
