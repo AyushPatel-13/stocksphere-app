@@ -72,7 +72,7 @@ export default function TrendingPage() {
                 <span className="w-6 text-center text-sm font-semibold tabular-nums text-[#666]">{index + 1}</span>
                 <StockAvatar symbol={entry.symbol} size={36} />
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold group-hover:text-[#22c55e]">${entry.symbol}</p>
+                  <p className="font-semibold group-hover:text-[#22c55e]">{entry.symbol}</p>
                   <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#1d1d1d]">
                     <div
                       className="h-full rounded-full bg-[#22c55e]/70"

@@ -192,7 +192,7 @@ export default function PostCard({
             <div className="mt-2 flex flex-wrap gap-1.5">
               {otherSymbols.map((symbol) => (
                 <Link key={symbol} href={`/stock/${encodeURIComponent(symbol)}`} className="rounded-md border border-[#2a2a2a] bg-[#161616] px-2 py-0.5 text-xs font-medium text-[#cfcfcf] hover:text-[#4ade80]">
-                  ${symbol}
+                  {symbol}
                 </Link>
               ))}
             </div>

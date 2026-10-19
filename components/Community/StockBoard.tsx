@@ -66,8 +66,11 @@ function SentimentMeter({ symbol, refresh }: { symbol: string; refresh: number }
   );
 }
 
-export default function StockBoard({ symbol }: { symbol: string }) {
+export default function StockBoard({ symbol, label }: { symbol: string; label?: string }) {
   const clean = decodeURIComponent(symbol).trim().toUpperCase();
+  // Shown to people: the instrument's name, never "$SYMBOL" — a "$" reads
+  // as dollars, which is wrong for an Indian index or stock.
+  const name = label || clean;
   const user = useCommunityUser();
   const [refresh, setRefresh] = useState(0);
 
@@ -75,7 +78,7 @@ export default function StockBoard({ symbol }: { symbol: string }) {
     <section aria-labelledby="board-title" className="mt-6">
       <div className="mb-3 flex items-baseline justify-between">
         <h2 id="board-title" className="text-xl font-semibold tracking-tight">
-          ${clean} discussion
+          {name} discussion
         </h2>
         <span className="text-xs text-[#777]">Community views · not investment advice</span>
       </div>
@@ -84,7 +87,7 @@ export default function StockBoard({ symbol }: { symbol: string }) {
         <SentimentMeter symbol={clean} refresh={refresh} />
       </div>
 
-      <Feed user={user} symbol={clean} onPosted={() => setRefresh((n) => n + 1)} />
+      <Feed user={user} symbol={clean} label={name} onPosted={() => setRefresh((n) => n + 1)} />
     </section>
   );
 }

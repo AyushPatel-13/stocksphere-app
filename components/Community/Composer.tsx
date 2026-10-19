@@ -15,6 +15,7 @@ import type { PostView } from "@/lib/community/types";
 export default function Composer({
   user,
   symbol,
+  label,
   parentId,
   placeholder,
   compact = false,
@@ -22,6 +23,8 @@ export default function Composer({
 }: {
   user: CommunityUser;
   symbol?: string;
+  /** Display name for the board's instrument, used in the prompt. */
+  label?: string;
   parentId?: string;
   placeholder?: string;
   compact?: boolean;
@@ -106,7 +109,7 @@ export default function Composer({
           rows={compact ? 1 : 3}
           placeholder={
             placeholder ??
-            (symbol ? `What's your view on $${symbol}?` : "Share your view. Use $TICKER to tag stocks, e.g. $TCS")
+            (symbol ? `What's your view on ${label ?? symbol}?` : "Share your view. Tag stocks with $ and the ticker, e.g. $TCS")
           }
           aria-label={parentId ? "Write a reply" : "Write a post"}
           className="min-h-[2.5rem] w-full resize-y bg-transparent text-[15px] leading-relaxed text-white outline-none placeholder:text-[#666]"

@@ -54,7 +54,7 @@ function Trending({ refresh }: { refresh: number }) {
               >
                 <span className="w-4 text-xs tabular-nums text-[#666]">{index + 1}</span>
                 <StockAvatar symbol={entry.symbol} size={28} />
-                <span className="flex-1 font-semibold group-hover:text-[#22c55e]">${entry.symbol}</span>
+                <span className="flex-1 font-semibold group-hover:text-[#22c55e]">{entry.symbol}</span>
                 <span className="text-xs text-[#888]">
                   {entry.posts} {entry.posts === 1 ? "post" : "posts"}
                 </span>

@@ -32,10 +32,13 @@ type State =
 export default function Feed({
   user,
   symbol,
+  label,
   onPosted,
 }: {
   user: CommunityUser;
   symbol?: string;
+  /** How the board's instrument is named to people (e.g. "NIFTY 50"). */
+  label?: string;
   onPosted?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
@@ -97,7 +100,7 @@ export default function Feed({
         <p className="text-2xl" aria-hidden="true">💬</p>
         <p className="mt-3 font-semibold">Discussions are launching soon</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-[#888]">
-          Posting on {symbol ? `$${symbol}` : "StockSphere"} opens as soon as community accounts are switched on.
+          Posting on {symbol ? label ?? symbol : "StockSphere"} opens as soon as community accounts are switched on.
         </p>
       </div>
     );
@@ -108,6 +111,7 @@ export default function Feed({
       <Composer
         user={user}
         symbol={symbol}
+        label={label}
         onPosted={(post) => {
           // A new post shows at the top of the list it belongs in.
           if (state.status === "ready" && (filter === "all" || post.sentiment === filter)) {
@@ -174,7 +178,7 @@ export default function Feed({
               {filter === "all" ? "No posts yet" : `No ${filter} posts yet`}
             </p>
             <p className="mt-1 text-sm text-[#888]">
-              {symbol ? `Be the first to share a view on $${symbol}.` : "Start the conversation."}
+              {symbol ? `Be the first to share a view on ${label ?? symbol}.` : "Start the conversation."}
             </p>
           </div>
         )}
