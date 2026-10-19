@@ -7,8 +7,8 @@ import { Suspense, useEffect, useState } from "react";
 import PriceChart from "@/components/Charts/PriceChart";
 import StockBoard from "@/components/Community/StockBoard";
 import { StockAvatar } from "@/components/Markets/StockBits";
-import { PageShell, StatCard } from "@/components/ui/Page";
-import { formatValue } from "@/lib/charts/format";
+import { AllIndices, Nifty50Constituents, Performance, SupportResistance } from "@/components/Markets/IndexDetails";
+import { PageShell } from "@/components/ui/Page";
 import type { AssetType, ValueUnit } from "@/lib/data/assets";
 
 /**
@@ -103,13 +103,6 @@ function AssetView() {
     return <p className="text-sm text-[#888]">Unknown asset type.</p>;
   }
 
-  const fmt = (value: number | null | undefined) =>
-    stats ? formatValue(value, stats.unit, stats.currency) : "—";
-
-  const dayChange =
-    stats && stats.last !== null && stats.previousClose !== null ? stats.last - stats.previousClose : null;
-  const dayPct = dayChange !== null && stats?.previousClose ? (dayChange / stats.previousClose) * 100 : null;
-
   return (
     <>
       <Link href={HUB[type].href} className="mb-4 inline-block text-sm text-[#888] hover:text-white">
@@ -162,24 +155,18 @@ function AssetView() {
 
       <PriceChart key={`${type}-${symbol}-${vs}`} type={type} symbol={symbol} vs={vs} />
 
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <StatCard label="Last" value={fmt(stats?.last)} />
-        <StatCard
-          label="Day change"
-          value={
-            dayChange === null
-              ? "—"
-              : `${dayChange >= 0 ? "+" : "-"}${stats?.unit === "percent" ? Math.abs(dayChange).toFixed(3) : fmt(Math.abs(dayChange))}${dayPct !== null ? ` (${Math.abs(dayPct).toFixed(2)}%)` : ""}`
-          }
-          tone={dayChange === null ? "neutral" : dayChange >= 0 ? "up" : "down"}
-        />
-        <StatCard label="Prev. close" value={fmt(stats?.previousClose)} />
-        <StatCard label="Day range" value={stats ? `${fmt(stats.low)} – ${fmt(stats.high)}` : "—"} />
-        <StatCard label="52W high" value={fmt(stats?.fiftyTwoWeekHigh)} />
-        <StatCard label="52W low" value={fmt(stats?.fiftyTwoWeekLow)} />
-      </div>
+      <Performance stats={stats} />
 
-      {type !== "bond" && <StockBoard symbol={symbol} />}
+      {(type === "index" || type === "etf") && (
+        <SupportResistance type={type} symbol={symbol} vs={vs} last={stats?.last ?? null} />
+      )}
+
+      {type === "index" && symbol === "NIFTY" && <Nifty50Constituents />}
+
+      {type === "index" && <AllIndices current={symbol} />}
+
+      <div className="mt-10" />
+      {type !== "bond" && <StockBoard symbol={symbol} label={stats?.name ?? symbol} />}
 
       <p className="mt-8 text-[11px] text-[#666]">
         Market data from Yahoo Finance; may be delayed. For information only — not investment advice.

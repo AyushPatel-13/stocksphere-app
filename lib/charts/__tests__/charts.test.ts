@@ -178,3 +178,66 @@ test("3Y asks Yahoo for five years and keeps only the last three", async () => {
   assert.equal(asked, "5y/1wk");
   assert.equal(history?.candles.length, 2);
 });
+
+// --- pivots ------------------------------------------------------------------
+
+import { classicPivots, previousSession } from "../pivots";
+
+test("classic pivots follow the floor-trader formulas", () => {
+  const p = classicPivots(110, 90, 100);
+  assert.equal(p.pivot, 100);
+  assert.equal(p.r1, 110);
+  assert.equal(p.s1, 90);
+  assert.equal(p.r2, 120);
+  assert.equal(p.s2, 80);
+  assert.equal(p.r3, 130);
+  assert.equal(p.s3, 70);
+  assert.ok(p.s3 < p.s2 && p.s2 < p.s1 && p.s1 < p.pivot && p.pivot < p.r1 && p.r1 < p.r2 && p.r2 < p.r3);
+});
+
+test("the previous session is the last daily candle before today's open", () => {
+  const day = 86_400_000;
+  const today = 10 * day;
+  const candles = [
+    { t: 8 * day, o: 1, h: 5, l: 1, c: 4, v: 0 },
+    { t: 9 * day, o: 4, h: 9, l: 3, c: 8, v: 0 },
+    { t: today, o: 8, h: 10, l: 7, c: 9, v: 0 }, // today, in progress
+  ];
+  assert.deepEqual(previousSession(candles, today), { high: 9, low: 3, close: 8 });
+  // Without a session time, the newest candle is treated as today's.
+  assert.deepEqual(previousSession(candles, null), { high: 9, low: 3, close: 8 });
+  assert.equal(previousSession([], today), null);
+});
+
+// --- index overview ----------------------------------------------------------
+
+import { downsample, toOverviewRow } from "@/lib/services/indexOverview";
+
+test("sparklines are thinned evenly and keep the first and last points", () => {
+  const values = Array.from({ length: 300 }, (_, i) => i);
+  const thin = downsample(values, 48);
+  assert.equal(thin.length, 48);
+  assert.equal(thin[0], 0);
+  assert.equal(thin.at(-1), 299);
+  assert.deepEqual(downsample([1, 2, 3], 48), [1, 2, 3]);
+});
+
+test("an overview row takes its day change from the previous close", () => {
+  const row = toOverviewRow(
+    { name: "NIFTY 50", symbol: "NIFTY", instrumentKey: "NSE_INDEX|Nifty 50", category: "indian" },
+    {
+      type: "index", symbol: "NIFTY", name: "NIFTY 50", unit: "points", currency: "INR", range: "1d", interval: "1m",
+      candles: [{ t: 1, o: null, h: null, l: null, c: 101, v: null }, { t: 2, o: null, h: null, l: null, c: 99, v: null }],
+      previousClose: 100, fiftyTwoWeekHigh: 120, fiftyTwoWeekLow: 80, marketTime: null,
+      sessionStart: null, sessionEnd: null, source: "Yahoo",
+    }
+  );
+  assert.equal(row.price, 99);
+  assert.equal(row.change, -1);
+  assert.equal(row.changePercent, -1);
+  assert.deepEqual(row.spark, [101, 99]);
+
+  const empty = toOverviewRow({ name: "DAX", symbol: "DAX", yahooSymbol: "^GDAXI", category: "global" }, null);
+  assert.equal(empty.price, null);
+  assert.deepEqual(empty.spark, []);
+});
