@@ -1,202 +1,126 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+
+import PredictionBadge from "@/components/Predictions/Badge";
+import { StockAvatar } from "@/components/Markets/StockBits";
+import { fetchTrending } from "@/lib/community/client";
+import type { TrendingSymbol } from "@/lib/community/types";
+import { fetchLeaderboard } from "@/lib/predictions/client";
+import { accuracy } from "@/lib/predictions/rules";
+import type { LeaderRow } from "@/lib/predictions/service";
+
+/**
+ * Home page community highlights: the most-discussed stocks and the top
+ * predictors, both from the server (the same data as /trending and
+ * /leaderboard). Before community accounts are switched on, each card says
+ * so instead of showing invented numbers.
+ */
+
+type Load<T> = { status: "loading" } | { status: "off" } | { status: "ready"; items: T[] };
+
+function Card({ title, href, children }: { title: string; href: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-[#222] bg-[#111] p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <Link href={href} className="text-sm text-[#4ade80] hover:underline">
+          See all →
+        </Link>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Note({ children }: { children: React.ReactNode }) {
+  return <p className="py-6 text-center text-sm text-[#888]">{children}</p>;
+}
+
+function Skeleton() {
+  return (
+    <div className="space-y-2">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="h-10 animate-pulse rounded-lg bg-[#171717]" />
+      ))}
+    </div>
+  );
+}
 
 export default function HomeStats() {
-  const router = useRouter();
-
-  const [trending, setTrending] = useState<any[]>([]);
-const [leaders, setLeaders] = useState<any[]>([]);
-const [events, setEvents] = useState<any[]>([]);
+  const [trending, setTrending] = useState<Load<TrendingSymbol>>({ status: "loading" });
+  const [leaders, setLeaders] = useState<Load<LeaderRow>>({ status: "loading" });
 
   useEffect(() => {
-    const stocks = [
-      "AAPL",
-      "TSLA",
-      "NVDA",
-      "MSFT",
-      "RELIANCE",
-      "TCS",
-      "INFY",
-    ];
+    let cancelled = false;
 
-    const trendingData = stocks
-      .map((symbol) => {
-        const discussions = JSON.parse(
-          localStorage.getItem(
-            `stockDiscussions_${symbol}`
-          ) || "[]"
-        );
-
-        return {
-          symbol,
-          count: discussions.length,
-        };
-      })
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 3);
-
-    setTrending(trendingData);
-
-    const predictions = JSON.parse(
-      localStorage.getItem("predictions") || "[]"
-    );
-
-    const users: any = {};
-
-    predictions.forEach((p: any) => {
-      if (!users[p.username]) {
-        users[p.username] = {
-          username: p.username,
-          correct: 0,
-        };
-      }
-
-      if (p.status === "Correct") {
-        users[p.username].correct++;
-      }
+    fetchTrending().then((items) => {
+      if (!cancelled) setTrending(items ? { status: "ready", items: items.slice(0, 5) } : { status: "off" });
+    });
+    fetchLeaderboard().then((result) => {
+      if (!cancelled) setLeaders(Array.isArray(result) ? { status: "ready", items: result.slice(0, 5) } : { status: "off" });
     });
 
-    const topUsers = Object.values(users)
-      .sort(
-        (a: any, b: any) =>
-          b.correct - a.correct
-      )
-      .slice(0, 3);
-
-    setLeaders(topUsers);
-    const savedEvents = JSON.parse(
-  localStorage.getItem("events") || "[]"
-);
-
-setEvents(savedEvents.slice(0, 3));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
-    <>
-      <section className="mt-14">
-        <h2 className="text-[22px] sm:text-[26px] font-bold tracking-tight mb-5">
-          🔥 Trending Stocks
-        </h2>
-
-        {trending.length === 0 ? (
-          <p className="rounded-xl bg-[#151515] p-4 text-sm text-[#888]">
-            No discussions yet — trending stocks appear once people
-            start talking about them.
-          </p>
-        ) : (
-          <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
-            {trending.map((stock) => (
-              <div
-  key={stock.symbol}
-  onClick={() =>
-    router.push(`/stock/${stock.symbol}`)
-  }
-  className="
-    rounded-2xl
-    border
-    border-[#222]
-    bg-[#111]
-    p-5
-    cursor-pointer
-    transition-colors
-    hover:border-[#2e2e2e]
-    hover:bg-[#161616]
-  "
->
-                <p className="text-[15px] font-semibold">
-                  {stock.symbol}
-                </p>
-
-                <p className="mt-1 text-sm tabular-nums text-[#888]">
-                  {stock.count} Discussions
-                </p>
-              </div>
+    <div className="mt-14 grid gap-6 md:grid-cols-2">
+      <Card title="🔥 Most discussed" href="/trending">
+        {trending.status === "loading" && <Skeleton />}
+        {trending.status === "off" && <Note>Discussions are launching soon.</Note>}
+        {trending.status === "ready" && trending.items.length === 0 && <Note>No discussions in the last 24 hours.</Note>}
+        {trending.status === "ready" && trending.items.length > 0 && (
+          <ul className="space-y-1">
+            {trending.items.map((entry, index) => (
+              <li key={entry.symbol}>
+                <Link
+                  href={`/stock/${encodeURIComponent(entry.symbol)}`}
+                  className="group flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[#161616]"
+                >
+                  <span className="w-4 text-xs tabular-nums text-[#666]">{index + 1}</span>
+                  <StockAvatar symbol={entry.symbol} size={28} />
+                  <span className="flex-1 font-semibold group-hover:text-[#22c55e]">{entry.symbol}</span>
+                  <span className="text-xs text-[#888]">
+                    {entry.posts} {entry.posts === 1 ? "post" : "posts"}
+                  </span>
+                </Link>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
-      </section>
+      </Card>
 
-      <section className="mt-14">
-        <h2 className="text-[22px] sm:text-[26px] font-bold tracking-tight mb-5">
-          🏆 Top Predictors
-        </h2>
-
-        {leaders.length === 0 ? (
-          <p className="rounded-xl bg-[#151515] p-4 text-sm text-[#888]">
-            No predictions recorded yet.
-          </p>
-        ) : (
-          <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
-            {leaders.map((user: any) => (
-              <div
-  key={user.username}
-  onClick={() =>
-    router.push(
-      `/profile/${user.username}`
-    )
-  }
-  className="
-    rounded-2xl
-    border
-    border-[#222]
-    bg-[#111]
-    p-5
-    cursor-pointer
-    transition-colors
-    hover:border-[#2e2e2e]
-    hover:bg-[#161616]
-  "
->
-                <p className="truncate text-[15px] font-semibold">
-                  {user.username}
-                </p>
-
-                <p className="mt-1 text-sm tabular-nums text-[#4ade80]">
-                  ✅ {user.correct} Correct
-                </p>
-              </div>
-            ))}
-          </div>
+      <Card title="🏆 Top predictors" href="/leaderboard">
+        {leaders.status === "loading" && <Skeleton />}
+        {leaders.status === "off" && <Note>Scored predictions are launching soon.</Note>}
+        {leaders.status === "ready" && leaders.items.length === 0 && <Note>No scored predictions yet.</Note>}
+        {leaders.status === "ready" && leaders.items.length > 0 && (
+          <ul className="space-y-1">
+            {leaders.items.map((leader, index) => {
+              const acc = accuracy(leader.stats);
+              return (
+                <li key={leader.username}>
+                  <Link
+                    href={`/profile/${leader.username}`}
+                    className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[#161616]"
+                  >
+                    <span className="w-4 text-xs tabular-nums text-[#666]">{index + 1}</span>
+                    <span className="min-w-0 flex-1 truncate font-semibold">{leader.displayName}</span>
+                    <PredictionBadge stats={leader.stats} />
+                    <span className="text-xs tabular-nums text-[#888]">
+                      {acc === null ? "—" : `${Math.round(acc)}%`} · {leader.stats.points} pts
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
         )}
-      </section>
-
-      <section className="mt-14">
-  <h2 className="text-[22px] sm:text-[26px] font-bold tracking-tight mb-5">
-    📅 Upcoming Events
-  </h2>
-
-  {events.length === 0 ? (
-    <p className="rounded-xl bg-[#151515] p-4 text-sm text-[#888]">
-      No upcoming events.
-    </p>
-  ) : (
-    <div className="grid md:grid-cols-3 gap-4 sm:gap-6">
-      {events.map(
-        (event: any, index) => (
-          <div
-            key={index}
-            className="rounded-2xl border border-[#222] bg-[#111] p-5"
-          >
-            <p className="text-[15px] font-semibold">
-              {event.symbol}
-            </p>
-
-            <p className="mt-2 text-sm text-[#888]">
-              📌 {event.eventType}
-            </p>
-
-            <p className="mt-1 text-sm text-[#888]">
-              📅 {event.eventDate}
-            </p>
-          </div>
-        )
-      )}
+      </Card>
     </div>
-  )}
-</section>
-
-    </>
   );
 }

@@ -47,7 +47,59 @@ export async function getUpstoxQuotes(
   }
 }
 
-export async function searchUpstoxEquity(
+/**
+ * Instrument keys don't change, so a successful lookup is reused for 12 hours
+ * and concurrent lookups of one symbol share a request. At most
+ * SEARCH_CONCURRENCY searches run at once: a page that resolves the whole
+ * NIFTY 50 used to fire 50 at the same moment and get rate-limited.
+ * Misses and failures are never cached.
+ */
+const INSTRUMENT_TTL_MS = 12 * 60 * 60_000;
+const SEARCH_CONCURRENCY = 8;
+type EquityInstrument = Awaited<ReturnType<typeof searchUpstoxEquityUncached>>;
+const instrumentCache = new Map<string, { at: number; value: EquityInstrument }>();
+const instrumentInFlight = new Map<string, Promise<EquityInstrument>>();
+let activeSearches = 0;
+const searchQueue: (() => void)[] = [];
+
+async function withSearchSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (activeSearches >= SEARCH_CONCURRENCY) {
+    await new Promise<void>((resolve) => searchQueue.push(resolve));
+  }
+  activeSearches++;
+  try {
+    return await task();
+  } finally {
+    activeSearches--;
+    searchQueue.shift()?.();
+  }
+}
+
+export async function searchUpstoxEquity(symbol: string): Promise<EquityInstrument> {
+  if (!ACCESS_TOKEN) {
+    throw new Error(
+      "UPSTOX_ACCESS_TOKEN is missing from environment variables"
+    );
+  }
+
+  const key = symbol.trim().toUpperCase();
+  const hit = instrumentCache.get(key);
+  if (hit && Date.now() - hit.at < INSTRUMENT_TTL_MS) return hit.value;
+
+  let pending = instrumentInFlight.get(key);
+  if (!pending) {
+    pending = withSearchSlot(() => searchUpstoxEquityUncached(symbol)).finally(() => {
+      instrumentInFlight.delete(key);
+    });
+    instrumentInFlight.set(key, pending);
+  }
+
+  const value = await pending;
+  if (value) instrumentCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+async function searchUpstoxEquityUncached(
   symbol: string
 ) {
   if (!ACCESS_TOKEN) {

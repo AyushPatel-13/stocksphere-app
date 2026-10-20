@@ -12,7 +12,9 @@ import { StockAvatar } from "@/components/Markets/StockBits";
 import { getPrice } from "@/lib/services/price";
 import { getCompany } from "@/lib/services/company";
 import { getNews } from "@/lib/services/news";
+import type { NewsArticle } from "@/lib/types/news";
 import { getFinancials } from "@/lib/services/financials";
+import { fiftyTwoWeekRange, getHistory, resolveAsset } from "@/lib/services/history";
 import {
   formatCurrency,
   formatLargeNumber,
@@ -255,28 +257,19 @@ export default async function StockPage({
   params: Promise<{ symbol: string }>;
 }) {
   const { symbol } = await params;
-  const quote =
-    await getPrice(symbol);
-
-  const company =
-    await getCompany(symbol);
-
-  // Price history is loaded by the chart itself (/api/history), per range,
-  // so the page no longer waits for a year of candles before rendering.
-
-  console.log(company);
-
-  const news =
-    await getNews(symbol);
-
-  const financials =
-    await getFinancials(symbol);
-
-  console.log(financials);
-
-  console.log("QUOTE:", quote);
-
-  console.log(quote);
+  // Independent lookups, fetched together rather than one after another.
+  // The year of daily bars is only for the 52-week range when the
+  // fundamentals provider doesn't report one (it's cached by the history
+  // service and shared with the chart's 1Y view).
+  const asset = resolveAsset("stock", symbol);
+  const [quote, company, news, financials, yearHistory] = await Promise.all([
+    getPrice(symbol),
+    getCompany(symbol),
+    getNews(symbol),
+    getFinancials(symbol),
+    asset ? getHistory(asset, "1y").catch(() => null) : Promise.resolve(null),
+  ]);
+  const range52w = fiftyTwoWeekRange(yearHistory);
   // This page used to carry a hardcoded stockData table (ten entries: name,
   // price, change, and a description for four of them) plus a `stock` fallback
   // that read it. Both are gone. Prices and changes have come from the live
@@ -413,12 +406,12 @@ export default async function StockPage({
 
           <Stat
             label="52W High"
-            value={financials?.week52High ?? "N/A"}
+            value={financials?.week52High ?? range52w?.high ?? "N/A"}
           />
 
           <Stat
             label="52W Low"
-            value={financials?.week52Low ?? "N/A"}
+            value={financials?.week52Low ?? range52w?.low ?? "N/A"}
           />
 
           <Stat
@@ -442,7 +435,7 @@ export default async function StockPage({
         <h2 className="sp-section-title">Latest News</h2>
 
         <div className="sp-news">
-          {news.slice(0, 10).map((item: any) => (
+          {(news as NewsArticle[]).slice(0, 10).map((item) => (
             <article className="sp-news-card" key={item.id}>
               <img
                 className="sp-news-image"

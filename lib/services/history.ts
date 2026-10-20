@@ -237,3 +237,19 @@ export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
 }
 
 export const getHistory = createHistoryLoader();
+
+/**
+ * 52-week high and low from a year of history: the provider's own figures
+ * when it reports them, otherwise the extremes of the daily bars. Null when
+ * there's no usable data — never an estimate.
+ */
+export function fiftyTwoWeekRange(history: History | null): { high: number; low: number } | null {
+  if (!history) return null;
+  const { fiftyTwoWeekHigh: high, fiftyTwoWeekLow: low } = history;
+  if (high !== null && low !== null && high > 0 && low > 0 && high >= low) return { high, low };
+
+  const highs = history.candles.map((c) => c.h ?? c.c).filter((v): v is number => typeof v === "number" && v > 0);
+  const lows = history.candles.map((c) => c.l ?? c.c).filter((v): v is number => typeof v === "number" && v > 0);
+  if (highs.length === 0 || lows.length === 0) return null;
+  return { high: Math.max(...highs), low: Math.min(...lows) };
+}

@@ -6,6 +6,7 @@ import RecentlyViewed from "@/components/Markets/RecentlyViewed";
 import Image from "next/image";
 import SearchBox from "@/components/Search/SearchBox";
 import HomeStats from "./HomeStats";
+import HomeNews from "@/components/Markets/HomeNews";
 import AgentHome from "@/components/Agent/AgentHome";
 import IndicesBar from "@/components/IndicesBar";
 
@@ -161,15 +162,6 @@ function UnavailableNote({ children }: { children: ReactNode }) {
 export default function Home() {
   const router = useRouter();
 
-const [trendingStocks, setTrendingStocks] =
-  useState<any[]>([]);
-
-const [topPredictors, setTopPredictors] =
-  useState<any[]>([]);
-
-const [events, setEvents] =
-  useState<any[]>([]);
-
   const [marketData, setMarketData] =
   useState<{
     success: boolean;
@@ -256,115 +248,6 @@ useEffect(() => {
     // more is coming. Say so, rather than leaving the skeleton up.
     setMoversUnavailable(true);
   });
-
-  // Trending Stocks
-
-  const stockSymbols = [
-    "AAPL",
-    "TSLA",
-    "NVDA",
-    "MSFT",
-    "RELIANCE",
-    "TCS",
-    "INFY",
-    "HDFCBANK",
-  ];
-
-  const trendingData =
-    stockSymbols.map((symbol) => {
-      const discussions =
-        JSON.parse(
-          localStorage.getItem(
-            `stockDiscussions_${symbol}`
-          ) || "[]"
-        );
-
-      return {
-        symbol,
-        count: discussions.length,
-      };
-    });
-
-  trendingData.sort(
-    (a, b) => b.count - a.count
-  );
-
-  setTrendingStocks(
-    trendingData.slice(0, 3)
-  );
-
-  // Events
-
-  const savedEvents =
-    JSON.parse(
-      localStorage.getItem(
-        "events"
-      ) || "[]"
-    );
-
-  setEvents(
-    savedEvents.slice(0, 3)
-  );
-
-  // Leaderboard
-
-  const predictions =
-    JSON.parse(
-      localStorage.getItem(
-        "predictions"
-      ) || "[]"
-    );
-
-  const users: any = {};
-
-  predictions.forEach(
-    (prediction: any) => {
-      const username =
-        prediction.username;
-
-      if (!users[username]) {
-        users[username] = {
-          username,
-          predictions: 0,
-          correct: 0,
-        };
-      }
-
-      users[username]
-        .predictions += 1;
-
-      if (
-        prediction.status ===
-        "Correct"
-      ) {
-        users[username]
-          .correct += 1;
-      }
-    }
-  );
-
-  const leaders =
-    Object.values(users)
-      .map((user: any) => ({
-        ...user,
-        accuracy:
-          user.predictions > 0
-            ? (
-                (user.correct /
-                  user.predictions) *
-                100
-              ).toFixed(1)
-            : "0",
-      }))
-      .sort(
-        (a: any, b: any) =>
-          Number(b.accuracy) -
-          Number(a.accuracy)
-      );
-
-  setTopPredictors(
-    leaders.slice(0, 3)
-  );
 
 }, []);
   return (
@@ -716,20 +599,7 @@ useEffect(() => {
     📰 Latest News
   </h2>
 
-  {/* The three cards that stood here were hardcoded placeholder headlines
-      naming Apple, Tesla and NVIDIA announcements. They rendered in news
-      cards and read as live headlines, which they were not.
-
-      There is no market-wide news feed in StockSphere to replace them with:
-      the only news path is per-symbol — lib/providers/news.ts fetchNews()
-      routes Indian tickers to Upstox and global ones to Finnhub, and the
-      stock page uses it for one ticker at a time. No such source is invented
-      or stood up here, so the section keeps its heading and shows the
-      unavailable state that already exists for exactly this case, rather
-      than a placeholder that would read as news again. */}
-  <UnavailableNote>
-    No market-wide news feed is available yet.
-  </UnavailableNote>
+  <HomeNews />
 </section>
 
 <HomeStats />
