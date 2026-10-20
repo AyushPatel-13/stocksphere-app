@@ -3,27 +3,25 @@ import { NextResponse } from "next/server";
 import {
   createPrediction,
   getPredictionStore,
-  historyPrices,
-  resolveDue,
   type PredictionStore,
-  type PriceSource,
 } from "@/lib/predictions/service";
+import { marketData, type PredictionMarketData } from "@/lib/predictions/v2/sources";
 import { handleProblem, normaliseHandle } from "@/lib/validation/handle";
 import { isValidSymbol } from "@/lib/validation/symbol";
 
 /**
  * GET  /api/predictions?user=<handle>&symbol=TCS&status=open|resolved&limit=30
- *      Public. Scores any predictions that have come due first, so results
- *      appear without waiting for the scheduled resolver.
- * POST /api/predictions { assetType, symbol, direction, horizon, target?, note? }
+ *      Public.
+ * POST /api/predictions { requestId, assetType, symbol, direction, horizon, target?, note? }
  *      Authorization: Bearer <Supabase access token>
+ *      requestId: a UUID made once per submission attempt — resending it
+ *      returns the same prediction (200, replayed) instead of a duplicate.
  */
 
 export async function GET(
   request: Request,
   _context?: unknown,
-  store: PredictionStore | null = getPredictionStore(),
-  prices: PriceSource = historyPrices
+  store: PredictionStore | null = getPredictionStore()
 ) {
   if (!store) {
     return NextResponse.json({ success: false, error: "Predictions aren't set up yet.", code: "NOT_CONFIGURED" }, { status: 503 });
@@ -46,9 +44,6 @@ export async function GET(
   const limit = Math.min(Math.max(Number(params.get("limit")) || 30, 1), 100);
 
   try {
-    // Best effort: a resolver hiccup must not stop the list from loading.
-    await resolveDue(store, prices).catch((error) => console.error("Lazy resolve failed:", error));
-
     const predictions = await store.list({ username, symbol, status, limit });
     return NextResponse.json({ success: true, predictions });
   } catch (error) {
@@ -61,7 +56,8 @@ export async function POST(
   request: Request,
   _context?: unknown,
   store: PredictionStore | null = getPredictionStore(),
-  prices: PriceSource = historyPrices
+  market: PredictionMarketData = marketData,
+  now: () => number = Date.now
 ) {
   const header = request.headers.get("authorization") ?? "";
   const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
@@ -77,6 +73,7 @@ export async function POST(
     const result = await createPrediction(
       {
         token,
+        requestId: json?.requestId,
         assetType: json?.assetType,
         symbol: json?.symbol,
         direction: json?.direction,
@@ -85,13 +82,17 @@ export async function POST(
         note: json?.note,
       },
       store,
-      prices
+      market,
+      now()
     );
 
     if (!result.ok) {
       return NextResponse.json({ success: false, error: result.error, code: result.code }, { status: result.status });
     }
-    return NextResponse.json({ success: true, prediction: result.prediction }, { status: 201 });
+    return NextResponse.json(
+      { success: true, prediction: result.prediction, replayed: result.replayed },
+      { status: result.replayed ? 200 : 201 }
+    );
   } catch (error) {
     console.error("Prediction create error:", error);
     return NextResponse.json({ success: false, error: "Couldn't save your prediction. Please try again." }, { status: 500 });

@@ -22,12 +22,12 @@ import {
   accuracy,
   badgeFor,
   nextBadge,
-  type Direction,
   type Horizon,
   type PredictionAssetType,
   type PredictionStats,
 } from "@/lib/predictions/rules";
 import type { PredictionView } from "@/lib/predictions/service";
+import type { CallDirection } from "@/lib/predictions/v2/config";
 
 /**
  * Predictions: call a stock's direction over a day, a week or a month, get
@@ -42,7 +42,20 @@ const ASSET_TYPES: { id: PredictionAssetType; label: string; placeholder: string
   { id: "crypto", label: "Crypto", placeholder: "BTC, ETH…" },
 ];
 
-type LivePrice = { status: "idle" | "loading" | "none" } | { status: "ready"; price: number; currency: string | null; unit: string };
+type LivePrice =
+  | { status: "idle" | "loading" | "none" }
+  | { status: "ready"; price: number; currency: string | null; unit: string; marketOpen: boolean | null };
+
+const DIRECTIONS: { id: CallDirection; label: string; active: string }[] = [
+  { id: "up", label: "↑ Up", active: "border-[#22c55e]/60 bg-[#22c55e]/15 text-[#4ade80]" },
+  { id: "sideways", label: "↔ Sideways", active: "border-[#eab308]/60 bg-[#eab308]/15 text-[#facc15]" },
+  { id: "down", label: "↓ Down", active: "border-[#ef4444]/60 bg-[#ef4444]/15 text-[#f87171]" },
+];
+
+/** One id per submission attempt, so a retry can't save the call twice. */
+function newRequestId(): string {
+  return crypto.randomUUID();
+}
 
 function useLivePrice(assetType: PredictionAssetType, symbol: string): LivePrice {
   const [state, setState] = useState<LivePrice>({ status: "idle" });
@@ -59,7 +72,18 @@ function useLivePrice(assetType: PredictionAssetType, symbol: string): LivePrice
         const data = await (await fetch(`/api/history?${params.toString()}`)).json();
         if (cancelled) return;
         const last = data?.success ? data.candles?.at(-1)?.c : null;
-        setState(typeof last === "number" ? { status: "ready", price: last, currency: data.currency, unit: data.unit } : { status: "none" });
+        const now = Date.now();
+        const marketOpen =
+          assetType === "crypto"
+            ? true
+            : typeof data?.sessionStart === "number" && typeof data?.sessionEnd === "number"
+              ? data.sessionStart <= now && now < data.sessionEnd
+              : null;
+        setState(
+          typeof last === "number"
+            ? { status: "ready", price: last, currency: data.currency, unit: data.unit, marketOpen }
+            : { status: "none" }
+        );
       } catch {
         if (!cancelled) setState({ status: "none" });
       }
@@ -77,12 +101,13 @@ function useLivePrice(assetType: PredictionAssetType, symbol: string): LivePrice
 function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: PredictionView) => void }) {
   const [assetType, setAssetType] = useState<PredictionAssetType>("stock");
   const [symbol, setSymbol] = useState("");
-  const [direction, setDirection] = useState<Direction>("up");
+  const [direction, setDirection] = useState<CallDirection>("up");
   const [horizon, setHorizon] = useState<Horizon>("1w");
   const [target, setTarget] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [requestId, setRequestId] = useState(newRequestId);
   const price = useLivePrice(assetType, symbol);
 
   if (user.status === "loading") return <div className="h-80 animate-pulse rounded-2xl bg-[#111]" />;
@@ -108,12 +133,22 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
     }
     setSaving(true);
     setError(null);
-    const result = await submitPrediction({ assetType, symbol: symbol.trim(), direction, horizon, target: target.trim(), note: note.trim() });
+    const result = await submitPrediction({
+      requestId,
+      assetType,
+      symbol: symbol.trim(),
+      direction,
+      horizon,
+      target: direction === "sideways" ? "" : target.trim(),
+      note: note.trim(),
+    });
     setSaving(false);
     if ("error" in result) {
       setError(result.code === "NOT_CONFIGURED" ? "Predictions are launching soon." : result.error);
       return;
     }
+    // A new call gets a new id; a failed one keeps its id so a retry is safe.
+    setRequestId(newRequestId());
     setSymbol("");
     setTarget("");
     setNote("");
@@ -163,31 +198,35 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
           {price.status === "ready" && (
             <>
               Now <span className="font-semibold text-white">{formatValue(price.price, price.unit === "points" ? "points" : "currency", price.currency)}</span>
-              {" "}— your entry price is locked when you submit.
+              {price.marketOpen === false
+                ? " — market closed: your call is measured from the last official close."
+                : " — your entry price is locked when you submit."}
             </>
           )}
         </span>
       </label>
 
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        {(["up", "down"] as const).map((d) => (
+      <div className="mt-2 grid grid-cols-3 gap-2" role="group" aria-label="Direction">
+        {DIRECTIONS.map((d) => (
           <button
-            key={d}
+            key={d.id}
             type="button"
-            aria-pressed={direction === d}
-            onClick={() => setDirection(d)}
+            aria-pressed={direction === d.id}
+            onClick={() => setDirection(d.id)}
             className={`rounded-xl border py-2.5 text-sm font-semibold transition-colors ${
-              direction === d
-                ? d === "up"
-                  ? "border-[#22c55e]/60 bg-[#22c55e]/15 text-[#4ade80]"
-                  : "border-[#ef4444]/60 bg-[#ef4444]/15 text-[#f87171]"
-                : "border-[#2a2a2a] text-[#999] hover:text-white"
+              direction === d.id ? d.active : "border-[#2a2a2a] text-[#999] hover:text-white"
             }`}
           >
-            {d === "up" ? "↑ Up" : "↓ Down"}
+            {d.label}
           </button>
         ))}
       </div>
+      {direction === "sideways" && (
+        <p className="mt-1.5 text-xs text-[#888]">
+          Sideways = the price finishes inside a small band around today&apos;s price. The band is set from how much
+          this asset normally moves.
+        </p>
+      )}
 
       <div className="mt-3 grid grid-cols-3 gap-2" role="group" aria-label="Time frame">
         {HORIZONS.map((h) => (
@@ -206,10 +245,12 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
         ))}
       </div>
 
-      <label className="mt-3 block">
-        <span className="mb-1.5 block text-xs font-medium text-[#888]">Target price (optional, +5/+10 bonus)</span>
-        <input value={target} onChange={(e) => setTarget(e.target.value)} inputMode="decimal" placeholder="e.g. 2600" className={inputClass} />
-      </label>
+      {direction !== "sideways" && (
+        <label className="mt-3 block">
+          <span className="mb-1.5 block text-xs font-medium text-[#888]">Target price (optional, bonus when close)</span>
+          <input value={target} onChange={(e) => setTarget(e.target.value)} inputMode="decimal" placeholder="e.g. 2600" className={inputClass} />
+        </label>
+      )}
 
       <label className="mt-3 block">
         <span className="mb-1.5 block text-xs font-medium text-[#888]">Why? (optional)</span>

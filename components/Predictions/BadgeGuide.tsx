@@ -1,4 +1,5 @@
-import { BADGES, FLAT_THRESHOLD_PCT, HORIZONS } from "@/lib/predictions/rules";
+import { BADGES, HORIZONS as HORIZON_LABELS } from "@/lib/predictions/rules";
+import { SCORING_V2 } from "@/lib/predictions/v2/config";
 
 /** "How scoring and badges work" — generated from the same rules the server applies. */
 export default function BadgeGuide() {
@@ -7,11 +8,18 @@ export default function BadgeGuide() {
       <h2 className="font-semibold">How scoring works</h2>
       <ul className="mt-3 space-y-1.5 text-[13px] leading-relaxed text-[#9a9a9a]">
         <li>
-          • Call the direction over {HORIZONS.map((h) => `${h.label} (${h.points} pts)`).join(", ")}.
+          • Call UP, DOWN or SIDEWAYS over {HORIZON_LABELS.map((h) => `${h.label} (${SCORING_V2.horizons[h.id].base} pts)`).join(", ")}.
         </li>
-        <li>• Hit or come within 1% of your target: +10 bonus. Within 3%: +5.</li>
-        <li>• Wrong direction scores 0. A move under {FLAT_THRESHOLD_PCT}% doesn&apos;t count either way.</li>
-        <li>• Your entry price is locked by StockSphere when you predict, and predictions can&apos;t be edited or deleted.</li>
+        <li>
+          • Each call has a small band around the price, set from how much the asset normally moves. UP/DOWN must finish beyond it;
+          SIDEWAYS must finish inside it. Finishing inside the band on an UP/DOWN call is “flat” and doesn&apos;t count.
+        </li>
+        <li>• A wrong call loses points: more the further the price went the other way, capped at twice the base.</li>
+        <li>• A target adds up to +10 when a correct call finishes close to it, and −5 when it&apos;s far off.</li>
+        <li>
+          • The result is the official close of the last trading session in the time frame (1, 5 or 21
+          sessions); crypto uses the exact time. Calls are locked when you make them.
+        </li>
       </ul>
 
       <h2 className="mt-5 font-semibold">Badges</h2>

@@ -2,7 +2,8 @@
 
 import { supabase } from "../supabase";
 import type { LeaderRow, PredictionView } from "./service";
-import type { Direction, Horizon, PredictionAssetType } from "./rules";
+import type { Horizon, PredictionAssetType } from "./rules";
+import type { CallDirection } from "./v2/config";
 
 export type ApiError = { error: string; code?: string };
 
@@ -24,10 +25,16 @@ export async function fetchPredictions(params: {
   }
 }
 
+/**
+ * Submit a call. `requestId` must be made once per attempt (crypto.randomUUID())
+ * and reused on retry: the server then returns the same prediction instead of
+ * saving a second one.
+ */
 export async function submitPrediction(input: {
+  requestId: string;
   assetType: PredictionAssetType;
   symbol: string;
-  direction: Direction;
+  direction: CallDirection;
   horizon: Horizon;
   target?: string;
   note?: string;
@@ -61,7 +68,7 @@ export async function fetchLeaderboard(): Promise<LeaderRow[] | ApiError> {
 /** "in 3d 4h" / "in 45m" / "due — scoring at the next market close". */
 export function timeUntil(iso: string, now: number = Date.now()): string {
   const ms = Date.parse(iso) - now;
-  if (ms <= 0) return "due — scored at the next market price";
+  if (ms <= 0) return "due — scoring soon";
   const minutes = Math.round(ms / 60_000);
   if (minutes < 60) return `in ${minutes}m`;
   const hours = Math.floor(minutes / 60);

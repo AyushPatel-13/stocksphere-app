@@ -5,8 +5,8 @@
  * result records the version and fingerprint it was scored with, so old
  * results stay explainable after the rules move on.
  *
- * Not wired into the app yet (Phase 1a): nothing reads this outside its own
- * tests.
+ * Submission (Phase 1b) reads the band and `submission` rules; scoring is
+ * wired in Phase 2.
  */
 
 export type Horizon = "1d" | "1w" | "1m";
@@ -41,6 +41,19 @@ export type TargetBand = {
   points: number;
 };
 
+export type SubmissionRules = {
+  /** A live quote older than this (seconds) is refused while the market is open. */
+  maxQuoteAgeSeconds: number;
+  /** Daily closes used to estimate volatility for the band. */
+  volatilityLookbackSessions: number;
+  maxNewPerDay: number;
+  /**
+   * Instruments that barely move (liquid and bond ETFs): a call on them is a
+   * near-free SIDEWAYS win, so they can't be predicted.
+   */
+  excludedSymbols: string[];
+};
+
 export type ScoringConfig = {
   version: string;
   horizons: Record<Horizon, HorizonRules>;
@@ -60,6 +73,7 @@ export type ScoringConfig = {
   maxTargetPctPerK: number;
   /** Decisions compare the move rounded to this many decimals (%). */
   decisionDecimals: number;
+  submission: SubmissionRules;
 };
 
 export const SCORING_V2: ScoringConfig = {
@@ -88,6 +102,12 @@ export const SCORING_V2: ScoringConfig = {
   ],
   maxTargetPctPerK: 10,
   decisionDecimals: 6,
+  submission: {
+    maxQuoteAgeSeconds: 120,
+    volatilityLookbackSessions: 60,
+    maxNewPerDay: 10,
+    excludedSymbols: ["LIQUIDBEES", "GILT5YBEES", "LTGILTBEES", "EBBETF0430", "EBBETF0431", "EBBETF0433"],
+  },
 };
 
 /** JSON with object keys sorted, so the same rules always serialise the same way. */
