@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import PortfolioAnalytics from "@/components/Portfolio/PortfolioAnalytics";
 import AuthGuard from "@/components/AuthGuard";
 import MarketsNav from "@/components/Markets/MarketsNav";
 import { Change, StockAvatar, absPercent, toneClass } from "@/components/Markets/StockBits";
@@ -338,6 +339,8 @@ export default function PortfolioPage() {
             ))
           )}
         </section>
+
+        {!quotesLoading && <PortfolioAnalytics views={views} unpriced={unpriced} />}
 
         {showForm && (
           <AddHoldingForm

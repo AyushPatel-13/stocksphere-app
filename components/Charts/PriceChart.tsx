@@ -155,6 +155,27 @@ function timeLabel(t: number, range: RangeId, indian: boolean): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone });
 }
 
+/** Price levels drawn on the chart, kept in this browser per instrument. */
+const LEVELS_PREFIX = "stocksphere.levels.";
+const MAX_LEVELS = 8;
+
+function readLevels(key: string): number[] {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LEVELS_PREFIX + key) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((v): v is number => typeof v === "number" && Number.isFinite(v)).slice(0, MAX_LEVELS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLevels(key: string, levels: number[]) {
+  try {
+    window.localStorage.setItem(LEVELS_PREFIX + key, JSON.stringify(levels));
+  } catch {
+    /* not saved; the lines still show until reload */
+  }
+}
+
 function Chip({ active, onClick, children, color }: { active: boolean; onClick: () => void; children: React.ReactNode; color?: string }) {
   return (
     <button
@@ -191,6 +212,19 @@ export default function PriceChart({
     { status: "loading" } | { status: "error"; message: string } | { status: "ready"; data: HistoryResponse }
   >({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
+  const [levels, setLevels] = useState<number[]>([]);
+  const [drawing, setDrawing] = useState(false);
+  const levelKey = `${type}:${symbol.toUpperCase()}`;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLevels(readLevels(levelKey)), 0);
+    return () => window.clearTimeout(timer);
+  }, [levelKey]);
+
+  function updateLevels(next: number[]) {
+    setLevels(next);
+    writeLevels(levelKey, next);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -330,9 +364,20 @@ export default function PriceChart({
 
         {state.status === "ready" && (
           <div onMouseLeave={() => setHover(null)}>
-            <div className="h-[320px] cursor-crosshair">
+            <div className={`h-[320px] ${drawing ? "cursor-copy" : "cursor-crosshair"}`}>
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={rows} syncId={chartId} margin={{ top: 8, right: 8, bottom: 8, left: 8 }} onMouseMove={onMove}>
+                <ComposedChart
+                  data={rows}
+                  syncId={chartId}
+                  margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                  onMouseMove={onMove}
+                  onClick={() => {
+                    if (!drawing || hover === null || !rows[hover]) return;
+                    const price = Math.round(rows[hover].c * 100) / 100;
+                    if (!levels.includes(price)) updateLevels([...levels, price].slice(-MAX_LEVELS));
+                    setDrawing(false);
+                  }}
+                >
                   <XAxis dataKey={xKey} type="number" domain={xDomain} hide allowDataOverflow />
                   <YAxis domain={yDomain} hide allowDataOverflow />
                   <Tooltip
@@ -356,6 +401,15 @@ export default function PriceChart({
                   {range === "1d" && previousClose !== null && (
                     <ReferenceLine y={previousClose} stroke="#4a4a4a" strokeDasharray="3 4" />
                   )}
+                  {levels.map((level) => (
+                    <ReferenceLine
+                      key={level}
+                      y={level}
+                      stroke="#eab308"
+                      strokeDasharray="6 4"
+                      label={{ value: fmt(level), position: "insideTopRight", fill: "#eab308", fontSize: 10 }}
+                    />
+                  ))}
                   {mode === "line" ? (
                     <Line
                       type="linear"
@@ -463,7 +517,27 @@ export default function PriceChart({
         <Chip active={panels.has("rsi")} onClick={() => toggle(panels, "rsi", setPanels)}>
           RSI 14
         </Chip>
+        <Chip active={drawing} color="#eab308" onClick={() => setDrawing((value) => !value)}>
+          {drawing ? "Click the chart to place a level" : "+ Price level"}
+        </Chip>
       </div>
+
+      {levels.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-[11px] text-[#666]">Levels (this browser):</span>
+          {levels.map((level) => (
+            <span key={level} className="flex items-center gap-1 rounded-full border border-[#eab308]/40 px-2 py-0.5 tabular-nums text-[#facc15]">
+              {fmt(level)}
+              <button type="button" onClick={() => updateLevels(levels.filter((l) => l !== level))} aria-label={`Remove level ${fmt(level)}`} className="text-[#888] hover:text-white">
+                ✕
+              </button>
+            </span>
+          ))}
+          <button type="button" onClick={() => updateLevels([])} className="text-[11px] text-[#888] hover:text-white">
+            Clear
+          </button>
+        </div>
+      )}
 
       {data && (
         <p className="mt-3 text-[11px] text-[#666]">
