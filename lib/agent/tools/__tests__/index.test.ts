@@ -28,6 +28,7 @@ test("registry includes the six V1 tools, market movers, the calculator and the 
   assert.deepEqual(names, [
     "calculate",
     "get_company",
+    "get_earnings_calendar",
     "get_financials",
     "get_historical",
     "get_market_movers",

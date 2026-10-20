@@ -9,6 +9,7 @@ import { marketMoversTool } from "./marketMoversTool";
 import { calculatorTool } from "./calculatorTool";
 import { screenerTool } from "./screenerTool";
 import { performanceTool } from "./performanceTool";
+import { earningsTool } from "./earningsTool";
 
 export const AGENT_TOOLS: ToolDefinition[] = [
   symbolResolverTool,
@@ -21,6 +22,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   calculatorTool,
   screenerTool,
   performanceTool,
+  earningsTool,
 ];
 
 export function getToolByName(name: string): ToolDefinition | undefined {

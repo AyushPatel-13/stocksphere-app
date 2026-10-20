@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getCompany } from "@/lib/services/company";
+import { getCompanySummary } from "@/lib/apis/wikipedia";
 import { CompanyProfile } from "@/lib/types/company";
 import { ToolDefinition, okResult, failResult } from "../types";
 
@@ -42,6 +43,17 @@ export const companyTool: ToolDefinition<CompanyToolArgs, CompanyProfile> = {
       const company = await getCompany(symbol);
       if (!isValidCompany(company)) {
         return failResult(SOURCE);
+      }
+      // Upstox profiles carry no description: add Wikipedia's summary (only an
+      // article that matches this company is accepted) and say it's from there.
+      if (!company.description) {
+        const name = company.name === company.name.toUpperCase()
+          ? company.name.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase())
+          : company.name;
+        const summary = await getCompanySummary(name).catch(() => null);
+        if (summary) {
+          return okResult({ ...company, description: summary.text, descriptionSource: `Wikipedia: ${summary.url}` }, `${SOURCE} + Wikipedia`);
+        }
       }
       return okResult(company, SOURCE);
     } catch {

@@ -55,30 +55,72 @@ export function parseEarnings(body: unknown): EarningsEvent[] {
 }
 
 const CACHE_MS = 60 * 60_000;
-let cache: { key: string; at: number; events: EarningsEvent[] } | null = null;
+const cache = new Map<string, { at: number; events: EarningsEvent[] }>();
+const MAX_CACHE = 100;
+
+/**
+ * Finnhub returns at most 1,500 events per request (verified: a 30-day window
+ * came back with exactly 1,500 and silently left out Apple and Microsoft). So a
+ * long window is fetched one week at a time, and a single company is asked
+ * for by symbol.
+ */
+export const FINNHUB_EVENT_CAP = 1500;
+const CHUNK_DAYS = 7;
+
+export function weeklyWindows(from: string, to: string): [string, string][] {
+  const day = 86_400_000;
+  const end = Date.parse(`${to}T00:00:00Z`);
+  const windows: [string, string][] = [];
+  for (let start = Date.parse(`${from}T00:00:00Z`); start <= end; start += CHUNK_DAYS * day) {
+    const stop = Math.min(start + (CHUNK_DAYS - 1) * day, end);
+    windows.push([new Date(start).toISOString().slice(0, 10), new Date(stop).toISOString().slice(0, 10)]);
+  }
+  return windows;
+}
+
+async function fetchWindow(from: string, to: string, symbol: string | null, fetcher: typeof fetch, apiKey: string): Promise<EarningsEvent[] | null> {
+  const params = new URLSearchParams({ from, to, token: apiKey });
+  if (symbol) params.set("symbol", symbol);
+  const response = await fetcher(`https://finnhub.io/api/v1/calendar/earnings?${params.toString()}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) {
+    console.error(`Finnhub earnings calendar ${response.status}`);
+    return null;
+  }
+  const events = parseEarnings(await response.json());
+  if (!symbol && events.length >= FINNHUB_EVENT_CAP) console.error(`Finnhub earnings calendar hit its ${FINNHUB_EVENT_CAP}-event cap for ${from}..${to}`);
+  return events;
+}
 
 export async function getEarningsCalendar(
   from: string,
   to: string,
   fetcher: typeof fetch = fetch,
-  apiKey: string | undefined = process.env.FINNHUB_API_KEY
+  apiKey: string | undefined = process.env.FINNHUB_API_KEY,
+  symbol: string | null = null
 ): Promise<EarningsEvent[] | null> {
   if (!apiKey) return null;
-  const key = `${from}|${to}`;
-  if (cache && cache.key === key && Date.now() - cache.at < CACHE_MS) return cache.events;
+  const key = `${from}|${to}|${symbol ?? "*"}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.events;
 
   try {
-    const params = new URLSearchParams({ from, to, token: apiKey });
-    const response = await fetcher(`https://finnhub.io/api/v1/calendar/earnings?${params.toString()}`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!response.ok) {
-      console.error(`Finnhub earnings calendar ${response.status}`);
-      return null;
-    }
-    const events = parseEarnings(await response.json());
-    cache = { key, at: Date.now(), events };
+    const parts = symbol
+      ? [await fetchWindow(from, to, symbol.toUpperCase(), fetcher, apiKey)]
+      : await Promise.all(weeklyWindows(from, to).map(([a, b]) => fetchWindow(a, b, null, fetcher, apiKey)));
+    if (parts.some((p) => p === null)) return null;
+
+    const seen = new Set<string>();
+    const events = parts
+      .flat()
+      .filter((e): e is EarningsEvent => e !== null && (!symbol || e.symbol === symbol.toUpperCase()))
+      .filter((e) => !seen.has(`${e.symbol}|${e.date}`) && Boolean(seen.add(`${e.symbol}|${e.date}`)))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
+
+    if (cache.size >= MAX_CACHE) cache.delete(cache.keys().next().value as string);
+    cache.set(key, { at: Date.now(), events });
     return events;
   } catch (error) {
     console.error("Finnhub earnings calendar error:", error instanceof Error ? error.message : "unknown");
