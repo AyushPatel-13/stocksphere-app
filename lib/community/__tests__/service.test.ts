@@ -179,3 +179,77 @@ test("routes: bearer token is read, failures map to status codes, inputs are val
   const ok = await listRoute(new Request("http://x/api/community/posts?symbol=tcs&limit=999"), undefined, s);
   assert.equal(ok.status, 200);
 });
+
+/* ------------------------------------------------------------ moderation */
+
+import { groupReports, listReported, moderatePost, type ModerationStore } from "../moderation";
+import { GET as moderationGet, POST as moderationPost } from "@/app/api/community/moderation/route";
+
+function modStore(role: string | null) {
+  const hidden: [string, boolean, string | null][] = [];
+  const store: ModerationStore = {
+    verifyToken: async (token) => (token === "good" ? "m1" : null),
+    roleOf: async () => role,
+    reported: async () => [],
+    setHidden: async (postId, value, reason) => {
+      hidden.push([postId, value, reason]);
+      return postId !== "00000000-0000-4000-8000-000000000404";
+    },
+  };
+  return { store, hidden };
+}
+
+const POST_ID = "00000000-0000-4000-8000-000000000001";
+
+test("only moderators and admins can use the queue", async () => {
+  assert.equal((await listReported(null, modStore("moderator").store)).ok, false);
+  const user = await listReported("good", modStore("user").store);
+  assert.equal(!user.ok && user.status, 403);
+  assert.equal((await listReported("good", modStore("moderator").store)).ok, true);
+  assert.equal((await listReported("good", modStore("admin").store)).ok, true);
+  const off = await listReported("good", null);
+  assert.equal(!off.ok && off.code, "NOT_CONFIGURED");
+});
+
+test("hide and restore", async () => {
+  const { store, hidden } = modStore("moderator");
+  const hide = await moderatePost("good", { postId: POST_ID, action: "hide", reason: "  pump  " }, store);
+  assert.deepEqual(hide.ok && hide.value, { postId: POST_ID, hidden: true });
+  await moderatePost("good", { postId: POST_ID, action: "restore" }, store);
+  assert.deepEqual(hidden, [[POST_ID, true, "pump"], [POST_ID, false, null]]);
+
+  const status = async (input: Record<string, unknown>) => {
+    const r = await moderatePost("good", input, store);
+    return r.ok ? 200 : r.status;
+  };
+  assert.equal(await status({ postId: "x", action: "hide" }), 400);
+  assert.equal(await status({ postId: POST_ID, action: "delete" }), 400);
+  assert.equal(await status({ postId: "00000000-0000-4000-8000-000000000404", action: "hide" }), 404);
+  const user = await moderatePost("good", { postId: POST_ID, action: "hide" }, modStore("user").store);
+  assert.equal(!user.ok && user.status, 403);
+});
+
+test("reports group per post with reason counts", () => {
+  const grouped = groupReports([
+    { post_id: "a", reason: "spam", created_at: "2026-10-20T01:00:00Z" },
+    { post_id: "a", reason: "tips", created_at: "2026-10-20T03:00:00Z" },
+    { post_id: "a", reason: "spam", created_at: "2026-10-20T02:00:00Z" },
+    { post_id: "b", reason: "abuse", created_at: "2026-10-20T00:00:00Z" },
+  ]);
+  assert.deepEqual(grouped.get("a"), { reports: 3, reasons: { spam: 2, tips: 1 }, last: "2026-10-20T03:00:00Z" });
+  assert.equal(grouped.get("b")?.reports, 1);
+});
+
+test("moderation routes pass the bearer token through", async () => {
+  const { store } = modStore("moderator");
+  const ok = await moderationGet(new Request("http://x", { headers: { Authorization: "Bearer good" } }), undefined, store);
+  assert.equal(ok.status, 200);
+  assert.equal((await moderationGet(new Request("http://x"), undefined, store)).status, 401);
+  const acted = await moderationPost(
+    new Request("http://x", { method: "POST", headers: { Authorization: "Bearer good" }, body: JSON.stringify({ postId: POST_ID, action: "hide" }) }),
+    undefined,
+    store
+  );
+  assert.equal(acted.status, 200);
+  assert.equal((await moderationPost(new Request("http://x", { method: "POST", body: "{bad" }), undefined, store)).status, 400);
+});
