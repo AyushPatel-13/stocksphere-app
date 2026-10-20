@@ -130,6 +130,22 @@ function mergeAndRank(
     .slice(0, MAX_CANDIDATES);
 }
 
+/** The one candidate a query clearly names, or the tied candidates. */
+export function pickCandidate(query: string, candidates: SymbolCandidate[]): { match: SymbolCandidate } | { tied: SymbolCandidate[] } | null {
+  if (candidates.length === 0) return null;
+  const lower = stripIndianSuffix(query).toLowerCase();
+  const tokens = companyNameTokens(lower);
+  const tiered = candidates.map((c) => ({ c, tier: matchTier(stripIndianSuffix(c.symbol), c.name, lower, tokens) }));
+  const best = Math.min(...tiered.map((t) => t.tier));
+  const top = tiered.filter((t) => t.tier === best).map((t) => t.c);
+
+  // An exact ticker or exact company name is a match; so is a single
+  // name-prefix match ("HDFC Bank"). Anything looser, or a tie, is ambiguous.
+  if (best === 0 || best === 2 || (best === 3 && top.length === 1)) return { match: top[0] };
+  if (candidates.length === 1 && best <= 3) return { match: candidates[0] };
+  return { tied: (top.length > 1 ? top : candidates).slice(0, 4) };
+}
+
 /**
  * Factory so tests can inject a fake Indian candidate search instead of
  * calling Upstox. Production code uses the default export below.
@@ -140,7 +156,7 @@ export function createSymbolResolverTool(
   return {
     name: "resolve_symbol",
     description:
-      "Look up possible ticker symbols from a company name, ticker, or partial symbol. Indian (NSE) stocks are searched through Upstox's instrument search and returned with a '.NS' suffix (e.g. 'TCS.NS'); a small built-in list of well-known companies, including US/global ones, is also checked. Accepts inputs like 'TCS', 'TCS.NS', or 'Tata Consultancy'. Candidates are ordered by how much the match proves — an exact ticker, then the company name itself, then names that begin with what was typed — so several candidates sharing the top rank is a real ambiguity, not a ranking that has simply failed. This is NOT a full global market search: it may return no match, an unrelated partial match, or several candidates, and non-Indian companies outside the built-in list will not be found. Pass a symbol exactly as returned to other tools. Always tell the user when a match is uncertain, and never treat a candidate as confirmed without also fetching its price or company data.",
+      "Find ticker candidates for a company name or ticker (e.g. 'Tata Consultancy', 'tcs', 'TCS.NS'). Indian stocks come from Upstox NSE search with a .NS suffix; a small built-in list covers well-known US/global names — it is not a full global search. Candidates are ranked: exact ticker, then exact name, then names starting with the query; several tied at the top is a real ambiguity. Use symbols exactly as returned and say when a match is uncertain. (get_performance resolves names itself.)",
     parameters: {
       type: "object",
       properties: {
@@ -185,7 +201,13 @@ export function createSymbolResolverTool(
         searchTerm.toLowerCase()
       );
 
-      const result: SymbolResolution = { query, candidates, authoritative: false };
+      const picked = pickCandidate(query, candidates);
+      const result: SymbolResolution = {
+        query,
+        candidates,
+        authoritative: false,
+        bestMatch: picked && "match" in picked ? picked.match : null,
+      };
       return okResult(result, upstoxConsulted ? SOURCE_WITH_UPSTOX : SOURCE_LOCAL);
     },
   };

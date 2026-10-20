@@ -118,4 +118,6 @@ export interface SymbolResolution {
   candidates: SymbolCandidate[];
   /** Always false: this resolver is a small built-in list, never a real search. */
   authoritative: false;
+  /** The candidate the query plainly names (exact ticker or exact company name), or null when it's ambiguous. */
+  bestMatch?: SymbolCandidate | null;
 }

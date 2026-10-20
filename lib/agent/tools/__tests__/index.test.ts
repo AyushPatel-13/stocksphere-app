@@ -32,6 +32,7 @@ test("registry includes the six V1 tools, market movers, the calculator and the 
     "get_historical",
     "get_market_movers",
     "get_news",
+    "get_performance",
     "get_price",
     "resolve_symbol",
     "run_screen",

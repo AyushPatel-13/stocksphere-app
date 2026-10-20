@@ -69,7 +69,7 @@ export function createMarketMoversTool(
   return {
     name: "get_market_movers",
     description:
-      "Get today's ranked movers for the Indian market: the strongest gainers and the steepest losers of the Nifty 50 index, with how many of its stocks are advancing and declining. Use this whenever the user asks for a ranking, list or comparison of stocks across the market — 'top 5 stocks today', 'biggest gainers', 'which stocks are falling', 'how is the market doing' — including when they name no market, because the Nifty 50 is the universe StockSphere covers. Every number and every rank here is computed from live Nifty 50 quotes; they are the only rankings you may state, and you must say the ranking is the Nifty 50. Nifty 50 is also the ONLY universe available: never present this as a whole-market, sector or global ranking. If this tool returns ok: false the market data is unavailable — say so plainly instead of recalling or estimating a ranking.",
+      "Today's Nifty 50 gainers and losers with advancing/declining counts. Use for any market-wide ranking ('top stocks today', 'biggest gainers', 'how is the market'), even when no market is named. Say the ranking is the Nifty 50 — never a whole-market, sector or global ranking — and state only ranks it returns. ok: false means the data is unavailable: say so, don't recall or estimate one.",
     parameters: {
       type: "object",
       properties: {

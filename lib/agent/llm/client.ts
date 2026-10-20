@@ -70,6 +70,31 @@ function toGroqTools(tools: ToolDefinition[]): Groq.Chat.Completions.ChatComplet
   }));
 }
 
+/**
+ * Optional second model for when the main one is rate-limited, e.g.
+ * GROQ_FALLBACK_MODEL=openai/gpt-oss-20b. Unset means no fallback.
+ */
+const FALLBACK_MODEL = process.env.GROQ_FALLBACK_MODEL || null;
+
+export function statusOf(error: unknown): number | null {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : null;
+}
+
+/**
+ * A provider failure as a message fit for the user. The raw Groq error names
+ * the account's organisation and upgrade links, so it is logged in short form
+ * on the server and never passed through.
+ */
+export function toLLMError(error: unknown): LLMError {
+  const status = statusOf(error);
+  console.error(`Groq request failed (${status ?? "no status"}):`, error instanceof Error ? error.message.slice(0, 200) : "unknown");
+  if (status === 429) return new LLMError("The AI service is busy right now. Please try again in a minute.");
+  if (status === 401 || status === 403) return new LLMError("The AI service isn't configured correctly.");
+  if (status === 400) return new LLMError("The AI service couldn't process that request. Please rephrase and try again.");
+  return new LLMError("The AI service didn't respond. Please try again shortly.");
+}
+
 export interface ChatCompletionOptions {
   /**
    * "none" withholds tool calling for this one turn, so the model must answer
@@ -87,25 +112,32 @@ export async function getChatCompletion(
   options: ChatCompletionOptions = {}
 ): Promise<LLMCompletionResult> {
   const groq = getClient();
-
-  let completion;
-  try {
-    completion = await groq.chat.completions.create({
-      model: DEFAULT_MODEL,
+  const request = (model: string) =>
+    groq.chat.completions.create({
+      model,
       messages: toGroqMessages(messages),
       tools: toGroqTools(tools),
       tool_choice: options.toolChoice ?? "auto",
       temperature: 0.2,
       max_tokens: 1024,
     });
-  } catch (error) {
-  console.error("🔥🔥🔥 GROQ ERROR 🔥🔥🔥");
-  console.error(error);
 
-  throw new LLMError(
-    error instanceof Error ? error.message : "Unknown error contacting the LLM provider."
-  );
-}
+  let completion;
+  try {
+    completion = await request(DEFAULT_MODEL);
+  } catch (error) {
+    // Still rate-limited after the SDK's retries: try the fallback model, if
+    // one is configured (a different model has its own token allowance).
+    if (FALLBACK_MODEL && FALLBACK_MODEL !== DEFAULT_MODEL && statusOf(error) === 429) {
+      try {
+        completion = await request(FALLBACK_MODEL);
+      } catch (fallbackError) {
+        throw toLLMError(fallbackError);
+      }
+    } else {
+      throw toLLMError(error);
+    }
+  }
 
   const choice = completion.choices?.[0]?.message;
   if (!choice) {

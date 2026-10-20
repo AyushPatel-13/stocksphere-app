@@ -1,3 +1,4 @@
+import { answerCache } from "@/lib/agent/answerCache";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { runAgent } from "@/lib/agent/orchestrator";
@@ -79,8 +80,17 @@ export async function POST(request: Request) {
     return NextResponse.json(body, { status: 400 });
   }
 
+  // A stand-alone question asked again within a couple of minutes is answered
+  // from the cache (same answer, new conversation id).
+  const standalone = !parsed.data.history || parsed.data.history.length === 0;
+  const cached = standalone ? answerCache.get(parsed.data.message) : null;
+  if (cached) {
+    return NextResponse.json({ ...cached, conversationId: parsed.data.conversationId ?? cached.conversationId });
+  }
+
   try {
     const result = await runAgent(parsed.data);
+    if (standalone) answerCache.set(parsed.data.message, result);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AgentError) {
