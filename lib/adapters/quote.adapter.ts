@@ -1,5 +1,26 @@
 import { AssetQuote } from "../types/quote";
 
+/**
+ * When the market set this price, as ISO — never the time we fetched it.
+ * Accepts epoch milliseconds (Upstox last_trade_time), epoch seconds (Twelve
+ * Data timestamp), a Date or a date/ISO string. Undefined when unknown, so the
+ * page shows no time rather than a misleading "now".
+ */
+export function marketTime(value: unknown): string | undefined {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString() : undefined;
+  const n = typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value) : value;
+  if (typeof n === "number" && Number.isFinite(n) && n > 0) {
+    const ms = n < 1e12 ? n * 1000 : n;
+    const d = new Date(ms);
+    return d.getUTCFullYear() >= 2000 && d.getUTCFullYear() <= 2100 ? d.toISOString() : undefined;
+  }
+  if (typeof n === "string" && n.trim()) {
+    const t = Date.parse(n);
+    return Number.isFinite(t) ? new Date(t).toISOString() : undefined;
+  }
+  return undefined;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
 export function fromYahoo(data: any): AssetQuote {
   const price = Number(data.price ?? 0);
@@ -28,7 +49,7 @@ export function fromYahoo(data: any): AssetQuote {
     previousClose,
     volume: Number(data.volume ?? 0),
     currency: data.currency ?? "USD",
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: marketTime(data.regularMarketTime),
   };
 }
 
@@ -84,7 +105,7 @@ export function fromAlphaVantage(
     change,
     changePercent,
     previousClose,
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: marketTime(quote?.["07. latest trading day"]),
   };
 }
 
@@ -114,7 +135,7 @@ export function fromTwelveData(data: any): AssetQuote {
     previousClose,
     volume: Number(data.volume ?? 0),
     currency: data.currency ?? "USD",
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: marketTime(data.timestamp),
   };
 }
 
@@ -200,6 +221,6 @@ export function fromUpstox(
       quote.volume ?? 0
     ),
     currency: "INR",
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: marketTime(quote.last_trade_time),
   };
 }

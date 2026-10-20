@@ -1,3 +1,6 @@
+import { getYahooChartQuote } from "../apis/yahooChart";
+import { FALLBACK_SOURCE, yahooFallbackQuote, type ChartQuoteLookup } from "./yahooFallback";
+import type { AssetQuote } from "../types/quote";
 import { getYahooQuote } from "../apis/yahoo";
 import { getStockQuote as getTwelveQuote } from "../apis/twelvedata";
 import {
@@ -261,15 +264,35 @@ export async function fetchPrice(
   lookupIndianInstrument: IndianInstrumentLookup = searchUpstoxEquity,
   lookupIndianQuote: IndianQuoteLookup = getUpstoxQuotes,
   lookupGlobalYahoo: YahooPriceLookup = getYahooQuote,
-  lookupGlobalTwelve: TwelvePriceLookup = getTwelveQuote
+  lookupGlobalTwelve: TwelvePriceLookup = getTwelveQuote,
+  lookupChart: ChartQuoteLookup = getYahooChartQuote
 ): Promise<PriceResult | null> {
-  if (isIndianSymbol(symbol)) {
-    return fetchIndianPrice(
-      symbol,
-      lookupIndianInstrument,
-      lookupIndianQuote
-    );
-  }
+  const primary = isIndianSymbol(symbol)
+    ? await fetchIndianPrice(symbol, lookupIndianInstrument, lookupIndianQuote)
+    : await fetchGlobalPrice(symbol, lookupGlobalYahoo, lookupGlobalTwelve);
+  if (primary) return primary;
 
-  return fetchGlobalPrice(symbol, lookupGlobalYahoo, lookupGlobalTwelve);
+  // Every primary provider failed (for India usually an expired daily Upstox
+  // token): the same listing from Yahoo's chart endpoint, labelled as such.
+  const fallback = await yahooFallbackQuote(symbol, lookupChart);
+  return fallback ? { provider: FALLBACK_SOURCE, symbol, data: toStockPrice(fallback) } : null;
+}
+
+/**
+ * A fallback quote as the page's StockPrice. Fields the source didn't report
+ * become NaN, which the page shows as "N/A" — never 0.
+ */
+export function toStockPrice(quote: AssetQuote): StockPrice {
+  const n = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+  return {
+    price: quote.price,
+    change: n(quote.change),
+    changePercent: n(quote.changePercent),
+    open: n(quote.open),
+    high: n(quote.high),
+    low: n(quote.low),
+    previousClose: n(quote.previousClose),
+    volume: n(quote.volume),
+    currency: quote.currency ?? "INR",
+  };
 }

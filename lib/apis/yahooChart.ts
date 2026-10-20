@@ -23,6 +23,8 @@ export type ChartQuote = {
   currency: string | null;
   /** When Yahoo last priced it (ISO), not when we fetched it. */
   marketTime: string | null;
+  /** The session's volume so far, when Yahoo reports it. */
+  volume?: number | null;
 };
 
 const USER_AGENT =
@@ -66,6 +68,7 @@ export function parseChartQuote(body: unknown): ChartQuote | null {
     previousClose,
     currency: typeof meta.currency === "string" ? meta.currency : null,
     marketTime: time !== null ? new Date(time * 1000).toISOString() : null,
+    volume: num(meta.regularMarketVolume),
   };
 }
 

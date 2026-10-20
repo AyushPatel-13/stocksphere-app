@@ -2,7 +2,7 @@ export function formatPrice(
   value: number | null,
   currency = "USD"
 ) {
-  if (value === null) return "N/A";
+  if (value === null || !Number.isFinite(value)) return "N/A";
 
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -14,7 +14,7 @@ export function formatPrice(
 export function formatPercent(
   value: number | null
 ) {
-  if (value === null) return "N/A";
+  if (value === null || !Number.isFinite(value)) return "N/A";
 
   return `${value.toFixed(2)}%`;
 }
@@ -22,7 +22,7 @@ export function formatPercent(
 export function formatVolume(
   value: number | null
 ) {
-  if (value === null) return "N/A";
+  if (value === null || !Number.isFinite(value)) return "N/A";
 
   return new Intl.NumberFormat("en-US").format(value);
 }
@@ -30,7 +30,7 @@ export function formatVolume(
 export function formatLargeNumber(
   value: number | null
 ) {
-  if (value === null) return "N/A";
+  if (value === null || !Number.isFinite(value)) return "N/A";
 
   const abs = Math.abs(value);
 
@@ -53,7 +53,7 @@ export function formatCurrency(
   value: number | null,
   symbol = "$"
 ) {
-  if (value === null) return "N/A";
+  if (value === null || !Number.isFinite(value)) return "N/A";
 
   return `${symbol}${value.toFixed(2)}`;
 }

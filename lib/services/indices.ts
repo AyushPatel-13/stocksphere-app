@@ -1,5 +1,7 @@
 import { getUpstoxQuotes } from "../apis/upstox";
 import { getYahooChartQuotes } from "../apis/yahooChart";
+import { INDIAN_INDEX_YAHOO } from "../data/assets";
+import { marketTime } from "../adapters/quote.adapter";
 import {
   GLOBAL_INDICES,
   INDIAN_INDICES,
@@ -126,6 +128,7 @@ type UpstoxQuote = {
   net_change?: unknown;
   prev_close_price?: unknown;
   timestamp?: unknown;
+  last_trade_time?: unknown;
   ohlc?: { open?: unknown; high?: unknown; low?: unknown };
 };
 
@@ -174,7 +177,9 @@ export function mapUpstoxIndices(
       low: toNumber(quote.ohlc?.low),
       previousClose,
       lastUpdated:
-        typeof quote.timestamp === "string" ? quote.timestamp : null,
+        // last_trade_time is when the index last moved; Upstox's `timestamp`
+        // is only the time of the response.
+        marketTime(quote.last_trade_time) ?? null,
     };
   });
 }
@@ -252,6 +257,48 @@ async function loadGlobalIndices(
   }
 }
 
+/**
+ * Indian indices Upstox didn't price (an expired daily token prices none) are
+ * read from Yahoo's chart endpoint for the same index (^NSEI, ^BSESN, …) and
+ * labelled with Yahoo as their source. An index neither can price stays empty.
+ */
+export async function fillIndianFromYahoo(
+  indian: LiveIndex[],
+  deps: Pick<IndicesDeps, "getYahooQuotes">,
+  fetchedAt: string
+): Promise<LiveIndex[]> {
+  const missing = indian.filter((index) => index.price === null && INDIAN_INDEX_YAHOO[index.symbol]);
+  if (missing.length === 0) return indian;
+
+  let quotes: Record<string, GlobalIndexQuote> | null = null;
+  try {
+    quotes = await deps.getYahooQuotes(missing.map((index) => INDIAN_INDEX_YAHOO[index.symbol]));
+  } catch (error) {
+    console.error("Indian index fallback unavailable:", error);
+  }
+  if (!quotes) return indian;
+
+  return indian.map((index) => {
+    if (index.price !== null) return index;
+    const yahooSymbol = INDIAN_INDEX_YAHOO[index.symbol];
+    const quote = yahooSymbol ? quotes![yahooSymbol] : undefined;
+    if (!quote) return index;
+    const m = mapYahooIndex(index as unknown as GlobalMarketIndex, quote, fetchedAt);
+    return {
+      ...index,
+      source: "Yahoo" as const,
+      price: m.price,
+      change: m.change,
+      changePercent: m.changePercent,
+      open: m.open,
+      high: m.high,
+      low: m.low,
+      previousClose: m.previousClose,
+      lastUpdated: m.lastUpdated,
+    };
+  });
+}
+
 function unavailableMarkets(
   indices: LiveIndex[]
 ): MarketIndex["category"][] {
@@ -279,10 +326,11 @@ export function createIndicesLoader(
   async function load(): Promise<IndicesSnapshot> {
     const fetchedAt = new Date(deps.now()).toISOString();
 
-    const [indian, global] = await Promise.all([
+    const [upstoxIndian, global] = await Promise.all([
       loadIndianIndices(deps),
       loadGlobalIndices(deps, fetchedAt),
     ]);
+    const indian = await fillIndianFromYahoo(upstoxIndian, deps, fetchedAt);
 
     const indices = [...indian, ...global];
 

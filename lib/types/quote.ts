@@ -19,5 +19,9 @@ export interface AssetQuote {
 
   currency?: string;
 
+  /** When the price was set by the market (ISO), not when it was fetched. */
   lastUpdated?: string;
+
+  /** Which provider answered, e.g. "Upstox" or "Yahoo (fallback, may be delayed)". */
+  source?: string;
 }

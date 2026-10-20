@@ -1,4 +1,6 @@
 import { AssetQuote } from "../types/quote";
+import { yahooFallbackQuote, type ChartQuoteLookup } from "./yahooFallback";
+import { getYahooChartQuote } from "../apis/yahooChart";
 
 import { getYahooQuote } from "../apis/yahoo";
 import { getStockQuote as getAlphaQuote } from "../apis/alphavantage";
@@ -201,9 +203,32 @@ export async function getIndianMarketQuotes(
 export async function getNifty50Quotes(): Promise<
   AssetQuote[]
 > {
-  return getIndianMarketQuotes(
-    [...NIFTY_50_SYMBOLS]
+  return withYahooFill(
+    [...NIFTY_50_SYMBOLS],
+    await getIndianMarketQuotes([...NIFTY_50_SYMBOLS])
   );
+}
+
+/**
+ * Upstox quotes first; any symbol Upstox didn't price (an expired daily
+ * token prices none) is asked of Yahoo for the same NSE listing, labelled as
+ * a fallback. A symbol neither can price is left out, never zero-filled.
+ */
+export async function withYahooFill(
+  symbols: string[],
+  upstox: AssetQuote[],
+  lookup: ChartQuoteLookup = getYahooChartQuote
+): Promise<AssetQuote[]> {
+  const priced = new Set(upstox.map((q) => bareIndianSymbol(String(q.symbol).toUpperCase())));
+  const missing = symbols.filter((s) => !priced.has(bareIndianSymbol(s.toUpperCase())));
+  if (missing.length === 0) return upstox.map((q) => ({ ...q, source: q.source ?? "Upstox" }));
+
+  // These are NSE symbols by definition, so each is asked for as its .NS listing.
+  const filled = await Promise.all(missing.map((s) => yahooFallbackQuote(`${bareIndianSymbol(s.toUpperCase())}.NS`, lookup)));
+  return [
+    ...upstox.map((q) => ({ ...q, source: q.source ?? "Upstox" })),
+    ...filled.filter((q): q is AssetQuote => q !== null).map((q) => ({ ...q, symbol: bareIndianSymbol(q.symbol) })),
+  ];
 }
 
 /**
@@ -221,7 +246,8 @@ export async function getMarketQuote(
   symbol: string,
   lookupTwelve: TwelveQuoteLookup = getTwelveQuote,
   lookupAlpha: AlphaQuoteLookup = getAlphaQuote,
-  lookupYahoo: YahooQuoteLookup = getYahooQuote
+  lookupYahoo: YahooQuoteLookup = getYahooQuote,
+  lookupChart: ChartQuoteLookup = getYahooChartQuote
 ): Promise<AssetQuote | null> {
   // 🇮🇳 INDIA → UPSTOX PRIMARY
   //
@@ -229,9 +255,10 @@ export async function getMarketQuote(
   // above: the Indian branch resolves through Upstox and answers null rather
   // than falling back to any global provider.
   if (isIndianSymbol(symbol)) {
-    return getIndianMarketQuote(
-      symbol
-    );
+    const upstox = await getIndianMarketQuote(symbol);
+    if (upstox) return { ...upstox, source: "Upstox" };
+    // Upstox down or its daily token expired: the same NSE listing from Yahoo.
+    return yahooFallbackQuote(symbol, lookupChart);
   }
 
   // 🇺🇸 US / GLOBAL
@@ -242,9 +269,7 @@ export async function getMarketQuote(
       await lookupTwelve(symbol);
 
     if (twelve?.close) {
-      return fromTwelveData(
-        twelve
-      );
+      return { ...fromTwelveData(twelve), source: "Twelve Data" };
     }
   } catch (error) {
     console.error(
@@ -269,7 +294,7 @@ export async function getMarketQuote(
       fromAlphaVantage(alpha);
 
     if (quote) {
-      return quote;
+      return { ...quote, source: "Alpha Vantage" };
     }
   } catch (error) {
     console.error(
@@ -285,7 +310,7 @@ export async function getMarketQuote(
       await lookupYahoo(symbol);
 
     if (yahoo?.price) {
-      return fromYahoo(yahoo);
+      return { ...fromYahoo(yahoo), source: "Yahoo" };
     }
   } catch (error) {
     console.error(
@@ -294,5 +319,7 @@ export async function getMarketQuote(
     );
   }
 
-  return null;
+  // Yahoo's chart endpoint needs no crumb and keeps answering when the
+  // quote API above is rate-limited.
+  return yahooFallbackQuote(symbol, lookupChart);
 }

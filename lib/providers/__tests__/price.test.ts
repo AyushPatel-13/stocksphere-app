@@ -88,6 +88,8 @@ function withPriceLookups(
     twelveQuote?: unknown;
     throwOnInstrument?: boolean;
     throwOnQuote?: boolean;
+    /** What the Yahoo chart fallback answers (null = nothing). */
+    chartQuote?: unknown;
   } = {}
 ) {
   const calls: string[] = [];
@@ -124,10 +126,18 @@ function withPriceLookups(
     return options.twelveQuote;
   };
 
+  // The last-resort Yahoo chart lookup: records the exact ticker it was asked
+  // for, so a test can prove an Indian symbol only ever asks for its own NSE
+  // listing ("RELIANCE.NS"), never a same-named global one.
+  const chart = async (ticker: string) => {
+    calls.push(`chart:${ticker}`);
+    return (options.chartQuote ?? null) as never;
+  };
+
   return {
     calls,
     run: (symbol: string) =>
-      fetchPrice(symbol, instrument, quote, yahoo, twelve),
+      fetchPrice(symbol, instrument, quote, yahoo, twelve, chart),
   };
 }
 
@@ -199,14 +209,39 @@ test("no Indian symbol reaches Yahoo, TwelveData or any global provider", async 
 });
 
 test("a failing Upstox lookup does NOT fall back to a global provider", async () => {
-  // The instrument resolves, but Upstox returns no quote. On the old price path
-  // this is exactly where Yahoo and then TwelveData would have been tried.
+  // The instrument resolves, but Upstox returns no quote. Only the same NSE
+  // listing is tried next (Yahoo chart, RELIANCE.NS) — never Yahoo's or
+  // TwelveData's global quote for a same-named security.
   const { calls, run } = withPriceLookups({ quoteResponse: null });
 
   const result = await run("RELIANCE.NS");
 
   assert.equal(result, null);
-  assert.deepEqual(calls, ["instrument:RELIANCE", `quote:${TCS_KEY}`]);
+  assert.deepEqual(calls, ["instrument:RELIANCE", `quote:${TCS_KEY}`, "chart:RELIANCE.NS"]);
+});
+
+test("an expired Upstox token falls back to the same NSE listing, labelled as Yahoo", async () => {
+  const { calls, run } = withPriceLookups({
+    throwOnInstrument: true,
+    chartQuote: { price: 2460.9, change: -4.1, changePercent: -0.17, open: 2458, high: 2497, low: 2432.1, previousClose: 2465, currency: "INR", marketTime: "2026-10-19T09:59:38.000Z", volume: 8676373 },
+  });
+
+  const result = await run("TCS");
+
+  assert.equal(result?.provider, "Yahoo (fallback, may be delayed)");
+  assert.equal(result?.symbol, "TCS");
+  assert.equal(result?.data.price, 2460.9);
+  assert.equal(result?.data.currency, "INR");
+  assert.deepEqual(calls.filter((c) => c.startsWith("chart:")), ["chart:TCS.NS"]);
+  assert.deepEqual(calls.filter((c) => c.startsWith("yahoo:") || c.startsWith("twelve:")), []);
+});
+
+test("fallback fields the source didn't report are NaN (shown as N/A), never 0", async () => {
+  const { run } = withPriceLookups({ throwOnInstrument: true, chartQuote: { price: 100, change: null, changePercent: null, open: null, high: null, low: null, previousClose: null, currency: "INR", marketTime: null } });
+  const result = await run("TCS");
+  assert.equal(result?.data.price, 100);
+  assert.ok(Number.isNaN(result?.data.open));
+  assert.ok(Number.isNaN(result?.data.change));
 });
 
 test("an unresolvable Indian instrument returns null without any quote call", async () => {
@@ -215,8 +250,9 @@ test("an unresolvable Indian instrument returns null without any quote call", as
   const result = await run("NOTREAL.NS");
 
   assert.equal(result, null);
-  // Nothing to ask about, so no quote request is made.
-  assert.deepEqual(calls, ["instrument:NOTREAL"]);
+  // Nothing to ask Upstox about, so no Upstox quote request is made; the one
+  // fallback asked is the same NSE listing, which also has nothing.
+  assert.deepEqual(calls, ["instrument:NOTREAL", "chart:NOTREAL.NS"]);
 });
 
 test("a throwing Upstox client is contained, and still no global fallback", async () => {
@@ -235,6 +271,7 @@ test("a throwing Upstox client is contained, and still no global fallback", asyn
       recorded.filter((c) => c.startsWith("yahoo:") || c.startsWith("twelve:")),
       []
     );
+    assert.deepEqual(recorded.filter((c) => c.startsWith("chart:")), ["chart:TCS.NS"]);
   }
 });
 
@@ -316,7 +353,7 @@ test("a global symbol with no provider at all returns null", async () => {
   const { calls, run } = withPriceLookups({});
 
   assert.equal(await run("AAPL"), null);
-  assert.deepEqual(calls, ["yahoo:AAPL", "twelve:AAPL"]);
+  assert.deepEqual(calls, ["yahoo:AAPL", "twelve:AAPL", "chart:AAPL"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -373,7 +410,8 @@ test("a bare Indian symbol with no Upstox answer returns null, not a global secu
   const { calls, run } = withPriceLookups({ quoteResponse: null });
 
   assert.equal(await run("INFY"), null);
-  assert.deepEqual(calls, ["instrument:INFY", `quote:${TCS_KEY}`]);
+  // Never the INFY NYSE ADR: only the NSE listing is tried as a fallback.
+  assert.deepEqual(calls, ["instrument:INFY", `quote:${TCS_KEY}`, "chart:INFY.NS"]);
 });
 
 test("an unknown bare symbol is NOT treated as Indian just because it has no dot", async () => {

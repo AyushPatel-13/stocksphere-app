@@ -1,3 +1,5 @@
+import { getYahooChartQuote } from "@/lib/apis/yahooChart";
+import type { ChartQuoteLookup } from "@/lib/providers/yahooFallback";
 import { NextResponse } from "next/server";
 
 import {
@@ -44,13 +46,18 @@ type GlobalQuoteLookups = {
   twelve: TwelveQuoteLookup;
   alpha: AlphaQuoteLookup;
   yahoo: YahooQuoteLookup;
+  /** Last-resort Yahoo chart quote (same listing). Omitted in tests: no fallback. */
+  chart?: ChartQuoteLookup;
 };
 
 const REAL_GLOBAL_LOOKUPS: GlobalQuoteLookups = {
   twelve: getTwelveQuote,
   alpha: getAlphaQuote,
   yahoo: getYahooQuote,
+  chart: getYahooChartQuote,
 };
+
+const noChart: ChartQuoteLookup = async () => null;
 
 function isRecord(
   value: unknown
@@ -200,7 +207,8 @@ async function getSingleQuote(
         lookups.yahoo,
         yahooAnswered,
         answered
-      )
+      ),
+      lookups.chart ?? noChart
     );
 
     if (quote) {
@@ -286,25 +294,29 @@ async function getMarketOverview(
         US_SYMBOLS.apple,
         lookups.twelve,
         lookups.alpha,
-        lookups.yahoo
+        lookups.yahoo,
+        lookups.chart ?? noChart
       ),
       loadQuote(
         US_SYMBOLS.microsoft,
         lookups.twelve,
         lookups.alpha,
-        lookups.yahoo
+        lookups.yahoo,
+        lookups.chart ?? noChart
       ),
       loadQuote(
         US_SYMBOLS.tesla,
         lookups.twelve,
         lookups.alpha,
-        lookups.yahoo
+        lookups.yahoo,
+        lookups.chart ?? noChart
       ),
       loadQuote(
         US_SYMBOLS.nvidia,
         lookups.twelve,
         lookups.alpha,
-        lookups.yahoo
+        lookups.yahoo,
+        lookups.chart ?? noChart
       ),
       getIndianMarketQuotes(INDIAN_SYMBOLS),
     ]);

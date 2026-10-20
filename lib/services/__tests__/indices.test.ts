@@ -1,3 +1,4 @@
+import { INDIAN_INDEX_YAHOO } from "../../data/assets";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -19,6 +20,7 @@ import { GET } from "@/app/api/indices/route";
 
 type UpstoxFake = IndicesDeps["getUpstoxQuotes"];
 type YahooFake = IndicesDeps["getYahooQuotes"];
+const INDIAN_YAHOO = new Set(Object.values(INDIAN_INDEX_YAHOO));
 
 /** A batch answer holding every requested symbol at one price. */
 function yahooBatch(symbols: string[], price = 100) {
@@ -174,12 +176,14 @@ test("a Yahoo refusal (429) leaves Indian indices intact and names the global ma
   );
 });
 
-test("an Upstox outage leaves global indices intact and names the Indian market unavailable", async () => {
+test("an Upstox outage with no Yahoo fallback leaves global indices intact and names the Indian market unavailable", async () => {
   const load = createIndicesLoader(
     deps({
       getUpstoxQuotes: (async () => {
         throw new Error("UPSTOX_ACCESS_TOKEN is missing");
       }) as UpstoxFake,
+      // Yahoo answers for global tickers only: the Indian fallback finds nothing.
+      getYahooQuotes: (async (symbols: string[]) => yahooBatch(symbols.filter((symbol) => !INDIAN_YAHOO.has(symbol)))) as YahooFake,
     })
   );
 
@@ -285,7 +289,7 @@ test("/api/indices answers 503 for a total outage and 200 for a partial one", as
   assert.equal((await down.json()).success, false);
 
   const partial = createIndicesLoader(
-    deps({ getUpstoxQuotes: (async () => null) as UpstoxFake })
+    deps({ getUpstoxQuotes: (async () => null) as UpstoxFake, getYahooQuotes: (async (symbols: string[]) => yahooBatch(symbols.filter((symbol) => !INDIAN_YAHOO.has(symbol)))) as YahooFake })
   );
 
   const up = await GET(undefined, undefined, partial);
@@ -366,4 +370,27 @@ test("a global index carries Yahoo's market time as lastUpdated", async () => {
   const spx = snapshot.indices.find((index) => index.symbol === "SPX");
 
   assert.equal(spx?.lastUpdated, "2026-10-16T20:00:00.000Z");
+});
+
+test("an expired Upstox token: Indian indices are priced from Yahoo for the same index, labelled Yahoo", async () => {
+  const asked: string[][] = [];
+  const load = createIndicesLoader(
+    deps({
+      getUpstoxQuotes: (async () => {
+        throw new Error("UPSTOX_ACCESS_TOKEN is missing");
+      }) as UpstoxFake,
+      getYahooQuotes: (async (symbols: string[]) => {
+        asked.push(symbols);
+        return yahooBatch(symbols);
+      }) as YahooFake,
+    })
+  );
+
+  const snapshot = await load();
+  const nifty = snapshot.indices.find((index) => index.symbol === "NIFTY");
+  assert.equal(nifty?.source, "Yahoo");
+  assert.notEqual(nifty?.price, null);
+  assert.equal(nifty?.name, "NIFTY 50");
+  assert.ok(asked.some((batch) => batch.includes("^NSEI")));
+  assert.deepEqual(snapshot.unavailable, []);
 });
