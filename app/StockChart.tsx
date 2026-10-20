@@ -62,7 +62,7 @@ const chartData = {
 export default function StockChart({
   historicalData,
 }: {
-  historicalData: any[];
+  historicalData: { datetime: string; close: number | string }[];
 }) {
 const [timeframe, setTimeframe] =
   useState<keyof typeof chartData>("1H");

@@ -1,5 +1,6 @@
 import { AssetQuote } from "../types/quote";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
 export function fromYahoo(data: any): AssetQuote {
   const price = Number(data.price ?? 0);
   const previousClose = Number(data.previousClose ?? 0);
@@ -46,6 +47,7 @@ export function fromYahoo(data: any): AssetQuote {
  * missing or unparseable one is null.
  */
 export function fromAlphaVantage(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
   data: any
 ): AssetQuote | null {
   const quote = data?.["Global Quote"];
@@ -86,6 +88,7 @@ export function fromAlphaVantage(
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
 export function fromTwelveData(data: any): AssetQuote {
   const price = Number(data.close ?? 0);
   const previousClose = Number(data.previous_close ?? 0);
@@ -116,6 +119,7 @@ export function fromTwelveData(data: any): AssetQuote {
 }
 
 export function fromUpstox(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
   data: any,
   instrumentKey: string
 ): AssetQuote {

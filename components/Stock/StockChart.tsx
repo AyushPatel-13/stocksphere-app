@@ -12,7 +12,7 @@ import {
 import { useState, useMemo } from "react";
 
 type Props = {
-    historicalData: any[];
+    historicalData: { datetime: string; close: number | string }[];
 };
 
 /**
@@ -96,7 +96,7 @@ export default function StockChart({
         return historicalData
             .slice(0, days)
             .reverse()
-            .map((item: any) => ({
+            .map((item) => ({
                 time: item.datetime,
                 price: Number(item.close),
             }));

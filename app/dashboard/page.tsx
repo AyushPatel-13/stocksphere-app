@@ -12,7 +12,7 @@ import QuickActions from "@/components/Dashboard/QuickActions";
 import StatsGrid from "@/components/Dashboard/StatsGrid";
 import TrendingStocks from "@/components/Dashboard/TrendingStocks";
 import RecentSearches from "@/components/Dashboard/RecentSearches";
-import RecentActivity from "@/components/Dashboard/RecentActivity";
+import RecentActivity, { type ActivityItem } from "@/components/Dashboard/RecentActivity";
 import MarketOverview from "@/components/Dashboard/MarketOverview";
 
 export default function DashboardPage() {
@@ -20,7 +20,7 @@ export default function DashboardPage() {
   const [holdingsCount, setHoldingsCount] = useState(0);
   const [portfolioValue, setPortfolioValue] = useState(0);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const [activities, setActivities] = useState<any[]>([]);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [username, setUsername] = useState("");
   useEffect(() => {
   const loadDashboard = async () => {
@@ -50,7 +50,7 @@ export default function DashboardPage() {
       setHoldingsCount(portfolio.length);
 
       const total = portfolio.reduce(
-        (sum: number, holding: any) =>
+        (sum: number, holding: { quantity: number | string; buy_price: number | string }) =>
           sum +
           Number(holding.quantity) *
             Number(holding.buy_price),

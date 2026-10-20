@@ -7,19 +7,26 @@ export default function StockEvents({
 }: {
   symbol: string;
 }) {
-  const [events, setEvents] = useState<any[]>([]);
+  const [events, setEvents] = useState<{ symbol: string; eventType: string; eventDate: string }[]>([]);
 
   useEffect(() => {
-    const savedEvents = JSON.parse(
-      localStorage.getItem("events") || "[]"
-    );
-
-    const stockEvents = savedEvents.filter(
-      (event: any) =>
-        event.symbol === symbol.toUpperCase()
-    );
-
-    setEvents(stockEvents);
+    // Reminders from the Events page, kept in this browser. Read after mount
+    // (the server has no localStorage); a broken value just shows nothing.
+    const timer = window.setTimeout(() => {
+      try {
+        const saved: unknown = JSON.parse(localStorage.getItem("events") || "[]");
+        const list = Array.isArray(saved) ? saved : [];
+        setEvents(
+          list.filter(
+            (event): event is { symbol: string; eventType: string; eventDate: string } =>
+              typeof event?.symbol === "string" && event.symbol === symbol.toUpperCase()
+          )
+        );
+      } catch {
+        setEvents([]);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [symbol]);
 
   if (events.length === 0) {

@@ -60,14 +60,13 @@ export default function BullBearVote({
   const [bear, setBear] = useState(0);
 
   useEffect(() => {
-    const saved = JSON.parse(
-      localStorage.getItem(
-        `votes_${symbol}`
-      ) || '{"bull":0,"bear":0}'
-    );
-
-    setBull(saved.bull);
-    setBear(saved.bear);
+    // Read after mount; the server has no localStorage.
+    const timer = window.setTimeout(() => {
+      const saved = JSON.parse(localStorage.getItem(`votes_${symbol}`) || '{"bull":0,"bear":0}');
+      setBull(saved.bull);
+      setBear(saved.bear);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [symbol]);
 
   const voteBull = () => {

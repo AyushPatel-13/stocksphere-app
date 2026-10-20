@@ -1,5 +1,7 @@
+export type ActivityItem = { id: string | number; action: string; created_at: string };
+
 type RecentActivityProps = {
-  activities: any[];
+  activities: ActivityItem[];
 };
 
 export default function RecentActivity({

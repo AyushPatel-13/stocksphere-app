@@ -64,16 +64,19 @@ export default function StockDiscussion({
     useState("");
 
   const [comments, setComments] =
-    useState<any[]>([]);
+    useState<{ username: string; time: string; text: string }[]>([]);
 
   useEffect(() => {
-    const saved = JSON.parse(
-      localStorage.getItem(
-        `stockDiscussions_${symbol}`
-      ) || "[]"
-    );
-
-    setComments(saved);
+    // Read after mount; the server has no localStorage.
+    const timer = window.setTimeout(() => {
+      try {
+        const saved: unknown = JSON.parse(localStorage.getItem(`stockDiscussions_${symbol}`) || "[]");
+        setComments(Array.isArray(saved) ? saved : []);
+      } catch {
+        setComments([]);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [symbol]);
 
   const addComment = () => {

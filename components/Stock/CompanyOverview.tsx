@@ -1,5 +1,7 @@
+import type { CompanyProfile } from "@/lib/types/company";
+
 type Props = {
-  company: any;
+  company: CompanyProfile | null | undefined;
 };
 
 export default function CompanyOverview({

@@ -1,6 +1,7 @@
 import { CompanyProfile } from "../types/company";
 
 export function normalizeFinnhubCompany(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
   data: any
 ): CompanyProfile {
   return {
@@ -29,6 +30,7 @@ export function normalizeFinnhubCompany(
 }
 
 export function normalizeAlphaCompany(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
   data: any
 ): CompanyProfile {
   return {

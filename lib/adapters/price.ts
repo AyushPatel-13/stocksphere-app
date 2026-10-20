@@ -1,6 +1,7 @@
 import { StockPrice } from "../types/price";
 import { fromUpstox } from "./quote.adapter";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
 export function normalizeFinnhubPrice(data: any): StockPrice {
   return {
     price: data.c,
@@ -15,6 +16,7 @@ export function normalizeFinnhubPrice(data: any): StockPrice {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
 export function normalizeYahooPrice(data: any): StockPrice {
   return {
     price: data.price,
@@ -30,6 +32,7 @@ export function normalizeYahooPrice(data: any): StockPrice {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw provider JSON; each field is read and converted below
 export function normalizeTwelvePrice(data: any): StockPrice {
   return {
     price: Number(data.close),

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import SearchModal from "@/components/Search/SearchModal";
+import NotificationBell from "@/components/NotificationBell";
 
 const navigation = [
   { label: "Markets", href: "/explore", icon: "📊" },
@@ -16,13 +17,16 @@ const navigation = [
   { label: "Bonds", href: "/bonds", icon: "🏛️" },
   { label: "Watchlist", href: "/watchlist", icon: "⭐" },
   { label: "Portfolio", href: "/portfolio", icon: "💼" },
+  { label: "Paper trade", href: "/paper", icon: "🧪" },
   { label: "Community", href: "/community", icon: "🌍" },
   { label: "Predictions", href: "/predictions", icon: "🎯" },
   { label: "Trending", href: "/trending", icon: "🔥" },
   { label: "News", href: "/news", icon: "📰" },
   { label: "Screener", href: "/screener", icon: "📈" },
+  { label: "Backtest", href: "/backtest", icon: "🧮" },
   { label: "Events", href: "/events", icon: "📅" },
   { label: "Heatmap", href: "/heatmap", icon: "🗺️" },
+  { label: "Alerts", href: "/alerts", icon: "🔔" },
 ];
 
 /**
@@ -53,6 +57,18 @@ const NAVBAR_STYLES = `
 export default function Navbar() {
   const [user, setUser] = useState<User | null>(null);
   const pathname = usePathname();
+  // The phone menu belongs to the page it was opened on: navigating closes it.
+  const [menuPath, setMenuPath] = useState<string | null>(null);
+  const menuOpen = menuPath === pathname;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuPath(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -106,7 +122,7 @@ export default function Navbar() {
         </Link>
 
         {/* Navigation */}
-        <nav className="navbar-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+        <nav aria-label="Main" className="navbar-scroll hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto md:flex">
           {navigation.map((item) => {
             const active =
               pathname === item.href ||
@@ -133,9 +149,14 @@ export default function Navbar() {
           })}
         </nav>
 
+        {/* Phones: the links live in a menu instead of a clipped strip. */}
+        <div className="flex-1 md:hidden" />
+
         {/* User */}
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <SearchModal />
+
+          {user && <NotificationBell />}
 
           {user ? (
             <>
@@ -159,7 +180,7 @@ export default function Navbar() {
 
               <button
                 onClick={logout}
-                className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-400 transition-colors hover:bg-red-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50"
+                className="hidden rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-400 transition-colors hover:bg-red-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50 md:inline-block"
               >
                 Logout
               </button>
@@ -173,8 +194,52 @@ export default function Navbar() {
             </Link>
           )}
 
+          <button
+            type="button"
+            onClick={() => setMenuPath(menuOpen ? null : pathname)}
+            aria-expanded={menuOpen}
+            aria-controls="mobile-menu"
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2a2a2a] text-white hover:bg-[#1a1a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40 md:hidden"
+          >
+            <span aria-hidden="true" className="text-lg leading-none">{menuOpen ? "✕" : "☰"}</span>
+          </button>
         </div>
       </div>
+
+      {menuOpen && (
+        <nav id="mobile-menu" aria-label="Main" className="border-t border-[#222] bg-black px-4 pb-4 pt-3 md:hidden">
+          <ul className="grid grid-cols-2 gap-1.5">
+            {navigation.map((item) => {
+              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    onClick={() => setMenuPath(null)}
+                    className={`flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium hover:bg-[#1a1a1a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40 ${
+                      active ? "bg-[#161616] text-white" : "text-[#c9c9c9]"
+                    }`}
+                  >
+                    <span aria-hidden="true">{item.icon}</span>
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          {user && (
+            <button
+              type="button"
+              onClick={logout}
+              className="mt-3 w-full rounded-lg border border-red-500/30 bg-red-500/10 py-2.5 text-sm font-semibold text-red-400 hover:bg-red-500 hover:text-white"
+            >
+              Logout
+            </button>
+          )}
+        </nav>
+      )}
     </header>
   );
 }
