@@ -31,3 +31,8 @@ export async function POST(
     return NextResponse.json({ success: false, error: "Alert check failed." }, { status: 500 });
   }
 }
+
+/** Vercel Cron calls GET, with the same Bearer CRON_SECRET header. */
+export async function GET(request: Request) {
+  return POST(request);
+}
