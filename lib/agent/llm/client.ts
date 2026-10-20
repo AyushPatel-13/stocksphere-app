@@ -15,7 +15,11 @@ function getClient(): Groq {
   }
 
   if (!cachedClient) {
-    cachedClient = new Groq({ apiKey });
+    // A hung call gets 25s instead of the SDK's 60s; the orchestrator also
+    // keeps an overall budget for gathering data. Retries stay at 3 because
+    // Groq's free tier (8,000 tokens a minute, ~5,000 per assistant turn)
+    // answers 429 with a ~1-2s retry-after, which the SDK waits out.
+    cachedClient = new Groq({ apiKey, timeout: 25_000, maxRetries: 3 });
   }
 
   return cachedClient;

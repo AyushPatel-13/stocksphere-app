@@ -23,9 +23,10 @@ test("getToolByName returns undefined for an unknown tool", () => {
   assert.equal(getToolByName("delete_everything"), undefined);
 });
 
-test("registry includes the six V1 tools plus the market movers tool", () => {
+test("registry includes the six V1 tools, market movers, the calculator and the screener", () => {
   const names = AGENT_TOOLS.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
+    "calculate",
     "get_company",
     "get_financials",
     "get_historical",
@@ -33,5 +34,6 @@ test("registry includes the six V1 tools plus the market movers tool", () => {
     "get_news",
     "get_price",
     "resolve_symbol",
+    "run_screen",
   ]);
 });

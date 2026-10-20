@@ -129,3 +129,39 @@ test("runAgent passes through a caller-supplied conversationId", async () => {
 
   assert.equal(result.conversationId, "my-id-123");
 });
+
+test("runAgent stops gathering data once its time budget is spent and answers with what it has", async () => {
+  let clock = 0;
+  const calls: { toolChoice?: string }[] = [];
+  const getChatCompletion = async (_messages: unknown, _tools: unknown, options?: { toolChoice?: string }) => {
+    calls.push({ toolChoice: options?.toolChoice });
+    clock += 30_000; // each model turn takes 30s
+    if (options?.toolChoice === "none") return { content: "Answer from data in hand.", toolCalls: null };
+    return {
+      content: null,
+      toolCalls: [{ id: `c${calls.length}`, name: "calculate", arguments: JSON.stringify({ operation: "sum", values: [calls.length, 1] }) }],
+    };
+  };
+
+  const result = await runAgent(
+    { message: "compare" },
+    { getChatCompletion: getChatCompletion as never, now: () => clock, budgetMs: 40_000 }
+  );
+
+  // Turn 1 at 30s, turn 2 at 60s (over budget) → stop, then the reserved final turn.
+  assert.equal(calls.filter((c) => c.toolChoice !== "none").length, 2);
+  assert.equal(calls.at(-1)?.toolChoice, "none");
+  assert.equal(result.answer, "Answer from data in hand.");
+  assert.ok(result.warnings.some((w) => w.includes("answer in time")));
+});
+
+test("the calculate tool is available to the model and its result is traced", async () => {
+  const getChatCompletion = fakeLLM([
+    { content: null, toolCalls: [{ id: "c1", name: "calculate", arguments: JSON.stringify({ operation: "percent_change", values: [1060, 1161.2] }) }] },
+    { content: "Infosys returned 9.55%.", toolCalls: null },
+  ]);
+
+  const result = await runAgent({ message: "return?" }, { getChatCompletion });
+  assert.deepEqual(result.toolCalls.map((t) => [t.tool, t.ok]), [["calculate", true]]);
+  assert.ok(result.sources.includes("StockSphere Calculator"));
+});

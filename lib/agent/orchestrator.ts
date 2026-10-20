@@ -10,7 +10,19 @@ import { AgentRequest, AgentResponse, AgentToolCallTrace, AgentMessage } from "@
 // real network call. Callers outside tests never need to pass `deps`.
 export interface RunAgentDeps {
   getChatCompletion: typeof defaultGetChatCompletion;
+  /** Clock, injectable for tests. */
+  now?: () => number;
+  /** Overall budget for gathering data, in ms (default AGENT_BUDGET_MS). */
+  budgetMs?: number;
 }
+
+/**
+ * Once this much time has gone on tool rounds, no more data is gathered: the
+ * model answers from what it already has (the reserved final turn below).
+ * A live two-stock comparison took 83s, and one attempt passed 90s, before
+ * this existed.
+ */
+export const AGENT_BUDGET_MS = 60_000;
 
 // How many turns may request tools.
 //
@@ -62,7 +74,16 @@ export async function runAgent(
   // and every repeat spends a round that a comparison needs elsewhere.
   const fetched = new Map<string, ToolResult<unknown>>();
 
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  const budgetMs = deps.budgetMs ?? AGENT_BUDGET_MS;
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    if (round > 0 && now() - startedAt > budgetMs) {
+      warnings.push("Stopped gathering data to answer in time; the answer uses what was retrieved.");
+      break;
+    }
+
     const completion = await deps.getChatCompletion(messages, AGENT_TOOLS);
 
     if (!completion.toolCalls || completion.toolCalls.length === 0) {
@@ -183,6 +204,15 @@ export async function runAgent(
   // must answer from what it has, and say plainly which values it could not
   // retrieve. Nothing is invented here — the same tool results are all it can
   // see, and its instructions not to guess are unchanged.
+  // Said explicitly: the prompt tells the model to use the calculate tool for
+  // every percentage, and with tools withheld it would otherwise try anyway
+  // (Groq rejects that turn with tool_use_failed).
+  messages.push({
+    role: "system",
+    content:
+      "No more tool calls are possible. Answer now using only the tool results above. Where a figure was not computed by the calculate tool, give the raw values it would use and say the calculation wasn't run, rather than working it out yourself.",
+  });
+
   try {
     const finalCompletion = await deps.getChatCompletion(messages, AGENT_TOOLS, {
       toolChoice: "none",
@@ -209,10 +239,44 @@ export async function runAgent(
   );
 
   return {
-    answer: FALLBACK_ANSWER,
+    answer: summariseGathered(fetched) ?? FALLBACK_ANSWER,
     toolCalls: toolCallTrace,
     sources: Array.from(sources),
     warnings,
     conversationId,
   };
+}
+
+/**
+ * When no final answer could be generated, the facts already retrieved are
+ * still real: list the prices and completed calculations verbatim (no model
+ * involved), so the user gets them instead of only an apology. Null when
+ * there is nothing worth listing.
+ */
+export function summariseGathered(fetched: Map<string, ToolResult<unknown>>): string | null {
+  const lines: string[] = [];
+
+  for (const [key, result] of fetched) {
+    if (!result.ok || !result.data) continue;
+    const tool = key.slice(0, key.indexOf(":"));
+    const data = result.data as Record<string, unknown>;
+
+    if (tool === "get_price" && typeof data.price === "number") {
+      const change = typeof data.changePercent === "number" ? ` (${data.changePercent >= 0 ? "+" : ""}${data.changePercent.toFixed(2)}% today)` : "";
+      lines.push(`- ${String(data.symbol ?? "")}: ${data.price} ${String(data.currency ?? "")}${change}`);
+    }
+    if (tool === "calculate" && typeof data.rounded === "number" && Array.isArray(data.inputs)) {
+      const unit = data.unit === "percent" ? "%" : "";
+      lines.push(`- ${String(data.operation).replace(/_/g, " ")} of ${(data.inputs as number[]).join(" → ")}: ${data.rounded}${unit}`);
+    }
+  }
+
+  if (lines.length === 0) return null;
+  return [
+    "I ran out of time before writing a full answer (the AI service is rate-limited right now). Here is what I did retrieve:",
+    "",
+    ...lines,
+    "",
+    "Prices are the latest StockSphere had and may be delayed.",
+  ].join("\n");
 }
