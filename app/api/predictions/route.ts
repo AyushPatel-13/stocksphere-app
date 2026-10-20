@@ -1,3 +1,4 @@
+import { isMissingTable } from "@/lib/watchlistRules";
 import { NextResponse } from "next/server";
 
 import {
@@ -47,6 +48,8 @@ export async function GET(
     const predictions = await store.list({ username, symbol, status, limit });
     return NextResponse.json({ success: true, predictions });
   } catch (error) {
+    // Tables not created yet (the migration isn't applied): "launching soon", not a failure.
+    if (isMissingTable(error as { code?: string; message?: string })) return NextResponse.json({ success: false, error: "Predictions are launching soon.", code: "NOT_CONFIGURED" }, { status: 503 });
     console.error("Predictions list error:", error);
     return NextResponse.json({ success: false, error: "Couldn't load predictions." }, { status: 503 });
   }
@@ -94,6 +97,8 @@ export async function POST(
       { status: result.replayed ? 200 : 201 }
     );
   } catch (error) {
+    // Tables not created yet (the migration isn't applied): "launching soon", not a failure.
+    if (isMissingTable(error as { code?: string; message?: string })) return NextResponse.json({ success: false, error: "Predictions are launching soon.", code: "NOT_CONFIGURED" }, { status: 503 });
     console.error("Prediction create error:", error);
     return NextResponse.json({ success: false, error: "Couldn't save your prediction. Please try again." }, { status: 500 });
   }

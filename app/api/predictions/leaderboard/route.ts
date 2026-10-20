@@ -1,3 +1,4 @@
+import { isMissingTable } from "@/lib/watchlistRules";
 import { NextResponse } from "next/server";
 
 import { rankLeaders } from "@/lib/predictions/reputation";
@@ -20,6 +21,8 @@ export async function GET(
     const leaders = rankLeaders(await store.leaderboard(200)).slice(0, 50);
     return NextResponse.json({ success: true, leaders });
   } catch (error) {
+    // Tables not created yet (the migration isn't applied): "launching soon", not a failure.
+    if (isMissingTable(error as { code?: string; message?: string })) return NextResponse.json({ success: false, error: "Predictions are launching soon.", code: "NOT_CONFIGURED" }, { status: 503 });
     console.error("Leaderboard error:", error);
     return NextResponse.json({ success: false, error: "Couldn't load the leaderboard." }, { status: 503 });
   }

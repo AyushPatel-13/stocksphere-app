@@ -13,7 +13,7 @@ import { supabase } from "@/lib/supabase";
  * "unavailable" (a network error, or the profiles migration not applied yet)
  * does nothing — an outage must never trap everyone on the onboarding page.
  */
-const EXEMPT = ["/onboarding", "/login"];
+const EXEMPT = ["/onboarding", "/login", "/beta"];
 
 // Once a profile is confirmed, stop asking on every navigation. Cleared on
 // sign-out so the next account is checked afresh.

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -275,6 +276,14 @@ export default function LoginPage() {
             </>
           )}
         </button>
+
+        <p style={{ marginTop: "16px", fontSize: "12px", color: "#777", lineHeight: 1.6 }}>
+          StockSphere is in private beta. By continuing you accept the{" "}
+          <Link href="/beta" style={{ color: "#4ade80" }}>
+            beta notice, risk disclosure and privacy terms
+          </Link>
+          . Not investment advice.
+        </p>
       </main>
     </div>
   );

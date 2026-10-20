@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import ProfileGate from "@/components/ProfileGate";
+import BetaFooter from "@/components/BetaFooter";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -43,6 +44,7 @@ export default function RootLayout({
         <ProfileGate />
 
         {children}
+        <BetaFooter />
       </body>
     </html>
   );
