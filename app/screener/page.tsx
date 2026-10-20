@@ -1,206 +1,316 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { MiniRange } from "@/components/Markets/Sparkline";
+import { StockAvatar, absPercent, toneClass } from "@/components/Markets/StockBits";
+import { PageHeader, PageShell, secondaryButtonClass } from "@/components/ui/Page";
 import {
-  EmptyState,
-  PageHeader,
-  PageShell,
-} from "@/components/ui/Page";
-import {
-  formatQuotePrice,
-  formatSignedPercent,
-  useMarketOverview,
-  type OverviewQuote,
-} from "@/lib/client/useMarketOverview";
+  EMPTY_CRITERIA,
+  PRESETS,
+  US_LARGE_CAPS,
+  applyScreen,
+  sortScreen,
+  type PresetId,
+  type ScreenCriteria,
+  type ScreenSortKey,
+} from "@/lib/analytics/screener";
+import { formatMoney, formatVolume } from "@/lib/client/useQuotes";
+import { NIFTY_50_SYMBOLS } from "@/lib/data/instruments/india";
+import type { WatchlistRow } from "@/lib/services/watchlistRows";
 
-type MarketFilter = "All" | OverviewQuote["market"];
-type SortKey = "symbol" | "price" | "changePercent";
+/**
+ * Screener over the NIFTY 50 and 20 US large caps: day change, 52-week
+ * position and volume, with presets, custom filters and the reason each stock
+ * matched. Data is from /api/watchlist/rows (Yahoo, may be delayed).
+ */
 
-const FILTERS: MarketFilter[] = ["All", "US", "India"];
+type Universe = { status: "loading" } | { status: "error" } | { status: "ready"; rows: (WatchlistRow & { market: "india" | "us" })[] };
 
-function compare(a: OverviewQuote, b: OverviewQuote, key: SortKey) {
-  if (key === "symbol") return a.symbol.localeCompare(b.symbol);
-  if (key === "price") return a.price - b.price;
-  return (a.changePercent ?? -Infinity) - (b.changePercent ?? -Infinity);
+const ROWS_PER_REQUEST = 50;
+const SAVED_KEY = "stocksphere.screener.saved";
+
+type SavedScreen = { name: string; criteria: ScreenCriteria };
+
+function readSaved(): SavedScreen[] {
+  try {
+    const raw = window.localStorage.getItem(SAVED_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
+  } catch {
+    return [];
+  }
 }
 
-type SortState = { key: SortKey; desc: boolean };
+function writeSaved(screens: SavedScreen[]) {
+  try {
+    window.localStorage.setItem(SAVED_KEY, JSON.stringify(screens.slice(0, 10)));
+  } catch {
+    /* storage unavailable: saved screens just don't persist */
+  }
+}
 
-function SortHeader({
-  label,
-  k,
-  sort,
-  onSort,
-  align = "left",
-}: {
-  label: string;
-  k: SortKey;
-  sort: SortState;
-  onSort: (key: SortKey) => void;
-  align?: "left" | "right";
-}) {
-  const active = sort.key === k;
+async function loadUniverse(): Promise<(WatchlistRow & { market: "india" | "us" })[]> {
+  // /api/watchlist/rows takes at most 50 symbols per request.
+  const fetchRows = async (symbols: string[], market: "india" | "us") => {
+    const chunks: string[][] = [];
+    for (let i = 0; i < symbols.length; i += ROWS_PER_REQUEST) chunks.push(symbols.slice(i, i + ROWS_PER_REQUEST));
+    const parts = await Promise.all(
+      chunks.map(async (chunk) => {
+        const data = await (await fetch(`/api/watchlist/rows?symbols=${encodeURIComponent(chunk.join(","))}`)).json();
+        if (!data?.success) throw new Error("rows failed");
+        return (data.rows as WatchlistRow[]).map((row) => ({ ...row, market }));
+      })
+    );
+    return parts.flat();
+  };
+  const [india, us] = await Promise.all([fetchRows([...NIFTY_50_SYMBOLS], "india"), fetchRows(US_LARGE_CAPS, "us")]);
+  return [...india, ...us];
+}
+
+function NumberField({ label, value, onChange, suffix }: { label: string; value: number | null; onChange: (v: number | null) => void; suffix?: string }) {
   return (
-    <th
-      scope="col"
-      aria-sort={active ? (sort.desc ? "descending" : "ascending") : "none"}
-      className={`px-4 py-3 font-medium ${align === "right" ? "text-right" : "text-left"}`}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(k)}
-        className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-white ${active ? "text-white" : ""}`}
-      >
-        {label}
-        <span aria-hidden="true" className="text-[9px]">
-          {active ? (sort.desc ? "▼" : "▲") : ""}
-        </span>
-      </button>
-    </th>
+    <label className="block">
+      <span className="mb-1 block text-xs text-[#888]">{label}</span>
+      <span className="flex items-center gap-1.5">
+        <input
+          inputMode="decimal"
+          value={value ?? ""}
+          onChange={(e) => {
+            const raw = e.target.value.trim();
+            const n = Number(raw);
+            onChange(raw === "" || !Number.isFinite(n) ? null : n);
+          }}
+          className="w-full rounded-lg border border-[#2a2a2a] bg-black px-2.5 py-1.5 text-sm text-white outline-none focus:border-[#22c55e]/60"
+        />
+        {suffix && <span className="text-xs text-[#777]">{suffix}</span>}
+      </span>
+    </label>
   );
 }
 
 export default function ScreenerPage() {
-  const overview = useMarketOverview();
-  const [market, setMarket] = useState<MarketFilter>("All");
-  const [sort, setSort] = useState<SortState>({
-    key: "changePercent",
-    desc: true,
-  });
+  const [universe, setUniverse] = useState<Universe>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
+  const [preset, setPreset] = useState<PresetId | "custom">("all");
+  const [criteria, setCriteria] = useState<ScreenCriteria>(EMPTY_CRITERIA);
+  const [sort, setSort] = useState<{ key: ScreenSortKey; desc: boolean }>({ key: "change", desc: true });
+  const [saved, setSaved] = useState<SavedScreen[]>([]);
 
-  const rows = useMemo(() => {
-    if (overview.status !== "ready") return [];
-    return overview.quotes
-      .filter((quote) => market === "All" || quote.market === market)
-      .sort((a, b) => compare(a, b, sort.key) * (sort.desc ? -1 : 1));
-  }, [overview, market, sort]);
+  useEffect(() => {
+    let cancelled = false;
+    loadUniverse()
+      .then((rows) => {
+        if (!cancelled) setUniverse({ status: "ready", rows });
+      })
+      .catch(() => {
+        if (!cancelled) setUniverse({ status: "error" });
+      });
+    // Saved screens live in this browser only (a per-device convenience).
+    const timer = window.setTimeout(() => setSaved(readSaved()), 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [attempt]);
 
-  function sortBy(key: SortKey) {
-    setSort((current) =>
-      current.key === key
-        ? { key, desc: !current.desc }
-        : { key, desc: key !== "symbol" }
-    );
+  const results = useMemo(() => {
+    if (universe.status !== "ready") return [];
+    return sortScreen(applyScreen(universe.rows, criteria, preset === "big_movers"), sort.key, sort.desc);
+  }, [universe, criteria, preset, sort]);
+
+  function choosePreset(id: PresetId) {
+    const p = PRESETS.find((entry) => entry.id === id)!;
+    setPreset(id);
+    setCriteria({ ...EMPTY_CRITERIA, market: criteria.market, ...p.criteria });
+    setSort(p.sort);
   }
+
+  function update(patch: Partial<ScreenCriteria>) {
+    setPreset("custom");
+    setCriteria((current) => ({ ...current, ...patch }));
+  }
+
+  function saveCurrent() {
+    const name = window.prompt("Name this screen", "My screen")?.trim();
+    if (!name) return;
+    const next = [{ name: name.slice(0, 40), criteria }, ...saved.filter((s) => s.name !== name)].slice(0, 10);
+    setSaved(next);
+    writeSaved(next);
+  }
+
+  function sortBy(key: ScreenSortKey) {
+    setSort((current) => (current.key === key ? { key, desc: !current.desc } : { key, desc: key !== "symbol" }));
+  }
+
+  const header = (label: string, key: ScreenSortKey, className = "") => (
+    <th scope="col" aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"} className={`px-3 py-3 font-medium ${className}`}>
+      <button type="button" onClick={() => sortBy(key)} className={`inline-flex items-center gap-1 hover:text-white ${sort.key === key ? "text-white" : ""}`}>
+        {label}
+        <span aria-hidden="true" className="text-[9px]">
+          {sort.key === key ? (sort.desc ? "▼" : "▲") : "⇅"}
+        </span>
+      </button>
+    </th>
+  );
 
   return (
     <PageShell>
       <PageHeader
         eyebrow="Screener"
         title="Stock screener"
-        description="Live prices for large caps in the US and India. Click a column to sort, or a row to open the stock."
-        actions={
-          <div
-            role="tablist"
-            aria-label="Market"
-            className="flex rounded-xl border border-[#2a2a2a] bg-[#111] p-1"
-          >
-            {FILTERS.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                role="tab"
-                aria-selected={market === filter}
-                onClick={() => setMarket(filter)}
-                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                  market === filter
-                    ? "bg-[#22c55e] text-black"
-                    : "text-[#999] hover:text-white"
-                }`}
-              >
-                {filter}
-              </button>
-            ))}
-          </div>
-        }
+        description="Filter the NIFTY 50 and 20 US large caps by today's move, 52-week position and volume. Every result shows why it matched."
       />
 
-      {overview.status === "error" ? (
-        <EmptyState
-          icon="📡"
-          title="Market data is unavailable right now"
-          description="Our data providers didn't respond. Please try again in a minute."
-        />
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-[#222] text-[11px] text-[#777]">
-                <tr>
-                  <SortHeader label="Symbol" k="symbol" sort={sort} onSort={sortBy} />
-                  <th scope="col" className="hidden px-4 py-3 text-left font-medium uppercase tracking-wide sm:table-cell">
-                    Market
-                  </th>
-                  <SortHeader label="Price" k="price" sort={sort} onSort={sortBy} align="right" />
-                  <SortHeader label="Change" k="changePercent" sort={sort} onSort={sortBy} align="right" />
-                </tr>
-              </thead>
+      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="space-y-4">
+          <section className="rounded-2xl border border-[#222] bg-[#111] p-4">
+            <p className="mb-2 text-sm font-semibold">Screens</p>
+            <div className="flex flex-wrap gap-1.5">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  aria-pressed={preset === p.id}
+                  onClick={() => choosePreset(p.id)}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${preset === p.id ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-white" : "border-[#2a2a2a] text-[#aaa] hover:text-white"}`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {saved.length > 0 && (
+              <>
+                <p className="mb-2 mt-4 text-xs text-[#888]">Saved on this device</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {saved.map((s) => (
+                    <button
+                      key={s.name}
+                      type="button"
+                      onClick={() => {
+                        setPreset("custom");
+                        setCriteria(s.criteria);
+                      }}
+                      className="rounded-full border border-[#2a2a2a] px-3 py-1 text-xs text-[#ccc] hover:text-white"
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
 
-              <tbody>
-                {overview.status === "loading"
-                  ? Array.from({ length: 6 }).map((_, i) => (
-                      <tr key={i} className="border-b border-[#1b1b1b] last:border-b-0">
-                        {Array.from({ length: 4 }).map((__, j) => (
-                          <td key={j} className={`px-4 py-4 ${j === 1 ? "hidden sm:table-cell" : ""}`}>
-                            <div className="h-3.5 w-20 animate-pulse rounded bg-[#1c1c1c]" />
-                          </td>
-                        ))}
+          <section className="space-y-3 rounded-2xl border border-[#222] bg-[#111] p-4">
+            <p className="text-sm font-semibold">Filters</p>
+            <div className="flex gap-1.5" role="group" aria-label="Market">
+              {(["all", "india", "us"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={criteria.market === m}
+                  onClick={() => setCriteria((c) => ({ ...c, market: m }))}
+                  className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium ${criteria.market === m ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-white" : "border-[#2a2a2a] text-[#aaa]"}`}
+                >
+                  {m === "all" ? "All" : m === "india" ? "India" : "US"}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="Day change ≥" value={criteria.minChangePct} onChange={(v) => update({ minChangePct: v })} suffix="%" />
+              <NumberField label="Day change ≤" value={criteria.maxChangePct} onChange={(v) => update({ maxChangePct: v })} suffix="%" />
+            </div>
+            <NumberField label="Within … of 52W high" value={criteria.withinOfHighPct} onChange={(v) => update({ withinOfHighPct: v })} suffix="%" />
+            <NumberField label="Within … of 52W low" value={criteria.withinOfLowPct} onChange={(v) => update({ withinOfLowPct: v })} suffix="%" />
+            <NumberField label="Volume at least" value={criteria.minVolume} onChange={(v) => update({ minVolume: v })} />
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => choosePreset("all")} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-[#aaa] hover:bg-[#1a1a1a]">
+                Reset
+              </button>
+              <button type="button" onClick={saveCurrent} className="flex-1 rounded-lg border border-[#2a2a2a] px-2 py-1.5 text-xs text-[#4ade80] hover:bg-[#22c55e]/10">
+                Save screen
+              </button>
+            </div>
+          </section>
+        </aside>
+
+        <div className="min-w-0">
+          {universe.status === "loading" && (
+            <div className="space-y-2">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="h-12 animate-pulse rounded-lg bg-[#111]" />
+              ))}
+              <p className="text-center text-xs text-[#666]">Loading {NIFTY_50_SYMBOLS.length + US_LARGE_CAPS.length} stocks…</p>
+            </div>
+          )}
+          {universe.status === "error" && (
+            <div className="rounded-2xl border border-[#222] bg-[#111] px-6 py-10 text-center">
+              <p className="text-sm text-[#888]">Screener data couldn&apos;t be loaded right now.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setUniverse({ status: "loading" });
+                  setAttempt((n) => n + 1);
+                }}
+                className={`${secondaryButtonClass} mt-3`}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+          {universe.status === "ready" && (
+            <>
+              <p className="mb-2 text-sm text-[#888]">
+                {results.length} of {universe.rows.filter((r) => r.price !== null).length} stocks match
+              </p>
+              <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+                {results.length === 0 ? (
+                  <p className="px-6 py-12 text-center text-sm text-[#888]">No stocks match these filters right now.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="border-b border-[#1d1d1d] bg-[#0f0f0f] text-xs text-[#888]">
+                      <tr>
+                        {header("Company", "symbol", "pl-4 text-left")}
+                        {header("Price", "price", "text-right")}
+                        {header("1D change", "change", "text-right")}
+                        {header("Volume", "volume", "hidden text-right md:table-cell")}
+                        {header("52W position", "position", "hidden text-left lg:table-cell")}
                       </tr>
-                    ))
-                  : rows.map((quote) => {
-                      const up = (quote.changePercent ?? 0) >= 0;
-                      return (
-                        <tr
-                          key={quote.symbol}
-                          className="group border-b border-[#1b1b1b] transition-colors last:border-b-0 hover:bg-[#151515]"
-                        >
-                          <td className="px-4 py-3.5">
-                            <Link
-                              href={`/stock/${quote.symbol}`}
-                              className="block focus-visible:outline-none"
-                            >
-                              <span className="font-semibold text-white group-hover:text-[#22c55e]">
-                                {quote.symbol}
-                              </span>
-                              <span className="mt-0.5 block text-xs text-[#777]">
-                                {quote.name}
-                                <span className="sm:hidden">
-                                  {quote.market === "India" ? " · NSE" : " · US"}
+                    </thead>
+                    <tbody>
+                      {results.map((row) => (
+                        <tr key={row.symbol} className="group border-b border-[#1b1b1b] last:border-b-0 hover:bg-[#151515]">
+                          <td className="py-3 pl-4 pr-3">
+                            <Link href={`/stock/${encodeURIComponent(row.symbol)}`} className="flex items-center gap-3">
+                              <StockAvatar symbol={row.symbol} size={32} />
+                              <span className="min-w-0">
+                                <span className="block truncate font-semibold group-hover:text-[#22c55e]">{row.symbol}</span>
+                                <span className="block truncate text-xs text-[#777]">
+                                  {row.reasons.length > 0 ? `Matched: ${row.reasons.join(" · ")}` : row.name ?? ""}
                                 </span>
                               </span>
                             </Link>
                           </td>
-                          <td className="hidden px-4 py-3.5 text-[#aaa] sm:table-cell">
-                            {quote.market === "India" ? "NSE · India" : "US"}
-                          </td>
-                          <td className="px-4 py-3.5 text-right font-medium tabular-nums">
-                            {formatQuotePrice(quote.price, quote.currency)}
-                          </td>
-                          <td className="px-4 py-3.5 text-right">
-                            <span
-                              className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold tabular-nums ${
-                                up
-                                  ? "bg-[#4ade80]/10 text-[#4ade80]"
-                                  : "bg-[#f87171]/10 text-[#f87171]"
-                              }`}
-                            >
-                              {formatSignedPercent(quote.changePercent)}
-                            </span>
+                          <td className="px-3 py-3 text-right tabular-nums">{formatMoney(row.price!, row.currency ?? (row.market === "us" ? "USD" : "INR"))}</td>
+                          <td className={`px-3 py-3 text-right font-medium tabular-nums ${toneClass(row.changePercent)}`}>{absPercent(row.changePercent)}</td>
+                          <td className="hidden px-3 py-3 text-right tabular-nums text-[#ccc] md:table-cell">{formatVolume(row.volume, row.currency ?? undefined)}</td>
+                          <td className="hidden w-40 px-3 py-3 lg:table-cell">
+                            <MiniRange low={row.fiftyTwoWeekLow} high={row.fiftyTwoWeekHigh} value={row.price} />
                           </td>
                         </tr>
-                      );
-                    })}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <p className="mt-3 text-[11px] text-[#666]">
+                Prices from Yahoo Finance; may be delayed. Screens describe today&apos;s data — they aren&apos;t recommendations.
+              </p>
+            </>
+          )}
         </div>
-      )}
-
-      <p className="mt-4 text-xs text-[#666]">
-        Filters by fundamentals (P/E, market cap, sector) are coming soon.
-      </p>
+      </div>
     </PageShell>
   );
 }

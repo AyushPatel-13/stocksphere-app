@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import {
   EmptyState,
@@ -59,15 +60,52 @@ function Tile({ quote }: { quote: OverviewQuote }) {
   );
 }
 
+type NiftyQuote = { symbol: string; price: number; changePercent: number | null; currency: string };
+
+/** All 50 NIFTY stocks from /api/market/nifty50 (Upstox); null while loading, [] if unavailable. */
+function useNifty50(): NiftyQuote[] | null {
+  const [quotes, setQuotes] = useState<NiftyQuote[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/market/nifty50")
+      .then((response) => response.json())
+      .then((data) => {
+        if (!cancelled) setQuotes(data?.success && Array.isArray(data.quotes) ? data.quotes.filter((q: NiftyQuote) => q.price > 0) : []);
+      })
+      .catch(() => {
+        if (!cancelled) setQuotes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return quotes;
+}
+
+function SmallTile({ quote }: { quote: NiftyQuote }) {
+  return (
+    <Link
+      href={`/stock/${encodeURIComponent(quote.symbol)}`}
+      style={tileStyle(quote.changePercent)}
+      title={`${quote.symbol} ${formatSignedPercent(quote.changePercent)}`}
+      className="flex min-h-[72px] flex-col justify-between rounded-xl border p-2.5 transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 motion-reduce:transition-none"
+    >
+      <span className="truncate text-xs font-bold">{quote.symbol}</span>
+      <span className="text-sm font-semibold tabular-nums">{formatSignedPercent(quote.changePercent)}</span>
+    </Link>
+  );
+}
+
 export default function HeatmapPage() {
   const overview = useMarketOverview();
+  const nifty = useNifty50();
 
   return (
     <PageShell>
       <PageHeader
         eyebrow="Heatmap"
         title="Market heatmap"
-        description="Today's moves for large caps in the US and India. Deeper colour means a bigger move."
+        description="Today's moves for the NIFTY 50 and US large caps. Deeper colour means a bigger move."
       />
 
       {overview.status === "error" && (
@@ -89,8 +127,29 @@ export default function HeatmapPage() {
         </div>
       )}
 
+      <section className="mb-8">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.08em] text-[#888]">India · NIFTY 50</h2>
+        {nifty === null ? (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-10">
+            {Array.from({ length: 20 }).map((_, i) => (
+              <div key={i} className="min-h-[72px] animate-pulse rounded-xl bg-[#111]" />
+            ))}
+          </div>
+        ) : nifty.length === 0 ? (
+          <p className="text-sm text-[#888]">NIFTY 50 data is unavailable right now.</p>
+        ) : (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-10">
+            {[...nifty]
+              .sort((a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0))
+              .map((quote) => (
+                <SmallTile key={quote.symbol} quote={quote} />
+              ))}
+          </div>
+        )}
+      </section>
+
       {overview.status === "ready" &&
-        (["US", "India"] as const).map((market) => {
+        (["US"] as const).map((market) => {
           const quotes = overview.quotes
             .filter((quote) => quote.market === market)
             .sort((a, b) => (b.changePercent ?? 0) - (a.changePercent ?? 0));
