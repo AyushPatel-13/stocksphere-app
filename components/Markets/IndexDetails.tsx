@@ -1,5 +1,6 @@
 "use client";
 
+import { Sparkline } from "./Sparkline";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -313,23 +314,6 @@ export function Nifty50Constituents() {
 
 /* ------------------------------------------------------------ all indices */
 
-function Sparkline({ values, up }: { values: number[]; up: boolean }) {
-  if (values.length < 2) return <span className="inline-block h-8 w-28" />;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  const points = values
-    .map((v, i) => `${((i / (values.length - 1)) * 112).toFixed(1)},${(30 - ((v - min) / span) * 28).toFixed(1)}`)
-    .join(" ");
-  const baseline = 30 - ((values[0] - min) / span) * 28;
-
-  return (
-    <svg width="112" height="32" viewBox="0 0 112 32" aria-hidden="true" className="inline-block">
-      <line x1="0" x2="112" y1={baseline} y2={baseline} stroke="#333" strokeDasharray="2 3" />
-      <polyline points={points} fill="none" stroke={up ? UP : DOWN} strokeWidth="1.4" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 export function AllIndices({ current }: { current: string }) {
   const [rows, setRows] = useState<IndexOverviewRow[] | null | undefined>(undefined);
