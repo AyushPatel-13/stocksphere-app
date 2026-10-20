@@ -373,3 +373,70 @@ export async function searchUpstoxIndex(
     return null;
   }
 }
+
+/* ------------------------------------------------------------ IPOs */
+
+/**
+ * Upstox IPO API (official, documented):
+ *   GET /v2/ipos?status=&issue_type=&page_number=&records=   list (records ≤ 30)
+ *   GET /v2/ipos/{id}                                        one IPO's details
+ * https://upstox.com/developer/api-documentation/get-ipos/
+ * https://upstox.com/developer/api-documentation/get-ipo-details/
+ *
+ * Both need the same Bearer token as the other Upstox calls. Every failure is
+ * classified so the page can say what went wrong (token expired, rate limit,
+ * timeout, …) instead of a generic error. The token never leaves the server.
+ */
+export type UpstoxIpoStatus = "open" | "upcoming" | "closed" | "listed";
+
+export type UpstoxErrorCode = "not_configured" | "auth" | "rate_limited" | "timeout" | "not_found" | "provider";
+
+export type UpstoxResult = { ok: true; body: unknown } | { ok: false; code: UpstoxErrorCode; status: number | null };
+
+const IPO_TIMEOUT_MS = 8_000;
+
+async function upstoxIpoRequest(path: string): Promise<UpstoxResult> {
+  if (!ACCESS_TOKEN) return { ok: false, code: "not_configured", status: null };
+
+  try {
+    const response = await fetch(`https://api.upstox.com${path}`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${ACCESS_TOKEN}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(IPO_TIMEOUT_MS),
+    });
+    const body: unknown = await response.json().catch(() => null);
+
+    if (response.ok) return { ok: true, body };
+    // UDAPI100050 = invalid or expired token (verified: 401).
+    if (response.status === 401 || response.status === 403) return { ok: false, code: "auth", status: response.status };
+    if (response.status === 429) return { ok: false, code: "rate_limited", status: 429 };
+    // UDAPI100500 = no IPO for that id (verified: 400).
+    const codes = (body as { errors?: { errorCode?: string }[] } | null)?.errors?.map((e) => e.errorCode) ?? [];
+    if (codes.includes("UDAPI100500")) return { ok: false, code: "not_found", status: response.status };
+    console.error(`Upstox IPO ${response.status}: ${path}`);
+    return { ok: false, code: "provider", status: response.status };
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    if (!timedOut) console.error(`Upstox IPO error: ${path}`, error instanceof Error ? error.message : error);
+    return { ok: false, code: timedOut ? "timeout" : "provider", status: null };
+  }
+}
+
+export function getUpstoxIpos(params: {
+  status: UpstoxIpoStatus;
+  issueType?: "regular" | "sme";
+  pageNumber?: number;
+  records?: number;
+}): Promise<UpstoxResult> {
+  const query = new URLSearchParams({
+    status: params.status,
+    page_number: String(Math.max(1, Math.trunc(params.pageNumber ?? 1))),
+    records: String(Math.min(Math.max(Math.trunc(params.records ?? 30), 1), 30)),
+  });
+  if (params.issueType) query.set("issue_type", params.issueType);
+  return upstoxIpoRequest(`/v2/ipos?${query.toString()}`);
+}
+
+export function getUpstoxIpoDetail(id: string): Promise<UpstoxResult> {
+  return upstoxIpoRequest(`/v2/ipos/${encodeURIComponent(id)}`);
+}

@@ -25,6 +25,7 @@ const navigation = [
   { label: "Screener", href: "/screener", icon: "📈" },
   { label: "Backtest", href: "/backtest", icon: "🧮" },
   { label: "Events", href: "/events", icon: "📅" },
+  { label: "IPOs", href: "/ipo", icon: "🚀" },
   { label: "Heatmap", href: "/heatmap", icon: "🗺️" },
   { label: "Alerts", href: "/alerts", icon: "🔔" },
 ];
