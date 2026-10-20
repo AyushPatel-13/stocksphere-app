@@ -97,9 +97,12 @@ create trigger watchlist_list_owner
   before insert or update of watchlist_id, user_id on public.watchlist
   for each row execute function public.watchlist_list_owner();
 
+-- A trigger function only: not callable through /rest/v1/rpc.
+revoke all on function public.watchlist_list_owner() from public, anon, authenticated;
+
 -- ---------------------------------------------------------------- privileges and RLS
 
-revoke all on public.watchlists from anon;
+revoke all on public.watchlists from anon, authenticated;
 grant select, insert, update, delete on public.watchlists to authenticated;
 
 alter table public.watchlists enable row level security;
@@ -107,20 +110,20 @@ alter table public.watchlists enable row level security;
 drop policy if exists "own watchlists: read" on public.watchlists;
 create policy "own watchlists: read"
   on public.watchlists for select to authenticated
-  using (user_id = auth.uid());
+  using (user_id = (select auth.uid()));
 
 drop policy if exists "own watchlists: create" on public.watchlists;
 create policy "own watchlists: create"
   on public.watchlists for insert to authenticated
-  with check (user_id = auth.uid());
+  with check (user_id = (select auth.uid()));
 
 drop policy if exists "own watchlists: rename" on public.watchlists;
 create policy "own watchlists: rename"
   on public.watchlists for update to authenticated
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid());
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
 
 drop policy if exists "own watchlists: delete" on public.watchlists;
 create policy "own watchlists: delete"
   on public.watchlists for delete to authenticated
-  using (user_id = auth.uid());
+  using (user_id = (select auth.uid()));

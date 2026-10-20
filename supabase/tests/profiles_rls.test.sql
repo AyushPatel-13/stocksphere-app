@@ -79,12 +79,16 @@ begin
     raise exception 'FAIL: user B edited user A''s profile';
   end if;
 
-  -- B cannot delete A's profile (no delete policy).
-  delete from public.profiles where id = '00000000-0000-4000-8000-00000000000a';
-  get diagnostics changed = row_count;
-  if changed <> 0 then
-    raise exception 'FAIL: user B deleted user A''s profile';
-  end if;
+  -- B cannot delete A's profile: users have no DELETE grant at all, so the
+  -- statement is refused (or, if a grant is ever added, must match no rows).
+  begin
+    delete from public.profiles where id = '00000000-0000-4000-8000-00000000000a';
+    get diagnostics changed = row_count;
+    if changed <> 0 then
+      raise exception 'FAIL: user B deleted user A''s profile';
+    end if;
+  exception when insufficient_privilege then null;
+  end;
 
   -- B cannot steal A's handle (unique).
   begin

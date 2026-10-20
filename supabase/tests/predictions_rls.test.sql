@@ -163,6 +163,67 @@ begin
 end $$;
 
 reset role;
+
+-- Results (migration 20261020000400): recorded once through the server
+-- function, immutable afterwards, and removed only by an account deletion.
+insert into public.predictions (
+  id, user_id, client_request_id, symbol, asset_type, direction, horizon,
+  reference_price, reference_source, reference_mode, reference_quote_time,
+  band_pct, expiry_sessions, estimated_expiry_at, scoring_version
+) values (
+  '00000000-0000-4000-8000-00000000c002', '00000000-0000-4000-8000-0000000000c1',
+  '00000000-0000-4000-8000-00000000a002', 'INFY', 'stock', 'up', '1d',
+  1000, 'upstox', 'live', now(), 1, 1, now() + interval '1 day', 'scoring-v2-2026-10'
+);
+
+do $$
+begin
+  if not public.prediction_record_resolution('00000000-0000-4000-8000-00000000c002', 'correct', true, null, 1020, current_date, 'yahoo', 2, 1, 0, null, null, 10, 0, 'scoring-v2-2026-10', 'abc') then
+    raise exception 'FAIL: a result could not be recorded';
+  end if;
+  if public.prediction_record_resolution('00000000-0000-4000-8000-00000000c002', 'incorrect', true, null, 980, current_date, 'yahoo', -2, 1, 1, null, null, -2, 0, 'scoring-v2-2026-10', 'abc') then
+    raise exception 'FAIL: a prediction was resolved twice';
+  end if;
+  if (select pred_points from public.profiles where id = '00000000-0000-4000-8000-0000000000c1') <> 10 then
+    raise exception 'FAIL: reputation counters were not recomputed';
+  end if;
+
+  begin
+    update public.prediction_resolutions set total_points = 99, direction_points = 99 where prediction_id = '00000000-0000-4000-8000-00000000c002';
+    raise exception 'FAIL: a result was edited';
+  exception when raise_exception then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+  end;
+
+  begin
+    delete from public.prediction_resolutions where prediction_id = '00000000-0000-4000-8000-00000000c002';
+    raise exception 'FAIL: a result was deleted directly';
+  exception when raise_exception then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+  end;
+end $$;
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-0000000000c1","role":"authenticated"}', true);
+do $$
+begin
+  begin
+    perform public.prediction_record_resolution('00000000-0000-4000-8000-00000000c001', 'correct', true, null, 1, current_date, 'x', 0, 1, 0, null, null, 999, 0, 'v', 'x');
+    raise exception 'FAIL: a user called the scoring function';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+reset role;
+
+-- Deleting the account removes the member's predictions and results.
+delete from auth.users where id = '00000000-0000-4000-8000-0000000000c1';
+do $$
+begin
+  if exists (select 1 from public.prediction_resolutions where prediction_id = '00000000-0000-4000-8000-00000000c002') then
+    raise exception 'FAIL: deleting an account left prediction results behind';
+  end if;
+end $$;
+
 select 'ALL PREDICTION RLS CHECKS PASSED' as result;
 
 rollback;

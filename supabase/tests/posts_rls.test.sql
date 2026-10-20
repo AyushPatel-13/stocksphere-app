@@ -21,6 +21,28 @@ insert into public.posts (id, author_id, body, sentiment, symbols) values
   ('00000000-0000-4000-8000-00000000a002', '00000000-0000-4000-8000-0000000000a1', 'hidden spam', null, '{}');
 update public.posts set hidden = true where id = '00000000-0000-4000-8000-00000000a002';
 
+-- A server-created reply bumps the parent's reply count; deleting it lowers it.
+do $$
+begin
+  insert into public.posts (id, author_id, body, parent_id) values
+    ('00000000-0000-4000-8000-00000000b001', '00000000-0000-4000-8000-0000000000b1', 'agree', '00000000-0000-4000-8000-00000000a001');
+  if (select reply_count from public.posts where id = '00000000-0000-4000-8000-00000000a001') <> 1 then
+    raise exception 'FAIL: reply was not counted';
+  end if;
+  delete from public.posts where id = '00000000-0000-4000-8000-00000000b001';
+  if (select reply_count from public.posts where id = '00000000-0000-4000-8000-00000000a001') <> 0 then
+    raise exception 'FAIL: deleted reply was not uncounted';
+  end if;
+
+  -- Replies never carry a sentiment.
+  begin
+    insert into public.posts (author_id, body, sentiment, parent_id) values
+      ('00000000-0000-4000-8000-0000000000b1', 'x', 'bullish', '00000000-0000-4000-8000-00000000a001');
+    raise exception 'FAIL: a reply was saved with a sentiment';
+  exception when check_violation then null;
+  end;
+end $$;
+
 -- ---------------------------------------------------------------- user B
 set local role authenticated;
 select set_config('request.jwt.claims',
@@ -82,14 +104,34 @@ begin
   exception when insufficient_privilege then null;
   end;
 
-  -- B can report, but cannot read reports.
+  -- B can report as themselves (an error here is a real failure, not a pass).
   insert into public.post_reports (post_id, reason) values ('00000000-0000-4000-8000-00000000a001', 'spam');
-  if exists (select 1 from public.post_reports) then
-    raise exception 'FAIL: reports are readable by users';
+
+  -- B cannot report on behalf of A.
+  begin
+    insert into public.post_reports (post_id, reporter_id, reason)
+    values ('00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-0000000000a1', 'spam');
+    raise exception 'FAIL: user B reported as user A';
+  exception when insufficient_privilege then null;
+  end;
+
+  -- B cannot read reports: SELECT is not granted, or no row is visible.
+  -- Only this one statement may fail with insufficient_privilege; a
+  -- permission error anywhere else in this block is a real failure.
+  begin
+    if exists (select 1 from public.post_reports) then
+      raise exception 'FAIL: reports are readable by users';
+    end if;
+  exception when insufficient_privilege then null;
+  end;
+
+  -- B can unlike their own like; the trigger brings the count back down.
+  delete from public.post_likes where post_id = '00000000-0000-4000-8000-00000000a001';
+  get diagnostics changed = row_count;
+  if changed <> 1 then raise exception 'FAIL: user B could not unlike'; end if;
+  if (select like_count from public.posts where id = '00000000-0000-4000-8000-00000000a001') <> 0 then
+    raise exception 'FAIL: unlike was not counted';
   end if;
-exception when insufficient_privilege then
-  -- SELECT on post_reports is not granted at all, which is also a pass.
-  null;
 end $$;
 
 -- ---------------------------------------------------------------- user A

@@ -89,47 +89,47 @@ alter table public.price_alerts enable row level security;
 
 drop policy if exists "own alerts: read" on public.price_alerts;
 create policy "own alerts: read" on public.price_alerts
-  for select to authenticated using (user_id = auth.uid());
+  for select to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists "own alerts: create" on public.price_alerts;
 create policy "own alerts: create" on public.price_alerts
-  for insert to authenticated with check (user_id = auth.uid() and status = 'active');
+  for insert to authenticated with check (user_id = (select auth.uid()) and status = 'active');
 
 -- A member may pause or resume, not mark their own alert triggered.
 drop policy if exists "own alerts: edit" on public.price_alerts;
 create policy "own alerts: edit" on public.price_alerts
   for update to authenticated
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid() and status in ('active', 'paused'));
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()) and status in ('active', 'paused'));
 
 drop policy if exists "own alerts: delete" on public.price_alerts;
 create policy "own alerts: delete" on public.price_alerts
-  for delete to authenticated using (user_id = auth.uid());
+  for delete to authenticated using (user_id = (select auth.uid()));
 
 alter table public.notifications enable row level security;
 
 drop policy if exists "own notifications: read" on public.notifications;
 create policy "own notifications: read" on public.notifications
-  for select to authenticated using (user_id = auth.uid());
+  for select to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists "own notifications: mark read" on public.notifications;
 create policy "own notifications: mark read" on public.notifications
   for update to authenticated
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid());
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
 
 alter table public.user_preferences enable row level security;
 
 drop policy if exists "own preferences: read" on public.user_preferences;
 create policy "own preferences: read" on public.user_preferences
-  for select to authenticated using (user_id = auth.uid());
+  for select to authenticated using (user_id = (select auth.uid()));
 
 drop policy if exists "own preferences: create" on public.user_preferences;
 create policy "own preferences: create" on public.user_preferences
-  for insert to authenticated with check (user_id = auth.uid());
+  for insert to authenticated with check (user_id = (select auth.uid()));
 
 drop policy if exists "own preferences: update" on public.user_preferences;
 create policy "own preferences: update" on public.user_preferences
   for update to authenticated
-  using (user_id = auth.uid())
-  with check (user_id = auth.uid());
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));

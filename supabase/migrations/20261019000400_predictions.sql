@@ -102,6 +102,7 @@ comment on table public.predictions is
 create or replace function public.predictions_lock()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
   if old.status <> 'open' then

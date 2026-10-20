@@ -42,11 +42,17 @@ create table if not exists public.paper_trades (
 create index if not exists paper_trades_user_idx on public.paper_trades (user_id, executed_at desc);
 
 -- The ledger is append-only, for every role.
+-- Trades can never be edited. They can be deleted only when their owner's
+-- account is deleted (the cascade from auth.users); a direct delete is refused.
 create or replace function public.paper_trades_immutable()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
+  if tg_op = 'DELETE' and not exists (select 1 from auth.users u where u.id = old.user_id) then
+    return old;
+  end if;
   raise exception 'paper trades are immutable';
 end;
 $$;
@@ -144,11 +150,11 @@ grant select on public.paper_trades to authenticated;
 alter table public.paper_accounts enable row level security;
 drop policy if exists "own paper account" on public.paper_accounts;
 create policy "own paper account" on public.paper_accounts
-  for select to authenticated using (user_id = auth.uid());
+  for select to authenticated using (user_id = (select auth.uid()));
 
 alter table public.paper_trades enable row level security;
 drop policy if exists "own paper trades" on public.paper_trades;
 create policy "own paper trades" on public.paper_trades
-  for select to authenticated using (user_id = auth.uid());
+  for select to authenticated using (user_id = (select auth.uid()));
 
 -- No insert/update/delete policies: only paper_place_trade (server) writes.

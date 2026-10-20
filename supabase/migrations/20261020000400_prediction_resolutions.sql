@@ -42,11 +42,18 @@ create table if not exists public.prediction_resolutions (
 
 create index if not exists prediction_resolutions_resolved_idx on public.prediction_resolutions (resolved_at desc);
 
+-- Results can never be edited. They can be deleted only as part of deleting
+-- the prediction they belong to (an account deletion cascades through
+-- profiles -> predictions -> results); a direct delete is refused.
 create or replace function public.prediction_resolutions_immutable()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
+  if tg_op = 'DELETE' and not exists (select 1 from public.predictions p where p.id = old.prediction_id) then
+    return old;
+  end if;
   raise exception 'prediction results are immutable';
 end;
 $$;

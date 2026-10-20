@@ -65,6 +65,26 @@ begin
 end $$;
 
 reset role;
+
+-- A direct delete is refused; deleting the account removes the trades.
+do $$
+begin
+  begin
+    delete from public.paper_trades where user_id = '00000000-0000-4000-8000-0000000000f1';
+    raise exception 'FAIL: a paper trade was deleted directly';
+  exception when raise_exception then
+    if sqlerrm like 'FAIL:%' then raise; end if;
+  end;
+end $$;
+
+delete from auth.users where id = '00000000-0000-4000-8000-0000000000f1';
+do $$
+begin
+  if exists (select 1 from public.paper_trades where user_id = '00000000-0000-4000-8000-0000000000f1') then
+    raise exception 'FAIL: deleting an account left paper trades behind';
+  end if;
+end $$;
+
 select 'ALL PAPER TRADING CHECKS PASSED' as result;
 
 rollback;
