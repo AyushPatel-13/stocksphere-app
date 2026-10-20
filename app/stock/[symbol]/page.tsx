@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import WatchlistButton from "../../WatchlistButton";
@@ -15,9 +16,11 @@ import { getNews } from "@/lib/services/news";
 import type { NewsArticle } from "@/lib/types/news";
 import { getFinancials } from "@/lib/services/financials";
 import { fiftyTwoWeekRange, getHistory, resolveAsset } from "@/lib/services/history";
+import { getYahooDividends, getYahooFundamentals } from "@/lib/apis/yahooFundamentals";
+import { getCompanySummary } from "@/lib/apis/wikipedia";
+import { buildKeyStats, formatMarketCap } from "@/lib/services/keyStats";
 import {
   formatCurrency,
-  formatLargeNumber,
   formatPercent,
   formatVolume,
 } from "@/lib/utils/format";
@@ -29,6 +32,11 @@ import {
  * render inline, including its own "N/A" fallback — nothing here decides what
  * a statistic is, only how the pair is laid out.
  */
+/** "RELIANCE INDUSTRIES LTD" → "Reliance Industries Ltd" (provider names arrive in capitals). */
+function titleCase(name: string): string {
+  return name.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase());
+}
+
 function Stat({
   label,
   value,
@@ -270,6 +278,53 @@ export default async function StockPage({
     asset ? getHistory(asset, "1y").catch(() => null) : Promise.resolve(null),
   ]);
   const range52w = fiftyTwoWeekRange(yearHistory);
+
+  // No provider knows this symbol at all: say so, instead of an empty page
+  // full of "N/A" that reads like a broken stock.
+  if (!quote && !company && !yearHistory) {
+    return (
+      <div className="sp-root">
+        <style>{SP_STYLES}</style>
+        <div className="sp-shell">
+          <div className="sp-hero" style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}>
+            <h1 className="sp-symbol">{decodeURIComponent(symbol).toUpperCase()}</h1>
+            <p style={{ color: "#aaa", margin: 0 }}>
+              We couldn&apos;t find this stock in any of our data sources. Check the ticker, or search by company name.
+            </p>
+            <p style={{ color: "#777", margin: 0, fontSize: "13px" }}>
+              If it&apos;s a real listing, our providers may be temporarily unavailable — try again in a minute.
+            </p>
+            <Link href="/" style={{ color: "#4ade80", fontSize: "14px" }}>
+              ← Back to search
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Figures the main providers don't carry (Upstox has no market cap, EPS,
+  // dividends or descriptions): Yahoo fundamentals and dividends, and a
+  // Wikipedia summary for the overview. Each is labelled with its source.
+  const companyName = yearHistory?.name ?? (company?.name ? titleCase(company.name) : null);
+  const [yahooFundamentals, dividends, wiki] = await Promise.all([
+    asset ? getYahooFundamentals(asset.yahoo).catch(() => null) : Promise.resolve(null),
+    asset ? getYahooDividends(asset.yahoo).catch(() => null) : Promise.resolve(null),
+    !company?.description && companyName ? getCompanySummary(companyName).catch(() => null) : Promise.resolve(null),
+  ]);
+  const keyStats = buildKeyStats({
+    price: typeof quote?.price === "number" ? quote.price : null,
+    provider: financials,
+    providerName: quote?.currency === "INR" ? "Upstox" : "Finnhub",
+    yahoo: yahooFundamentals,
+    dividends,
+  });
+  const statsCurrency = quote?.currency ?? asset?.currency ?? null;
+  const overview = company
+    ? { ...company, description: company.description || wiki?.text || "" }
+    : wiki
+      ? { symbol, name: companyName ?? symbol, exchange: "", country: "", currency: statsCurrency ?? "", sector: "", industry: "", marketCap: 0, logo: "", website: "", description: wiki.text }
+      : null;
   // This page used to carry a hardcoded stockData table (ten entries: name,
   // price, change, and a description for four of them) plus a `stock` fallback
   // that read it. Both are gone. Prices and changes have come from the live
@@ -378,7 +433,7 @@ export default async function StockPage({
             StockDiscussion, which nobody else could see. */}
         <StockBoard symbol={symbol} />
 
-        <CompanyOverview company={company} />
+        <CompanyOverview company={overview} source={!company?.description && wiki ? { label: "Wikipedia", url: wiki.url } : null} />
 
         <dl className="sp-stats">
           <Stat label="Open" value={open || "N/A"} />
@@ -399,9 +454,7 @@ export default async function StockPage({
 
           <Stat
             label="Market Cap"
-            value={formatLargeNumber(
-              financials?.marketCap ?? null
-            )}
+            value={<span title={keyStats.marketCap?.source}>{formatMarketCap(keyStats.marketCap?.value ?? null, statsCurrency)}</span>}
           />
 
           <Stat
@@ -416,21 +469,36 @@ export default async function StockPage({
 
           <Stat
             label="P/E Ratio"
-            value={financials?.pe?.toFixed(2) ?? "N/A"}
+            value={<span title={keyStats.pe?.source}>{keyStats.pe ? keyStats.pe.value.toFixed(2) : "N/A"}</span>}
           />
 
           <Stat
-            label="EPS"
-            value={financials?.eps?.toFixed(2) ?? "N/A"}
+            label="EPS (TTM)"
+            value={<span title={keyStats.eps?.source}>{keyStats.eps ? formatCurrency(keyStats.eps.value, currencySymbol) : "N/A"}</span>}
           />
 
           <Stat
             label="Dividend Yield"
-            value={formatPercent(
-              financials?.dividendYield ?? null
-            )}
+            value={<span title={keyStats.dividendYield?.source}>{formatPercent(keyStats.dividendYield?.value ?? null)}</span>}
           />
         </dl>
+
+        <ul className="mt-3 space-y-0.5 text-[11px] leading-relaxed text-[#666]">
+          {(
+            [
+              ["Market cap", keyStats.marketCap],
+              ["P/E", keyStats.pe],
+              ["EPS", keyStats.eps],
+              ["Dividend yield", keyStats.dividendYield],
+            ] as const
+          )
+            .filter(([, stat]) => stat !== null)
+            .map(([label, stat]) => (
+              <li key={label}>
+                {label}: {stat!.source}
+              </li>
+            ))}
+        </ul>
 
         <h2 className="sp-section-title">Latest News</h2>
 

@@ -2,10 +2,13 @@ import type { CompanyProfile } from "@/lib/types/company";
 
 type Props = {
   company: CompanyProfile | null | undefined;
+  /** Where the description came from when it wasn't the market-data provider. */
+  source?: { label: string; url: string } | null;
 };
 
 export default function CompanyOverview({
   company,
+  source = null,
 }: Props) {
   if (!company) return null;
 
@@ -41,6 +44,15 @@ export default function CompanyOverview({
           }}
         >
           {company.description}
+          {source && (
+            <span style={{ display: "block", marginTop: "10px", fontSize: "12px", color: "#777" }}>
+              Source:{" "}
+              <a href={source.url} target="_blank" rel="noopener noreferrer" style={{ color: "#4ade80" }}>
+                {source.label}
+              </a>{" "}
+              (CC BY-SA)
+            </span>
+          )}
         </p>
       ) : (
         // Upstox is an instrument master, not a fundamentals provider, so an
