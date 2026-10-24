@@ -4,6 +4,7 @@ import { z } from "zod";
 import { runAgent } from "@/lib/agent/orchestrator";
 import { AgentError } from "@/lib/agent/errors";
 import { bearerToken, defaultAgentAccess, type AgentAccess } from "@/lib/agent/access";
+import { detectWorkflow, runDefaultWorkflow, type Workflow } from "@/lib/agent/workflows";
 import { AgentErrorResponse } from "@/lib/types/agent";
 
 // The agent finishes within AGENT_DEADLINE_MS (50 s); this lets the platform
@@ -18,10 +19,21 @@ const historyMessageSchema = z.object({
   content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
 });
 
+const companyQuery = z.string().trim().min(1).max(60);
+
+/** A research entry point chosen in the UI; the server still resolves and validates every name. */
+const workflowSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("research"), query: companyQuery }),
+  z.object({ type: z.literal("explain_move"), query: companyQuery }),
+  z.object({ type: z.literal("compare"), queries: z.array(companyQuery).min(2).max(3) }),
+  z.object({ type: z.literal("portfolio") }),
+]);
+
 const requestSchema = z.object({
   message: z.string().trim().min(1, "message is required").max(MAX_MESSAGE_LENGTH),
   conversationId: z.string().trim().min(1).max(100).optional(),
   history: z.array(historyMessageSchema).max(MAX_HISTORY_MESSAGES).optional(),
+  workflow: workflowSchema.optional(),
 });
 
 /**
@@ -31,12 +43,18 @@ const requestSchema = z.object({
  * Signed-in members only, rate limited per account (see lib/agent/access.ts).
  * A repeat of a recent stand-alone question is served from the answer cache
  * and doesn't count against the limit.
+ *
+ * Research questions (a report on a stock, why it moved, a comparison, a
+ * portfolio review) run as workflows: the data is gathered server-side and
+ * written up in one model call (lib/agent/workflows). Everything else, and any
+ * workflow whose company can't be identified, goes to the tool loop.
  */
 export async function POST(
   request: Request,
   _context?: unknown,
   access: AgentAccess = defaultAgentAccess,
-  run: typeof runAgent = runAgent
+  run: typeof runAgent = runAgent,
+  workflow: typeof runDefaultWorkflow = runDefaultWorkflow
 ) {
   const token = bearerToken(request);
   const userId = token ? await access.verifyToken(token) : null;
@@ -65,7 +83,11 @@ export async function POST(
   // A stand-alone question asked again within a couple of minutes is answered
   // from the cache (same answer, new conversation id).
   const standalone = !parsed.data.history || parsed.data.history.length === 0;
-  const cached = standalone ? answerCache.get(parsed.data.message) : null;
+  const chosen: Workflow | null = parsed.data.workflow ?? (standalone ? detectWorkflow(parsed.data.message) : null);
+  // The answer cache is shared by everyone and keyed by the question alone, so
+  // an answer built from one member's own data must never enter or leave it.
+  const cacheable = standalone && chosen?.type !== "portfolio";
+  const cached = cacheable ? answerCache.get(parsed.data.message) : null;
   if (cached) {
     return NextResponse.json({ ...cached, conversationId: parsed.data.conversationId ?? cached.conversationId });
   }
@@ -83,8 +105,11 @@ export async function POST(
   }
 
   try {
-    const result = await run(parsed.data);
-    if (standalone) answerCache.set(parsed.data.message, result);
+    const fromWorkflow = chosen
+      ? await workflow(chosen, parsed.data.message, { userId, accessToken: token! }, parsed.data.conversationId)
+      : null;
+    const result = fromWorkflow ?? (await run({ message: parsed.data.message, conversationId: parsed.data.conversationId, history: parsed.data.history }));
+    if (cacheable) answerCache.set(parsed.data.message, result);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AgentError) {

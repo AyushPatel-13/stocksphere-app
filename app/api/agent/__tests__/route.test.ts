@@ -106,3 +106,55 @@ test("a cached repeat of a stand-alone question doesn't use quota", async () => 
   assert.equal((await second.json()).answer, (await first.json()).answer);
   assert.equal(calls.length, 1);
 });
+
+// --- research workflows -------------------------------------------------
+
+import type { runDefaultWorkflow } from "@/lib/agent/workflows";
+
+function fakeWorkflow(answerFor: (userId: string) => string | null) {
+  const calls: { type: string; userId: string }[] = [];
+  const impl = (async (workflow, _question, ctx) => {
+    calls.push({ type: workflow.type, userId: ctx.userId });
+    const answer = answerFor(ctx.userId);
+    return answer === null ? null : { answer, toolCalls: [], sources: [], warnings: [], conversationId: "w" };
+  }) as typeof runDefaultWorkflow;
+  return { impl, calls };
+}
+
+test("a research question runs as a workflow for the verified account", async () => {
+  const { access } = fakeAccess();
+  const wf = fakeWorkflow(() => "research note");
+  const response = await POST(makeRequest({ message: "Research TCS for the route test" }), undefined, access, fakeRun, wf.impl);
+  assert.equal((await response.json()).answer, "research note");
+  assert.deepEqual(wf.calls, [{ type: "research", userId: "user-1" }]);
+});
+
+test("a workflow that can't identify the company falls back to the tool loop", async () => {
+  const { access } = fakeAccess();
+  const wf = fakeWorkflow(() => null);
+  const response = await POST(makeRequest({ message: "Research zzqx route fallback" }), undefined, access, fakeRun, wf.impl);
+  assert.match((await response.json()).answer, /^answer/);
+});
+
+test("portfolio answers are never served from or stored in the shared cache", async () => {
+  const wf = fakeWorkflow((userId) => `portfolio of ${userId}`);
+  const tokens: Record<string, string> = { "tok-a": "user-a", "tok-b": "user-b" };
+  const access: AgentAccess = { verifyToken: async (t) => tokens[t] ?? null, takeSlot: async () => ({ ok: true, shared: true }) };
+
+  const a = await POST(makeRequest({ message: "Analyze my portfolio" }, "tok-a"), undefined, access, fakeRun, wf.impl);
+  const b = await POST(makeRequest({ message: "Analyze my portfolio" }, "tok-b"), undefined, access, fakeRun, wf.impl);
+  assert.equal((await a.json()).answer, "portfolio of user-a");
+  assert.equal((await b.json()).answer, "portfolio of user-b");
+  assert.deepEqual(wf.calls.map((c) => c.userId), ["user-a", "user-b"]);
+});
+
+test("an explicit workflow is validated, and the body can't choose whose data is read", async () => {
+  const { access } = fakeAccess();
+  const wf = fakeWorkflow((userId) => `for ${userId}`);
+  const bad = await POST(makeRequest({ message: "x", workflow: { type: "compare", queries: ["TCS"] } }), undefined, access, fakeRun, wf.impl);
+  assert.equal(bad.status, 400);
+  const unknown = await POST(makeRequest({ message: "x", workflow: { type: "run_sql", query: "drop table" } }), undefined, access, fakeRun, wf.impl);
+  assert.equal(unknown.status, 400);
+  const sneaky = await POST(makeRequest({ message: "my portfolio please", workflow: { type: "portfolio" }, userId: "victim" }), undefined, access, fakeRun, wf.impl);
+  assert.equal((await sneaky.json()).answer, "for user-1");
+});

@@ -30,6 +30,16 @@ export function getPublicClient(): SupabaseClient | null {
   return publicClient;
 }
 
+/**
+ * A client acting as one signed-in member: their access token rides on every
+ * request, so row-level security limits it to that member's rows exactly as
+ * in their browser. A new client per call — never cached, never shared.
+ */
+export function getUserClient(accessToken: string): SupabaseClient | null {
+  if (!url || !anonKey || !accessToken) return null;
+  return createClient(url, anonKey, { ...noSession, global: { headers: { Authorization: `Bearer ${accessToken}` } } });
+}
+
 export function getAdminClient(): SupabaseClient | null {
   if (!url || !serviceKey) return null;
   adminClient ??= createClient(url, serviceKey, noSession);

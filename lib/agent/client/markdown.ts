@@ -11,7 +11,12 @@
  * be unit-tested without a DOM and rendered to React elements without ever
  * touching innerHTML. Nothing in an agent answer is interpreted as markup.
  *
- * Deliberately unsupported: links, images, nested lists, blockquotes, setext
+ * Links are supported only as [text](https://…) with an http(s) URL — research
+ * notes cite their sources that way, and the server has already removed any
+ * URL that didn't come from a retrieved source. Anything else (javascript:,
+ * data:, relative paths) stays literal text.
+ *
+ * Deliberately unsupported: images, nested lists, blockquotes, setext
  * headings. Unrecognised syntax degrades to literal text, which is the safe
  * direction to fail.
  */
@@ -19,7 +24,8 @@
 export type MdInline =
   | { type: "text"; value: string }
   | { type: "bold"; value: string }
-  | { type: "code"; value: string };
+  | { type: "code"; value: string }
+  | { type: "link"; value: string; href: string };
 
 export type MdBlock =
   | { type: "heading"; level: number; text: string }
@@ -28,7 +34,7 @@ export type MdBlock =
   | { type: "table"; header: string[]; rows: string[][] }
   | { type: "code"; text: string };
 
-const INLINE_PATTERN = /(\*\*[^*\n]+\*\*|`[^`\n]+`)/g;
+const INLINE_PATTERN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]{1,200}\]\(https?:\/\/[^\s)]{1,500}\))/g;
 const HEADING_PATTERN = /^(#{1,6})\s+(.*)$/;
 const BULLET_PATTERN = /^[-*+]\s+(.*)$/;
 const ORDERED_PATTERN = /^\d+[.)]\s+(.*)$/;
@@ -53,11 +59,16 @@ export function parseInline(text: string): MdInline[] {
     }
 
     const token = match[0];
-    parts.push(
-      token.startsWith("**")
-        ? { type: "bold", value: token.slice(2, -2) }
-        : { type: "code", value: token.slice(1, -1) }
-    );
+    if (token.startsWith("[")) {
+      const close = token.indexOf("](");
+      parts.push({ type: "link", value: token.slice(1, close), href: token.slice(close + 2, -1) });
+    } else {
+      parts.push(
+        token.startsWith("**")
+          ? { type: "bold", value: token.slice(2, -2) }
+          : { type: "code", value: token.slice(1, -1) }
+      );
+    }
 
     cursor = index + token.length;
   }
