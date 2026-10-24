@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { AGENT_TOOLS, getToolByName } from "./tools";
 import { getChatCompletion as defaultGetChatCompletion } from "./llm/client";
-import { AGENT_SYSTEM_PROMPT } from "./llm/prompts";
+import { AGENT_SYSTEM_PROMPT, dateContext } from "./llm/prompts";
+import { LLMError } from "./errors";
 import { LLMMessage, ToolResult } from "./types";
 import { AgentRequest, AgentResponse, AgentToolCallTrace, AgentMessage } from "@/lib/types/agent";
 
-// The LLM call is injectable (defaulting to the real Groq-backed client) so
+// The LLM call is injectable (defaulting to the real provider chain) so
 // the tool-calling loop itself can be exercised in tests without making a
 // real network call. Callers outside tests never need to pass `deps`.
 export interface RunAgentDeps {
@@ -14,6 +15,10 @@ export interface RunAgentDeps {
   now?: () => number;
   /** Overall budget for gathering data, in ms (default AGENT_BUDGET_MS). */
   budgetMs?: number;
+  /** Hard limit for the whole request, in ms (default AGENT_DEADLINE_MS). */
+  deadlineMs?: number;
+  /** Longest one tool may run, in ms (default TOOL_TIMEOUT_MS). */
+  toolTimeoutMs?: number;
 }
 
 /**
@@ -22,7 +27,34 @@ export interface RunAgentDeps {
  * A live two-stock comparison took 83s, and one attempt passed 90s, before
  * this existed.
  */
-export const AGENT_BUDGET_MS = 60_000;
+export const AGENT_BUDGET_MS = 30_000;
+
+/**
+ * The whole request, final answer included, ends within this. The browser
+ * gives up at 65 s (lib/agent/client/request.ts) and the route allows 60 s
+ * (maxDuration), so a slow provider now produces a partial answer from the
+ * data already fetched instead of "took too long to respond". A production
+ * follow-up ("Jio financials") hit that timeout.
+ */
+export const AGENT_DEADLINE_MS = 50_000;
+
+/** Time kept back from tool rounds for the final answer. */
+const FINAL_ANSWER_RESERVE_MS = 12_000;
+
+/** A data source that hangs is answered as unavailable after this long. */
+export const TOOL_TIMEOUT_MS = 12_000;
+
+export async function executeWithTimeout(run: () => Promise<ToolResult<unknown>>, source: string, timeoutMs: number): Promise<ToolResult<unknown>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ToolResult<unknown>>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, data: null, source, fetchedAt: new Date().toISOString() }), timeoutMs);
+  });
+  try {
+    return await Promise.race([run(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // How many turns may request tools.
 //
@@ -45,9 +77,12 @@ const FALLBACK_ANSWER =
 
 function buildInitialMessages(
   history: AgentMessage[] | undefined,
-  message: string
+  message: string,
+  now: Date
 ): LLMMessage[] {
-  const messages: LLMMessage[] = [{ role: "system", content: AGENT_SYSTEM_PROMPT }];
+  const messages: LLMMessage[] = [{ role: "system", content: `${AGENT_SYSTEM_PROMPT}
+
+${dateContext(now)}` }];
 
   for (const entry of history ?? []) {
     messages.push({ role: entry.role, content: entry.content });
@@ -63,7 +98,8 @@ export async function runAgent(
   deps: RunAgentDeps = { getChatCompletion: defaultGetChatCompletion }
 ): Promise<AgentResponse> {
   const conversationId = request.conversationId ?? randomUUID();
-  const messages = buildInitialMessages(request.history, request.message);
+  const now = deps.now ?? Date.now;
+  const messages = buildInitialMessages(request.history, request.message, new Date(now()));
 
   const toolCallTrace: AgentToolCallTrace[] = [];
   const sources = new Set<string>();
@@ -74,9 +110,13 @@ export async function runAgent(
   // and every repeat spends a round that a comparison needs elsewhere.
   const fetched = new Map<string, ToolResult<unknown>>();
 
-  const now = deps.now ?? Date.now;
   const startedAt = now();
   const budgetMs = deps.budgetMs ?? AGENT_BUDGET_MS;
+  const deadline = startedAt + (deps.deadlineMs ?? AGENT_DEADLINE_MS);
+  const toolTimeoutMs = deps.toolTimeoutMs ?? TOOL_TIMEOUT_MS;
+  // Set when the model answered with nothing at all (gpt-oss can spend its
+  // whole output budget reasoning): it is asked once more, below.
+  let emptyReply = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (round > 0 && now() - startedAt > budgetMs) {
@@ -84,11 +124,32 @@ export async function runAgent(
       break;
     }
 
-    const completion = await deps.getChatCompletion(messages, AGENT_TOOLS);
+    let completion;
+    try {
+      completion = await deps.getChatCompletion(messages, AGENT_TOOLS, { deadline: deadline - FINAL_ANSWER_RESERVE_MS });
+    } catch (error) {
+      // A provider failure after data was gathered (usually the per-minute
+      // token limit) should not throw away what was fetched: list it instead.
+      // With nothing gathered yet there is nothing to show, so it propagates.
+      const gathered = summariseGathered(fetched);
+      if (!gathered || !(error instanceof LLMError)) throw error;
+      warnings.push("The AI service stopped responding part-way; the answer lists the data that was retrieved.");
+      return {
+        answer: gathered,
+        toolCalls: toolCallTrace,
+        sources: Array.from(sources),
+        warnings,
+        conversationId,
+      };
+    }
 
     if (!completion.toolCalls || completion.toolCalls.length === 0) {
+      if (!completion.content?.trim()) {
+        emptyReply = true;
+        break;
+      }
       return {
-        answer: completion.content?.trim() || FALLBACK_ANSWER,
+        answer: completion.content.trim(),
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
@@ -102,6 +163,7 @@ export async function runAgent(
       role: "assistant",
       content: completion.content,
       toolCalls: completion.toolCalls,
+      raw: completion.raw,
     });
 
     for (const call of completion.toolCalls) {
@@ -162,12 +224,12 @@ export async function runAgent(
           messages.push({
             role: "tool",
             toolCallId: call.id,
-            content: JSON.stringify(previously),
+            content: serialiseForModel(previously),
           });
           continue;
         }
 
-        result = await tool.execute(validation.data);
+        result = await executeWithTimeout(() => tool.execute(validation.data), tool.name, toolTimeoutMs);
         fetched.set(cacheKey, result);
       }
 
@@ -189,7 +251,7 @@ export async function runAgent(
       messages.push({
         role: "tool",
         toolCallId: call.id,
-        content: JSON.stringify(result),
+        content: serialiseForModel(result),
       });
     }
   }
@@ -209,13 +271,15 @@ export async function runAgent(
   // (Groq rejects that turn with tool_use_failed).
   messages.push({
     role: "system",
-    content:
-      "No more tool calls are possible. Answer now using only the tool results above. Where a figure was not computed by the calculate tool, give the raw values it would use and say the calculation wasn't run, rather than working it out yourself.",
+    content: emptyReply
+      ? "Your last reply was empty. Answer the user's question now in prose, using the tool results above for any figures and general knowledge for concepts. Where a figure was not computed by the calculate tool, give the raw values rather than working it out yourself."
+      : "No more tool calls are possible. Answer now using only the tool results above. Where a figure was not computed by the calculate tool, give the raw values it would use and say the calculation wasn't run, rather than working it out yourself.",
   });
 
   try {
     const finalCompletion = await deps.getChatCompletion(messages, AGENT_TOOLS, {
       toolChoice: "none",
+      deadline,
     });
     const finalAnswer = finalCompletion.content?.trim();
 
@@ -248,6 +312,46 @@ export async function runAgent(
 }
 
 /**
+ * Most characters of one tool result sent to the model (~2,000 tokens). Groq's
+ * free tier allows 8,000 tokens a minute and rejects any single request above
+ * that (413), which a 500-candle history used to cause on its own.
+ */
+export const MAX_TOOL_RESULT_CHARS = 8_000;
+
+/**
+ * A tool result as JSON, cut to MAX_TOOL_RESULT_CHARS by dropping the oldest
+ * entries of its longest list (history is ascending, so the most recent data
+ * is kept) and saying so in `truncated`. Values are never altered.
+ */
+export function serialiseForModel(result: ToolResult<unknown>, maxChars: number = MAX_TOOL_RESULT_CHARS): string {
+  let json = JSON.stringify(result);
+  if (json.length <= maxChars || !result.data || typeof result.data !== "object") return json;
+
+  const data = { ...(result.data as Record<string, unknown>) };
+  const isList = Array.isArray(result.data);
+  const listKey = isList
+    ? null
+    : Object.keys(data)
+        .filter((key) => Array.isArray(data[key]))
+        .sort((a, b) => JSON.stringify(data[b]).length - JSON.stringify(data[a]).length)[0];
+  const original = (isList ? result.data : listKey ? data[listKey] : null) as unknown[] | null;
+  if (!original || original.length < 2) return json;
+
+  let keep = original.length;
+  while (keep > 1) {
+    keep = Math.max(1, Math.floor(keep * 0.7));
+    const slice = original.slice(-keep);
+    const note = `Only the last ${keep} of ${original.length} entries are shown, to fit the AI service's size limit.`;
+    const shrunk = isList
+      ? { ...result, data: slice, truncated: note }
+      : { ...result, data: { ...data, [listKey as string]: slice, truncated: note } };
+    json = JSON.stringify(shrunk);
+    if (json.length <= maxChars) break;
+  }
+  return json;
+}
+
+/**
  * When no final answer could be generated, the facts already retrieved are
  * still real: list the prices and completed calculations verbatim (no model
  * involved), so the user gets them instead of only an apology. Null when
@@ -264,6 +368,20 @@ export function summariseGathered(fetched: Map<string, ToolResult<unknown>>): st
     if (tool === "get_price" && typeof data.price === "number") {
       const change = typeof data.changePercent === "number" ? ` (${data.changePercent >= 0 ? "+" : ""}${data.changePercent.toFixed(2)}% today)` : "";
       lines.push(`- ${String(data.symbol ?? "")}: ${data.price} ${String(data.currency ?? "")}${change}`);
+    }
+    if (tool === "get_market_quotes" && Array.isArray(data.quotes)) {
+      for (const q of data.quotes as Record<string, unknown>[]) {
+        if (typeof q.price !== "number") continue;
+        const unit = q.unit === "percent" ? "%" : q.currency ? ` ${String(q.currency)}` : "";
+        const change = typeof q.changePercent === "number" ? ` (${q.changePercent >= 0 ? "+" : ""}${q.changePercent.toFixed(2)}% today)` : "";
+        lines.push(`- ${String(q.name ?? q.symbol)}: ${q.price}${unit}${change}`);
+      }
+    }
+    if (tool === "get_performance" && Array.isArray(data.rows)) {
+      for (const row of data.rows as Record<string, unknown>[]) {
+        if (row.status !== "ok" || typeof row.returnPct !== "number") continue;
+        lines.push(`- ${String(row.symbol)}: ${row.startClose} (${String(row.startDate)}) → ${row.endClose} (${String(row.endDate)}), ${row.returnPct >= 0 ? "+" : ""}${row.returnPct}% over ${String(data.period)}`);
+      }
     }
     if (tool === "calculate" && typeof data.rounded === "number" && Array.isArray(data.inputs)) {
       const unit = data.unit === "percent" ? "%" : "";

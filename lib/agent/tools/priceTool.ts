@@ -25,7 +25,7 @@ export function isValidPrice(quote: AssetQuote | null | undefined): quote is Ass
 export const priceTool: ToolDefinition<PriceToolArgs, AssetQuote> = {
   name: "get_price",
   description:
-    "Get the current/most recent quote for a stock ticker symbol: price, change, change percent, open, high, low, previous close, volume, currency. Covers Indian symbols (e.g. TCS.NS, INFY.NS, via Upstox) as well as US/global symbols. Use this for 'current price', 'how is <symbol> doing today' type questions.",
+    "Latest quote for one stock ticker (Indian .NS via Upstox, or US/global): price, change, change %, open, high, low, previous close, volume, currency.",
   parameters: {
     type: "object",
     properties: {
