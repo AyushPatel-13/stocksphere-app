@@ -10,6 +10,14 @@ test("figures from the data count as grounded, allowing for rounding and display
   assert.deepEqual(s, { checked: 6, grounded: 6, ungrounded: [] });
 });
 
+test("regression: a market cap in the wrong unit is ungrounded; the right one in any unit is grounded", () => {
+  const reliance = [JSON.stringify({ marketCap: 16103642434460 })];
+  assert.deepEqual(scoreGrounding("Market cap ₹16,103.6 Cr.", reliance).ungrounded, ["16,103.6 Cr"]);
+  assert.deepEqual(scoreGrounding("Market cap ₹16.10 L Cr, or 16,103.6 bn.", reliance), { checked: 2, grounded: 2, ungrounded: [] });
+  // Display strings in the evidence count at their own scale.
+  assert.deepEqual(scoreGrounding("Market cap ₹16.1 lakh crore.", [JSON.stringify({ marketCapDisplay: "₹16.10 L Cr" })]).ungrounded, []);
+});
+
 test("a figure that isn't in the data is reported", () => {
   const s = scoreGrounding("TCS has a P/E of 25.3 and ROE 41%.", data);
   assert.deepEqual(s.ungrounded, ["25.3", "41"]);

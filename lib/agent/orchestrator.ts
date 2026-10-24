@@ -3,6 +3,7 @@ import { AGENT_TOOLS, getToolByName } from "./tools";
 import { getChatCompletion as defaultGetChatCompletion } from "./llm/client";
 import { AGENT_SYSTEM_PROMPT, dateContext } from "./llm/prompts";
 import { LLMError } from "./errors";
+import { UNSOURCED_NOTE, findUnsourcedComparisons, marketCapRefs, verifyMarketCaps } from "./guards";
 import { LLMMessage, ToolResult } from "./types";
 import { AgentRequest, AgentResponse, AgentToolCallTrace, AgentMessage } from "@/lib/types/agent";
 
@@ -149,7 +150,7 @@ export async function runAgent(
         break;
       }
       return {
-        answer: completion.content.trim(),
+        answer: checkAnswer(completion.content.trim(), fetched, warnings),
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
@@ -285,7 +286,7 @@ export async function runAgent(
 
     if (finalAnswer) {
       return {
-        answer: finalAnswer,
+        answer: checkAnswer(finalAnswer, fetched, warnings),
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
@@ -309,6 +310,29 @@ export async function runAgent(
     warnings,
     conversationId,
   };
+}
+
+/**
+ * Checks a final answer against the tool results it was written from (see
+ * lib/agent/guards.ts): a market cap that matches no source is corrected or
+ * marked, and a comparison with an index or average figure no tool returned
+ * gets a visible "unverified" note. Only when tools ran — a concept
+ * explanation with an illustrative example has nothing to check against.
+ */
+export function checkAnswer(answer: string, fetched: Map<string, ToolResult<unknown>>, warnings: string[]): string {
+  const results = Array.from(fetched.values()).filter((r) => r.ok && r.data);
+  if (results.length === 0) return answer;
+
+  const caps = verifyMarketCaps(answer, results.flatMap((r) => marketCapRefs(r.data)));
+  let checked = caps.answer;
+  if (caps.corrected) warnings.push(`Corrected ${caps.corrected} market-cap figure(s) that didn't match the source.`);
+  if (caps.flagged) warnings.push(`Marked ${caps.flagged} market-cap figure(s) that didn't match the source.`);
+
+  if (findUnsourcedComparisons(checked, results.map((r) => JSON.stringify(r.data))).length) {
+    checked = `${checked}\n\n${UNSOURCED_NOTE}`;
+    warnings.push("The answer compared against a figure that no tool returned.");
+  }
+  return checked;
 }
 
 /**
@@ -395,6 +419,6 @@ export function summariseGathered(fetched: Map<string, ToolResult<unknown>>): st
     "",
     ...lines,
     "",
-    "Prices are the latest StockSphere had and may be delayed.",
+    "Prices are the latest StockSphere had and may be delayed. This is general information, not investment advice.",
   ].join("\n");
 }

@@ -40,30 +40,57 @@ function isDataFigure(value: number, raw: string): boolean {
   return true;
 }
 
-function matches(value: number, data: number[]): boolean {
-  const target = Math.abs(value);
-  return data.some((d) => {
-    const ref = Math.abs(d);
-    if (Math.abs(target - ref) <= 0.051) return true;
-    if (ref > 0 && Math.abs(target - ref) / ref <= 0.005) return true;
-    // Scaled display: ₹16.10 L Cr from 16103642434460, or 4.67 lakh crore.
-    for (const scale of [1e5, 1e7, 1e9, 1e12, 1e3, 1e6]) {
-      if (ref > 0 && Math.abs(target * scale - ref) / ref <= 0.006) return true;
+/** A figure and, when one follows it, its unit: "16.10 L Cr", "49,244 crore", "3.2 bn". */
+const FIGURE = /-?\d+(?:,\d{2,3})*(?:\.\d+)?(?:\s*(L(?:akh)?\.?\s*Cr(?:ore)?s?|lakh\s+crores?|crores?|Cr|trillion|trn|tn|billion|bn|million|mn)\b)?/gi;
+
+function unitScale(unit: string | undefined): number {
+  if (!unit) return 1;
+  const u = unit.trim().toLowerCase();
+  if (/^l(akh)?\.?\s*cr|^lakh\s+crore/.test(u)) return 1e12;
+  if (/^cr/.test(u)) return 1e7;
+  if (/^(trillion|trn|tn)$/.test(u)) return 1e12;
+  if (/^(billion|bn)$/.test(u)) return 1e9;
+  return 1e6;
+}
+
+/** Every value in the data: plain numbers, plus the scaled value of any number with a unit. */
+function dataValues(texts: string[]): number[] {
+  const values: number[] = [];
+  for (const text of texts) {
+    for (const m of text.matchAll(FIGURE)) {
+      const plain = Number(m[0].match(/-?\d+(?:,\d{2,3})*(?:\.\d+)?/)![0].replace(/,/g, ""));
+      if (!Number.isFinite(plain)) continue;
+      values.push(plain);
+      if (m[1]) values.push(plain * unitScale(m[1]));
     }
-    return false;
+  }
+  return values;
+}
+
+function near(target: number, values: number[], relative: number): boolean {
+  return values.some((d) => {
+    const ref = Math.abs(d);
+    return Math.abs(target - ref) <= 0.051 || (ref > 0 && Math.abs(target - ref) / ref <= relative);
   });
 }
 
+/**
+ * A figure with a unit must match the data at that scale, so "₹16,103.6 Cr"
+ * for a ₹16.10 lakh crore company is caught (it once passed when any scale
+ * was accepted); a bare figure must match a plain number.
+ */
 export function scoreGrounding(answer: string, toolData: string[]): GroundingScore {
-  const data = toolData.flatMap(numbersIn);
+  const data = dataValues(toolData);
   const claims = claimText(answer);
   const ungrounded: string[] = [];
   let checked = 0;
-  for (const m of claims.matchAll(/-?\d+(?:,\d{2,3})*(?:\.\d+)?/g)) {
-    const value = Number(m[0].replace(/,/g, ""));
-    if (!Number.isFinite(value) || !isDataFigure(value, m[0])) continue;
+  for (const m of claims.matchAll(FIGURE)) {
+    const raw = m[0].match(/-?\d+(?:,\d{2,3})*(?:\.\d+)?/)![0];
+    const value = Number(raw.replace(/,/g, ""));
+    if (!Number.isFinite(value) || (!m[1] && !isDataFigure(value, raw))) continue;
     checked++;
-    if (!matches(value, data)) ungrounded.push(m[0]);
+    const ok = m[1] ? near(Math.abs(value) * unitScale(m[1]), data, 0.006) : near(Math.abs(value), data, 0.005);
+    if (!ok) ungrounded.push(m[0].trim());
   }
   return { checked, grounded: checked - ungrounded.length, ungrounded };
 }

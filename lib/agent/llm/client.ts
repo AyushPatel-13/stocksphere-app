@@ -15,6 +15,13 @@ export { fallbackModel };
 
 /** Longest a single model call may take before the next provider is tried. */
 export const PROVIDER_TIMEOUT_MS = 20_000;
+/**
+ * A long write-up with no tools (a research note) may take longer: in the
+ * October 2026 benchmark Gemini Flash-Lite needed just over 20 s for one and
+ * was cut off, leaving only a data digest. Still bounded by the request's
+ * deadline, and the chain still moves on after it.
+ */
+export const LONG_ANSWER_TIMEOUT_MS = 35_000;
 /** A call isn't started with less time than this left before the deadline. */
 const MIN_CALL_MS = 3_000;
 /** How long a rate-limited provider is skipped when it doesn't say. */
@@ -128,7 +135,7 @@ export async function getChatCompletion(
       try {
         const result = await provider.complete(messages, tools, {
           toolChoice: options.toolChoice ?? "auto",
-          timeoutMs: Math.min(PROVIDER_TIMEOUT_MS, remaining),
+          timeoutMs: Math.min(options.longAnswer ? LONG_ANSWER_TIMEOUT_MS : PROVIDER_TIMEOUT_MS, remaining),
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           longAnswer: options.longAnswer ?? false,
         });

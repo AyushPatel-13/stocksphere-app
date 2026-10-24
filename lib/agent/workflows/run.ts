@@ -7,6 +7,7 @@ import { executeWithTimeout, TOOL_TIMEOUT_MS } from "../orchestrator";
 import { getToolByName } from "../tools";
 import type { ToolResult } from "../types";
 import type { AgentResponse, AgentToolCallTrace } from "@/lib/types/agent";
+import { UNSOURCED_NOTE, findUnsourcedComparisons, marketCapRefs, verifyMarketCaps, type MarketCapRef } from "../guards";
 import { ensureDisclaimer, renderCitations, serialiseEvidence, type Evidence } from "./citations";
 import type { Workflow } from "./detect";
 import { analysePortfolio, type HoldingInput, type PriceInput } from "./portfolio";
@@ -56,6 +57,8 @@ class Gatherer {
   trace: AgentToolCallTrace[] = [];
   sources = new Set<string>();
   missing: string[] = [];
+  /** Raw market caps from the sources, to check the answer against. */
+  marketCaps: MarketCapRef[] = [];
 
   constructor(private readonly deps: WorkflowDeps) {}
 
@@ -95,7 +98,12 @@ function addPrice(g: Gatherer, r: ToolResult<unknown>, label: string) {
 
 function addFinancials(g: Gatherer, r: ToolResult<unknown>, label: string) {
   if (!r.ok || !r.data) return g.missing.push(`valuation and ratios for ${label}`);
-  g.add({ title: `Valuation and ratios, ${label} (each metric's own source in "sources")`, source: r.source, fetchedAt: r.fetchedAt, data: r.data });
+  g.marketCaps.push(...marketCapRefs(r.data));
+  // The model sees market cap only as the source's display value ("₹16.10 L Cr"):
+  // a raw rupee count invited it to convert units, and it once got Reliance 100× wrong.
+  const { marketCap, ...rest } = r.data as Record<string, unknown>;
+  const data = typeof rest.marketCapDisplay === "string" ? rest : { marketCap, ...rest };
+  g.add({ title: `Valuation and ratios, ${label} (each metric's own source in "sources")`, source: r.source, fetchedAt: r.fetchedAt, data });
 }
 
 function addPerformance(g: Gatherer, r: ToolResult<unknown>, period: string) {
@@ -231,6 +239,12 @@ async function gatherPortfolio(g: Gatherer, ctx: WorkflowContext, deps: Workflow
   return "your portfolio";
 }
 
+/** Puts a note before the Sources list (or at the end). */
+function withNote(answer: string, note: string): string {
+  const at = answer.indexOf("\n\n**Sources**");
+  return at === -1 ? `${answer}\n\n${note}` : `${answer.slice(0, at)}\n\n${note}${answer.slice(at)}`;
+}
+
 /** What the member sees if the write-up call fails: the data itself, verbatim. */
 function evidenceDigest(evidence: Evidence[]): string {
   const lines = evidence.map((e) => `- ${e.title} — ${e.source}${e.url ? ` ([link](${e.url}))` : ""}`);
@@ -288,6 +302,14 @@ export async function runWorkflow(
     // The disclaimer is guaranteed here rather than trusted to the model; a
     // note cut off by the provider's output limit loses it otherwise.
     report.answer = ensureDisclaimer(report.answer, text);
+    const caps = verifyMarketCaps(report.answer, g.marketCaps);
+    report.answer = caps.answer;
+    if (caps.corrected) warnings.push(`Corrected ${caps.corrected} market-cap figure(s) that didn't match the source.`);
+    if (caps.flagged) warnings.push(`Marked ${caps.flagged} market-cap figure(s) that didn't match the source.`);
+    if (findUnsourcedComparisons(report.answer, [serialiseEvidence(g.evidence)]).length) {
+      report.answer = withNote(report.answer, UNSOURCED_NOTE);
+      warnings.push("The note compared against a figure that wasn't in the data.");
+    }
     if (report.removedUrls) warnings.push(`Removed ${report.removedUrls} link(s) that didn't come from a retrieved source.`);
     if (report.unknownCitations) warnings.push(`Removed ${report.unknownCitations} citation(s) to evidence that doesn't exist.`);
     if (report.cited.length === 0) warnings.push("The note didn't cite its evidence; treat its figures with care.");

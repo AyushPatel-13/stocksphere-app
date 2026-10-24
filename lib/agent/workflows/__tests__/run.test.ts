@@ -186,3 +186,38 @@ test("cost: a full research request stays well inside Groq's 8,000 tokens a minu
   // ~4 characters per token: under 2,000 prompt tokens leaves room for a 2,048-token answer.
   assert.ok(chars < 8_000, `prompt was ${chars} characters`);
 });
+
+// --- regressions from the October 2026 provider benchmark -------------------
+
+const WITH_CAP = { get_financials: () => ok({ pe: 18.27, marketCap: 16103642434460, marketCapDisplay: "₹16.10 L Cr", currency: "INR", sources: { pe: "Upstox" } }, "StockSphere Financials Service") };
+
+test("regression: the model sees market cap only as the display value, never the raw rupee count", async () => {
+  const h = harness({ tools: WITH_CAP });
+  await runWorkflow({ type: "research", query: "RELIANCE" }, "Research Reliance", CTX, h.deps);
+  const user = String(h.seen[0].messages[1].content);
+  assert.match(user, /"marketCapDisplay":"₹16.10 L Cr"/);
+  assert.doesNotMatch(user, /16103642434460/);
+});
+
+test("regression: a market cap in the wrong unit is corrected to the source's value", async () => {
+  const h = harness({ tools: WITH_CAP, reply: "## Key data\n| Market Capitalisation | ₹16,103.6 Cr | 31 Mar 2026 | [E3] |\nThis is general information, not investment advice." });
+  const result = (await runWorkflow({ type: "research", query: "RELIANCE" }, "Research Reliance", CTX, h.deps))!;
+  assert.match(result.answer, /\| Market Capitalisation \| ₹16\.10 L Cr \|/);
+  assert.doesNotMatch(result.answer, /16,103\.6/);
+  assert.ok(result.warnings.some((w) => /Corrected 1 market-cap/.test(w)));
+});
+
+test("regression: a comparison with an index average that wasn't fetched gets an unverified note", async () => {
+  const h = harness({ reply: "## Summary\nP/E 17.64 [E3] is moderate versus the Nifty IT index, which is around 20–22.\nThis is general information, not investment advice." });
+  const result = (await runWorkflow({ type: "research", query: "TCS" }, "Research TCS", CTX, h.deps))!;
+  assert.match(result.answer, /comparison figure above[\s\S]*unverified[\s\S]*\*\*Sources\*\*/);
+  assert.ok(result.warnings.some((w) => /wasn't in the data/.test(w)));
+});
+
+test("the prompts forbid unfetched averages and unit conversion", async () => {
+  const h = harness();
+  await runWorkflow({ type: "research", query: "TCS" }, "Research TCS", CTX, h.deps);
+  const system = String(h.seen[0].messages[0].content);
+  assert.match(system, /Never quote or compare against index, sector, peer or market averages that aren't in EVIDENCE/);
+  assert.match(system, /convert units/);
+});
