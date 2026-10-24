@@ -58,7 +58,7 @@ test("regression: 'What is F&O ban in the Indian market?' is offered only the gl
       },
     }
   );
-  assert.deepEqual(offered[0], ["get_app_help", "get_market_term"]);
+  assert.deepEqual(offered[0], ["get_app_help", "get_fo_ban_list", "get_market_term"]);
   assert.deepEqual(result.toolCalls.map((c) => [c.tool, c.ok]), [["get_market_term", true]]);
   assert.match(result.answer, /95%/);
 });
@@ -144,4 +144,58 @@ test("regression: an index-move question isn't offered the news tool (it only ta
 
 test("regression: 'today' on a weekend must be described as the latest session with its date", () => {
   assert.match(AGENT_SYSTEM_PROMPT, /if the user says "today" but the figures' as-of date is an earlier session/);
+});
+
+// --- "no data in StockSphere resources" for the F&O ban ------------------------
+
+const NSE_BAN_PAGE = "https://www.nseindia.com/static/products-services/equity-derivatives-risk-management-sec-ban";
+const REFUSAL = "I'm sorry, but I don't have any data on Fand O ban in the StockSphere resources.";
+
+test("regression: F&O ban phrasings without 'what is' still get the concept path, not news", () => {
+  for (const q of ["F&O ban", "tell me about F&O ban", "f&o ban in indian market", "Why is a stock put in F&O ban?", "F and O ban kya hai", "FnO ban rules"]) {
+    assert.deepEqual(names(toolsFor(q)), ["get_app_help", "get_fo_ban_list", "get_market_term"], q);
+  }
+  for (const q of ["Which stocks are in the F&O ban today?", "current F&O ban list", "Is SAIL in the F&O ban?"]) {
+    assert.ok(names(toolsFor(q)).includes("get_fo_ban_list"), q);
+  }
+});
+
+test("regression: when internal lookups find nothing and the model refuses, the answer explains the F&O ban and links NSE", async () => {
+  let call = 0;
+  const result = await runAgent({ message: "What is F and O ban?" }, {
+    getChatCompletion: async () => {
+      call += 1;
+      // The internal knowledge base has nothing under this wording…
+      if (call === 1) return { content: null, toolCalls: [{ id: "g", name: "get_market_term", arguments: '{"term":"StockSphere resources"}' }] };
+      // …and the model reports that as "no data".
+      return answer(REFUSAL);
+    },
+  });
+  assert.doesNotMatch(result.answer, /don't have any data/);
+  assert.match(result.answer, /General information/);
+  assert.match(result.answer, /95% of its market-wide position limit/);
+  assert.doesNotMatch(result.answer, /get_fo_ban_list/);
+  assert.equal(result.links?.[0]?.href, NSE_BAN_PAGE);
+  assert.equal(result.links?.[0]?.label, "Check Today's NSE F&O Ban List");
+});
+
+test("regression: an F&O ban question still gets the explanation and NSE link when the AI service fails", async () => {
+  const result = await runAgent({ message: "tell me about F&O ban" }, {
+    getChatCompletion: async () => { throw new LLMError("The AI service didn't respond. Please try again shortly."); },
+  });
+  assert.match(result.answer, /95% of its market-wide position limit/);
+  assert.equal(result.links?.[0]?.href, NSE_BAN_PAGE);
+  assert.ok(result.warnings?.some((w) => /glossary/.test(w)));
+});
+
+test("a real explanation from the model is kept, not replaced by the glossary", async () => {
+  const explanation = "**General information** — the F&O ban stops fresh positions in a stock once open interest passes 95% of MWPL; it lifts below 80%.";
+  const result = await runAgent({ message: "What is F&O ban?" }, { getChatCompletion: async () => answer(explanation) });
+  assert.equal(result.answer, explanation);
+});
+
+test("a 'which stocks are in the ban' question is never answered from the glossary", async () => {
+  const result = await runAgent({ message: "Which stocks are in the F&O ban today?" }, { getChatCompletion: async () => answer("NSE's list couldn't be fetched right now.") });
+  assert.equal(result.answer, "NSE's list couldn't be fetched right now.");
+  assert.equal(result.links?.[0]?.href, NSE_BAN_PAGE);
 });

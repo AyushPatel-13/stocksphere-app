@@ -1,6 +1,7 @@
 import { FO_BAN_URL } from "@/lib/apis/nseFoBan";
 import type { AgentResponse, AgentToolCallTrace } from "@/lib/types/agent";
 import { OFFICIAL, pageFor, pageLink, safeLink, stockPath, type AgentLink } from "./links";
+import { FO_BAN_QUESTION } from "./routing";
 import type { ToolResult } from "./types";
 
 /**
@@ -20,7 +21,6 @@ import type { ToolResult } from "./types";
 export type ToolEvidence = { tool: string; input: Record<string, unknown>; ok: boolean; data: unknown };
 
 const MAX_LINKS = 6;
-const FO_BAN_QUESTION = /\b(?:f\s*&\s*o|f\s*and\s*o|fno|futures\s*(?:and|&)\s*options)\b[^?]*\bban\b|\bban\s*(?:list|period)\b|\bmwpl\b/i;
 const SYMBOL_TOOLS = new Set(["get_price", "get_company", "get_financials", "get_news", "get_historical"]);
 
 function formatTime(iso: string): string {

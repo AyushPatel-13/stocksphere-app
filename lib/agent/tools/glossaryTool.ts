@@ -39,7 +39,7 @@ const TERMS = Object.keys(GLOSSARY) as Term[];
  * that the model then reported as "no entry defining F&O ban".
  */
 const ALIASES: Record<Term, RegExp> = {
-  fo_ban: /\b(?:f\s*&\s*o|f\s*and\s*o|fno|futures\s*(?:and|&)\s*options|derivatives?)\b.*\bban\b|\bban\s*(?:list|period)\b|\bmwpl\b|^fo_?ban$/i,
+  fo_ban: /\b(?:f\s*&\s*o|f\s*(?:and|n)\s*o|fno|futures\s*(?:and|&)\s*options|derivatives?)\b.*\bban\b|\bban\s*(?:list|period)\b|\bmwpl\b|^fo_?ban$/i,
   circuit_limits: /\bcircuits?\b|\bprice\s*bands?\b|^circuit_limits$/i,
   settlement: /\bsettlement\b|\bt\s*\+\s*[01]\b/i,
   asm_gsm: /\basm\b|\bgsm\b|\bsurveillance\b|^asm_gsm$/i,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { toolsFor } from "./routing";
+import { isConceptQuestion, isFoBanConceptQuestion, toolsFor } from "./routing";
+import { GLOSSARY, matchTerm } from "./tools/glossaryTool";
 import { buildLinks, evidenceFromFetched } from "./navigation";
 import { getChatCompletion as defaultGetChatCompletion } from "./llm/client";
 import { AGENT_SYSTEM_PROMPT, dateContext } from "./llm/prompts";
@@ -104,8 +105,15 @@ export async function runAgent(
   const messages = buildInitialMessages(request.history, request.message, new Date(now()));
   // A concept question is offered only the glossary and app guide (lib/agent/routing.ts).
   const tools = toolsFor(request.message);
+  // A glossary concept is never answered with "no data": the glossary's own
+  // explanation replaces a refusal, a give-up or a failed provider call.
+  const conceptAnswer = conceptFallback(request.message);
   // Every answer carries the pages and official sources its data points to.
-  const finish = (response: AgentResponse): AgentResponse => ({ ...response, links: buildLinks(request.message, evidenceFromFetched(fetched)) });
+  const finish = (response: AgentResponse): AgentResponse => ({
+    ...response,
+    answer: conceptAnswer && isNoDataAnswer(response.answer) ? conceptAnswer : response.answer,
+    links: buildLinks(request.message, evidenceFromFetched(fetched)),
+  });
 
   const toolCallTrace: AgentToolCallTrace[] = [];
   const sources = new Set<string>();
@@ -138,6 +146,10 @@ export async function runAgent(
       // token limit) should not throw away what was fetched: list it instead.
       // With nothing gathered yet there is nothing to show, so it propagates.
       const gathered = summariseGathered(fetched);
+      if (conceptAnswer && error instanceof LLMError) {
+        warnings.push("The AI service didn't respond, so this is StockSphere's glossary entry.");
+        return finish({ answer: conceptAnswer, toolCalls: toolCallTrace, sources: Array.from(sources), warnings, conversationId });
+      }
       if (!gathered || !(error instanceof LLMError)) throw error;
       warnings.push("The AI service stopped responding part-way; the answer lists the data that was retrieved.");
       return finish({
@@ -331,6 +343,36 @@ export const NO_DATA_NOTE =
   "No data was available from this source right now. This is missing data, not evidence that a concept doesn't exist: say what couldn't be verified, and still explain any concept from general knowledge.";
 export const UNAVAILABLE_TOOL_NOTE =
   "That tool isn't available for this question. It says nothing about the topic: answer from general knowledge or with the tools you have.";
+
+/**
+ * "I'm sorry, but I don't have any data on F and O ban in the StockSphere
+ * resources" — a reply that treats a concept as missing data. Only short
+ * replies count: a full explanation that mentions one missing figure is kept.
+ */
+const NO_DATA_REFUSAL =
+  /\b(?:(?:don't|do not|doesn't|does not|didn't|did not) (?:have|find|hold|contain) (?:any )?(?:data|information|details|entry|entries|records?)|no (?:data|information|details|entry|entries|records?)\b[^.]{0,40}\b(?:on|about|for|defining|regarding|available|in)|(?:couldn't|could not|can't|cannot|unable to) find (?:any )?(?:data|information|details))/i;
+
+export function isNoDataAnswer(answer: string): boolean {
+  return answer === FALLBACK_ANSWER || (answer.length < 600 && NO_DATA_REFUSAL.test(answer));
+}
+
+/**
+ * The glossary's explanation for a concept question about one of its terms,
+ * without the internal tool names. For the F&O ban it points to NSE's page,
+ * which every such answer links (lib/agent/navigation.ts).
+ */
+export function conceptFallback(message: string): string | null {
+  const question = message.replace(/^\[Context:[^\]]*\]\s*/, "");
+  if (!isConceptQuestion(question) && !isFoBanConceptQuestion(question)) return null;
+  const term = matchTerm(question);
+  if (!term) return null;
+  const text = GLOSSARY[term].replace(/\s*[^.]*\bget_[a-z_]+\b[^.]*\.?/g, "").trim();
+  const official =
+    term === "fo_ban"
+      ? "\n\nNSE publishes the ban list every day; its file is for the next trade date, so check the date on it. Use **Check Today's NSE F&O Ban List** below for the official list."
+      : "";
+  return `**General information**\n\n${text}${official}`;
+}
 
 export function invalidArgumentsNote(issue: string): string {
   return `The request to this tool was invalid (${issue}). That is a request error, not missing information about the topic: retry with valid arguments, or answer from general knowledge where that fits.`;

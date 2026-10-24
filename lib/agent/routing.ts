@@ -61,9 +61,31 @@ export function isConceptQuestion(message: string): boolean {
   return true;
 }
 
+/** Any mention of the F&O ban: "F&O ban", "F and O ban", "FnO ban", "MWPL"… */
+export const FO_BAN_QUESTION =
+  /\b(?:f\s*&\s*o|f\s*(?:and|n)\s*o|fno|futures\s*(?:and|&)\s*options)\b[^?]*\bban\b|\bban\s*(?:list|period)\b|\bmwpl\b/i;
+
+/** Asks which securities are in the ban, not what the ban is. */
+const CURRENT_BAN =
+  /\b(?:today|todays|today's|tomorrow|now|currently|current|latest|right now|this week|list|which (?:stocks|shares|securities|companies|scrips)|banned (?:stocks|shares)|stocks in|shares in|is [A-Za-z&.-]+ in)\b/i;
+
+/**
+ * "F&O ban", "tell me about F&O ban", "Why is a stock put in F&O ban?" — the
+ * ban as a concept, however it's phrased. isConceptQuestion needs a "what
+ * is…" lead, so these used to get every tool, news included, and could end
+ * in "no data on F&O ban". "Which stocks are in the F&O ban today?" is not
+ * one of these: it needs get_fo_ban_list.
+ */
+export function isFoBanConceptQuestion(message: string): boolean {
+  const text = message.replace(CONTEXT_PREFIX, "").trim();
+  return text.length <= 200 && FO_BAN_QUESTION.test(text) && !CURRENT_BAN.test(text);
+}
+
 export function toolsFor(message: string, all: ToolDefinition[] = AGENT_TOOLS): ToolDefinition[] {
-  if (isConceptQuestion(message)) {
-    return all.filter((tool) => (CONCEPT_TOOL_NAMES as readonly string[]).includes(tool.name));
+  if (isConceptQuestion(message) || isFoBanConceptQuestion(message)) {
+    // The glossary's F&O entry names get_fo_ban_list; leaving it out made the model call it anyway and the provider reject the turn.
+    const allowed: readonly string[] = FO_BAN_QUESTION.test(message) ? [...CONCEPT_TOOL_NAMES, "get_fo_ban_list"] : CONCEPT_TOOL_NAMES;
+    return all.filter((tool) => allowed.includes(tool.name));
   }
   // An index move gets index levels and breadth; get_news takes a stock symbol and returns nothing for "NIFTY".
   if (isIndexMoveQuestion(message)) return all.filter((tool) => tool.name !== "get_news");
