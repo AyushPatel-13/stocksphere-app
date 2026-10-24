@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { EmptyState, PageHeader, PageShell, StatCard } from "@/components/ui/Page";
+import { ipoCommunityPath } from "@/lib/community/paths";
 import { DEMAND_BANDS, DEMAND_DEFINITION, type DemandLevel, type IpoSection } from "@/lib/services/ipoMetrics";
 import type { GmpStatus, IpoBoardData, IpoNewsData, IpoNewsItem, IpoRow, SourceStatus } from "@/lib/services/ipo";
 
@@ -220,6 +222,13 @@ function IpoCard({ row, board, news }: { row: IpoRow; board: IpoBoardData; news:
         <div className="flex flex-col items-start gap-1 sm:items-end">
           <Chip className={DEMAND_CLASS[row.demand.level]}>{row.demand.label}</Chip>
           <span className="text-[11px] text-[#777]">{row.demand.basis}</span>
+          <Link
+            href={ipoCommunityPath(row.id)}
+            aria-label={`${row.name} community`}
+            className="mt-1 inline-flex items-center gap-1 rounded-full border border-[#2a2a2a] px-3 py-1 text-[12px] font-medium text-[#ddd] transition-colors hover:border-[#22c55e]/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e]/40"
+          >
+            💬 Community
+          </Link>
         </div>
       </header>
 

@@ -15,6 +15,7 @@ import type { PostView } from "@/lib/community/types";
 export default function Composer({
   user,
   symbol,
+  ipoId,
   label,
   parentId,
   placeholder,
@@ -23,6 +24,8 @@ export default function Composer({
 }: {
   user: CommunityUser;
   symbol?: string;
+  /** Post in this IPO's community (Upstox IPO id). */
+  ipoId?: string;
   /** Display name for the board's instrument, used in the prompt. */
   label?: string;
   parentId?: string;
@@ -67,7 +70,7 @@ export default function Composer({
     setPosting(true);
     setError(null);
 
-    const result = await publishPost({ body, sentiment: parentId ? null : sentiment, symbol, parentId });
+    const result = await publishPost({ body, sentiment: parentId ? null : sentiment, symbol, ipoId, parentId });
 
     setPosting(false);
     if ("error" in result) {
@@ -109,7 +112,7 @@ export default function Composer({
           rows={compact ? 1 : 3}
           placeholder={
             placeholder ??
-            (symbol ? `What's your view on ${label ?? symbol}?` : "Share your view. Tag stocks with $ and the ticker, e.g. $TCS")
+            (symbol || (ipoId && label) ? `What's your view on ${label ?? symbol}?` : "Share your view. Tag stocks with $ and the ticker, e.g. $TCS")
           }
           aria-label={parentId ? "Write a reply" : "Write a post"}
           className="min-h-[2.5rem] w-full resize-y bg-transparent text-[15px] leading-relaxed text-white outline-none placeholder:text-[#666]"
