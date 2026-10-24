@@ -19,6 +19,36 @@ import {
 import { formatMoney, formatVolume } from "@/lib/client/useQuotes";
 import { NIFTY_50_SYMBOLS } from "@/lib/data/instruments/india";
 import type { WatchlistRow } from "@/lib/services/watchlistRows";
+import { supabase } from "@/lib/supabase";
+import { addToWatchlist, getWatchlist } from "@/lib/watchlist";
+
+type WatchState = { status: "loading" } | { status: "signed-out" } | { status: "ready"; symbols: Set<string>; pending: Set<string>; failed: Set<string> };
+
+/** "+ Watch" on a result row: adds it to the member's watchlist once the database confirms. */
+function WatchCell({ symbol, state, onAdd }: { symbol: string; state: WatchState; onAdd: (symbol: string) => void }) {
+  const base = "rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e]/40";
+  if (state.status === "loading") return <span className="text-xs text-[#555]">…</span>;
+  if (state.status === "signed-out") {
+    return (
+      <Link href="/login" className={`${base} border-[#2a2a2a] text-[#aaa] hover:text-white`} aria-label={`Sign in to add ${symbol} to your watchlist`}>
+        + Watch
+      </Link>
+    );
+  }
+  if (state.symbols.has(symbol)) return <span className="text-xs text-[#4ade80]">✓ Watching</span>;
+  const pending = state.pending.has(symbol);
+  return (
+    <button
+      type="button"
+      onClick={() => onAdd(symbol)}
+      disabled={pending}
+      aria-label={`Add ${symbol} to your watchlist`}
+      className={`${base} ${state.failed.has(symbol) ? "border-red-500/40 text-red-300" : "border-[#2a2a2a] text-[#ddd] hover:border-[#22c55e]/60 hover:text-[#4ade80]"} disabled:opacity-50`}
+    >
+      {pending ? "Adding…" : state.failed.has(symbol) ? "Retry" : "+ Watch"}
+    </button>
+  );
+}
 
 /**
  * Screener over the NIFTY 50 and 20 US large caps: day change, 52-week
@@ -114,6 +144,42 @@ export default function ScreenerPage() {
       window.clearTimeout(timer);
     };
   }, [attempt]);
+
+  const [watch, setWatch] = useState<WatchState>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) {
+        if (!cancelled) setWatch({ status: "signed-out" });
+        return;
+      }
+      try {
+        const rows = await getWatchlist();
+        if (!cancelled) setWatch({ status: "ready", symbols: new Set(rows.map((r) => String(r.symbol).toUpperCase())), pending: new Set(), failed: new Set() });
+      } catch {
+        // Unknown membership: let them try; the database rejects nothing harmful.
+        if (!cancelled) setWatch({ status: "ready", symbols: new Set(), pending: new Set(), failed: new Set() });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function addWatch(symbol: string) {
+    const edit = (fn: (s: Extract<WatchState, { status: "ready" }>) => Partial<Extract<WatchState, { status: "ready" }>>) =>
+      setWatch((current) => (current.status === "ready" ? { ...current, ...fn(current) } : current));
+    edit((s) => ({ pending: new Set(s.pending).add(symbol), failed: new Set([...s.failed].filter((x) => x !== symbol)) }));
+    const result = await addToWatchlist(symbol);
+    if (!result) return setWatch({ status: "signed-out" });
+    edit((s) => {
+      const pending = new Set(s.pending);
+      pending.delete(symbol);
+      return result.error ? { pending, failed: new Set(s.failed).add(symbol) } : { pending, symbols: new Set(s.symbols).add(symbol) };
+    });
+  }
 
   const results = useMemo(() => {
     if (universe.status !== "ready") return [];
@@ -264,7 +330,7 @@ export default function ScreenerPage() {
               <p className="mb-2 text-sm text-[#888]">
                 {results.length} of {universe.rows.filter((r) => r.price !== null).length} stocks match
               </p>
-              <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+              <div className="overflow-x-auto rounded-2xl border border-[#222] bg-[#111]">
                 {results.length === 0 ? (
                   <p className="px-6 py-12 text-center text-sm text-[#888]">No stocks match these filters right now.</p>
                 ) : (
@@ -275,7 +341,10 @@ export default function ScreenerPage() {
                         {header("Price", "price", "text-right")}
                         {header("1D change", "change", "text-right")}
                         {header("Volume", "volume", "hidden text-right md:table-cell")}
-                        {header("52W position", "position", "hidden text-left lg:table-cell")}
+                        {header("52W position", "position", "hidden text-left xl:table-cell")}
+                        <th className="py-3 pl-2 pr-4 text-right font-medium">
+                          <span className="sr-only">Watchlist</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -284,7 +353,7 @@ export default function ScreenerPage() {
                           <td className="py-3 pl-4 pr-3">
                             <Link href={`/stock/${encodeURIComponent(row.symbol)}`} className="flex items-center gap-3">
                               <StockAvatar symbol={row.symbol} size={32} />
-                              <span className="min-w-0">
+                              <span className="min-w-0 max-w-[11rem] sm:max-w-[16rem]">
                                 <span className="block truncate font-semibold group-hover:text-[#22c55e]">{row.symbol}</span>
                                 <span className="block truncate text-xs text-[#777]">
                                   {row.reasons.length > 0 ? `Matched: ${row.reasons.join(" · ")}` : row.name ?? ""}
@@ -295,8 +364,11 @@ export default function ScreenerPage() {
                           <td className="px-3 py-3 text-right tabular-nums">{formatMoney(row.price!, row.currency ?? (row.market === "us" ? "USD" : "INR"))}</td>
                           <td className={`px-3 py-3 text-right font-medium tabular-nums ${toneClass(row.changePercent)}`}>{absPercent(row.changePercent)}</td>
                           <td className="hidden px-3 py-3 text-right tabular-nums text-[#ccc] md:table-cell">{formatVolume(row.volume, row.currency ?? undefined)}</td>
-                          <td className="hidden w-40 px-3 py-3 lg:table-cell">
+                          <td className="hidden w-40 px-3 py-3 xl:table-cell">
                             <MiniRange low={row.fiftyTwoWeekLow} high={row.fiftyTwoWeekHigh} value={row.price} />
+                          </td>
+                          <td className="py-3 pl-2 pr-4 text-right">
+                            <WatchCell symbol={row.symbol.toUpperCase()} state={watch} onAdd={addWatch} />
                           </td>
                         </tr>
                       ))}

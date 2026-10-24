@@ -147,7 +147,15 @@ const SP_STYLES = `
   border-color: rgba(239, 68, 68, 0.3);
 }
 
-.sp-actions { margin-top: 16px; }
+.sp-actions { margin-top: 16px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.sp-alert-link {
+  margin-top: 10px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 18px; border-radius: 10px; border: 1px solid #2a2a2a;
+  background: #151515; color: #e5e5e5; font-size: 14px; font-weight: 600; text-decoration: none;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.sp-alert-link:hover { background: #1c1c1c; border-color: #3a3a3a; }
+.sp-alert-link:focus-visible { outline: 2px solid #22c55e; outline-offset: 2px; }
 
 /* ---------- sections ---------- */
 .sp-section { margin-top: 30px; }
@@ -420,6 +428,9 @@ export default async function StockPage({
 
         <div className="sp-actions">
           <WatchlistButton symbol={symbol} />
+          <Link href={`/alerts?type=stock&symbol=${encodeURIComponent(symbol)}`} className="sp-alert-link">
+            🔔 Set price alert
+          </Link>
         </div>
 
         <div className="sp-section">
