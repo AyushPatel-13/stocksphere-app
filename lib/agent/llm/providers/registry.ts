@@ -2,12 +2,13 @@ import type { LLMProvider } from "./types";
 import { chatCompletionsProvider } from "./chatCompletions";
 import { responsesProvider } from "./responses";
 import { anthropicProvider } from "./anthropic";
+import { geminiProvider } from "./gemini";
 
 /**
  * Which providers the assistant may use, in order. Free tiers first:
  *
- *   gemini      GEMINI_API_KEY      Google AI Studio free tier   (GEMINI_MODEL, default gemini-3.8-flash)
  *   groq        GROQ_API_KEY        Groq free plan               (GROQ_MODEL, then GROQ_FALLBACK_MODEL)
+ *   gemini      GEMINI_API_KEY      Google AI Studio free tier   (GEMINI_MODEL, default gemini-3.5-flash-lite)
  *   openrouter  OPENROUTER_API_KEY  OpenRouter free models       (OPENROUTER_MODEL, default openrouter/free)
  *   anthropic   ANTHROPIC_API_KEY   paid                         (ANTHROPIC_MODEL, default claude-opus-5-5)
  *   openai      OPENAI_API_KEY      paid                         (OPENAI_MODEL, default gpt-6-astra)
@@ -17,9 +18,14 @@ import { anthropicProvider } from "./anthropic";
  * out. A provider without its key is skipped, so with only GROQ_API_KEY set
  * the assistant runs on Groq alone. Model defaults were taken from each
  * provider's documentation in October 2026; override them by env var.
+ *
+ * Groq stays first, with Gemini as its fallback, until Gemini has been tested
+ * here; LLM_PROVIDERS="gemini,groq" puts Gemini first. Gemini goes through the
+ * official SDK (@google/genai); GEMINI_TRANSPORT=openai uses Google's
+ * OpenAI-compatible endpoint instead.
  */
 
-export const DEFAULT_ORDER = ["gemini", "groq", "openrouter", "anthropic", "openai", "xai"] as const;
+export const DEFAULT_ORDER = ["groq", "gemini", "openrouter", "anthropic", "openai", "xai"] as const;
 export type ProviderName = (typeof DEFAULT_ORDER)[number];
 
 type Env = Record<string, string | undefined>;
@@ -42,7 +48,13 @@ function build(name: ProviderName, env: Env): LLMProvider[] {
     case "gemini": {
       const apiKey = env.GEMINI_API_KEY;
       if (!apiKey) return [];
-      return [chatCompletionsProvider({ provider: "gemini", model: env.GEMINI_MODEL || "gemini-3.8-flash", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey })];
+      // Flash-Lite answers in about a second on the free tier; gemini-3.8-flash took
+      // 44 s in October 2026, past the chain's per-call timeout.
+      const model = env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+      if (env.GEMINI_TRANSPORT === "openai") {
+        return [chatCompletionsProvider({ provider: "gemini", model, baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey })];
+      }
+      return [geminiProvider({ model, apiKey })];
     }
     case "groq": {
       const apiKey = env.GROQ_API_KEY;

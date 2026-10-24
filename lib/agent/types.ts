@@ -80,7 +80,7 @@ export interface LLMMessage {
 export interface LLMCompletionResult {
   content: string | null;
   toolCalls: LLMToolCallRequest[] | null;
-  /** Which provider/model answered, e.g. "gemini:gemini-3.8-flash". */
+  /** Which provider/model answered, e.g. "gemini:gemini-3.5-flash-lite". */
   servedBy?: string;
   raw?: ProviderRaw;
 }

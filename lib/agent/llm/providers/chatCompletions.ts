@@ -78,9 +78,10 @@ export function chatCompletionsProvider(config: ChatCompletionsConfig): LLMProvi
       const body = {
         model: config.model,
         messages: toWireMessages(config.provider, messages),
-        tools: toWireTools(tools),
-        tool_choice: options.toolChoice,
-        max_tokens: Math.min(options.maxOutputTokens, config.maxOutputTokens ?? Infinity),
+        // A call with no tools (a research write-up) sends neither field:
+        // OpenAI-compatible APIs reject tool_choice without tools.
+        ...(tools.length ? { tools: toWireTools(tools), tool_choice: options.toolChoice } : {}),
+        max_tokens: Math.min(options.maxOutputTokens, options.longAnswer ? Infinity : (config.maxOutputTokens ?? Infinity)),
         ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
       };
       const json = await withTimeout(id, options.timeoutMs, (signal) =>

@@ -94,8 +94,12 @@ export function anthropicProvider(config: { model: string; apiKey: string; clien
             max_tokens: 16000,
             system,
             messages: wire,
-            tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters as Anthropic.Beta.BetaTool.InputSchema })),
-            tool_choice: { type: options.toolChoice },
+            ...(tools.length
+              ? {
+                  tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters as Anthropic.Beta.BetaTool.InputSchema })),
+                  tool_choice: { type: options.toolChoice },
+                }
+              : {}),
             output_config: { effort: "medium" },
             ...(serverFallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
           },

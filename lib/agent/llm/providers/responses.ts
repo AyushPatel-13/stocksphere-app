@@ -70,8 +70,9 @@ export function responsesProvider(config: ResponsesConfig): LLMProvider {
         model: config.model,
         instructions,
         input,
-        tools: tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters })),
-        tool_choice: options.toolChoice,
+        ...(tools.length
+          ? { tools: tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters })), tool_choice: options.toolChoice }
+          : {}),
         max_output_tokens: options.maxOutputTokens,
       };
       const json = await withTimeout(id, options.timeoutMs, (signal) =>

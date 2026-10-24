@@ -5,6 +5,8 @@ export interface ProviderCallOptions {
   /** Abort the call after this many ms. */
   timeoutMs: number;
   maxOutputTokens: number;
+  /** Ignore the provider's own lower output cap for this call. */
+  longAnswer?: boolean;
 }
 
 /**
@@ -13,7 +15,7 @@ export interface ProviderCallOptions {
  * format. A failure is thrown as ProviderError so the chain can fall through.
  */
 export interface LLMProvider {
-  /** "gemini:gemini-3.8-flash" — provider id plus model, for logs and tracing. */
+  /** "gemini:gemini-3.5-flash-lite" — provider id plus model, for logs and tracing. */
   id: string;
   /** Provider id alone ("gemini"), which ProviderRaw.provider is matched on. */
   provider: string;

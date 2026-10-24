@@ -19,6 +19,12 @@ export const PROVIDER_TIMEOUT_MS = 20_000;
 const MIN_CALL_MS = 3_000;
 /** How long a rate-limited provider is skipped when it doesn't say. */
 const DEFAULT_COOLDOWN_MS = 20_000;
+/**
+ * A provider that timed out is skipped for this long, so the next requests go
+ * straight to the next provider instead of each waiting out the timeout again
+ * (Gemini's free tier took 26–79 s for a 250-word answer when measured).
+ */
+export const TIMEOUT_COOLDOWN_MS = 2 * 60_000;
 /** Longest wait for a rate limit to clear when every provider is limited. */
 const MAX_RATE_LIMIT_WAIT_MS = 15_000;
 /** Passes over the chain; a rate-limit wait sits between passes. */
@@ -64,6 +70,12 @@ export interface ChatCompletionOptions {
   toolChoice?: "auto" | "none";
   /** Epoch ms by which the call must be finished; no provider is started after it. */
   deadline?: number;
+  /**
+   * A long write-up with no tools attached (a research note): uses the full
+   * output budget even where a provider normally caps it lower. The request is
+   * small without tool definitions, so it still fits Groq's per-minute limit.
+   */
+  longAnswer?: boolean;
 }
 
 export interface ChainDeps {
@@ -118,6 +130,7 @@ export async function getChatCompletion(
           toolChoice: options.toolChoice ?? "auto",
           timeoutMs: Math.min(PROVIDER_TIMEOUT_MS, remaining),
           maxOutputTokens: MAX_OUTPUT_TOKENS,
+          longAnswer: options.longAnswer ?? false,
         });
         deps.cooldowns.delete(provider.id);
         return result;
@@ -129,6 +142,9 @@ export async function getChatCompletion(
           const wait = error instanceof ProviderError && error.retryAfterSec ? error.retryAfterSec * 1000 : DEFAULT_COOLDOWN_MS;
           deps.cooldowns.set(provider.id, deps.now() + wait);
         } else {
+          if (status === null && error instanceof Error && /timed out/i.test(error.message)) {
+            deps.cooldowns.set(provider.id, deps.now() + TIMEOUT_COOLDOWN_MS);
+          }
           allRateLimited = false;
         }
       }
@@ -146,7 +162,7 @@ export async function getChatCompletion(
   throw toLLMError(lastError ?? Object.assign(new Error("deadline reached before any provider answered"), { status: null }));
 }
 
-/** The configured chain as "gemini:gemini-3.8-flash → groq:…", for logs and the status check. No keys. */
+/** The configured chain as "groq:… → gemini:gemini-3.5-flash-lite", for logs and the status check. No keys. */
 export function describeProviders(): string {
   return defaultDeps().providers.map((p) => p.id).join(" → ") || "none";
 }

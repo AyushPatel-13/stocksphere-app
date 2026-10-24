@@ -20,17 +20,18 @@ test("registry: free providers first; with only GROQ_API_KEY it runs on Groq alo
   assert.deepEqual(buildProviders({ GROQ_API_KEY: "g" }).map((p) => p.id), ["groq:openai/gpt-oss-120b", "groq:openai/gpt-oss-20b"]);
   assert.deepEqual(
     buildProviders({ GROQ_API_KEY: "g", GEMINI_API_KEY: "m", GROQ_FALLBACK_MODEL: "none" }).map((p) => p.id),
-    ["gemini:gemini-3.8-flash", "groq:openai/gpt-oss-120b"]
+    ["groq:openai/gpt-oss-120b", "gemini:gemini-3.5-flash-lite"],
+    "Groq stays first until Gemini has been tested"
   );
 });
 
 test("registry: paid providers only with their keys; LLM_PROVIDERS sets the order; ids never carry keys", () => {
   const env = { GEMINI_API_KEY: "secret-m", GROQ_API_KEY: "secret-g", GROQ_FALLBACK_MODEL: "none", ANTHROPIC_API_KEY: "secret-a", OPENROUTER_API_KEY: "secret-o" };
-  assert.deepEqual(buildProviders(env).map((p) => p.provider), ["gemini", "groq", "openrouter", "anthropic"]);
+  assert.deepEqual(buildProviders(env).map((p) => p.provider), ["groq", "gemini", "openrouter", "anthropic"]);
   const ordered = buildProviders({ ...env, LLM_PROVIDERS: "groq, anthropic,bogus,groq" });
   assert.deepEqual(ordered.map((p) => p.provider), ["groq", "anthropic"]);
   assert.ok(ordered.every((p) => !p.id.includes("secret")));
-  assert.deepEqual(providerOrder({ LLM_PROVIDERS: "" }), ["gemini", "groq", "openrouter", "anthropic", "openai", "xai"]);
+  assert.deepEqual(providerOrder({ LLM_PROVIDERS: "" }), ["groq", "gemini", "openrouter", "anthropic", "openai", "xai"]);
   assert.deepEqual(buildProviders({}), []);
 });
 
