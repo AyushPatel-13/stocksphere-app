@@ -32,6 +32,7 @@ export interface AgentResponse {
 
 export type AgentErrorCode =
   | "INVALID_REQUEST"
+  | "SIGNED_OUT"
   | "RATE_LIMITED"
   | "LLM_ERROR"
   | "INTERNAL_ERROR";

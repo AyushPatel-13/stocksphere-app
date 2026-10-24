@@ -3,7 +3,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { runAgent } from "@/lib/agent/orchestrator";
 import { AgentError } from "@/lib/agent/errors";
+import { bearerToken, defaultAgentAccess, type AgentAccess } from "@/lib/agent/access";
 import { AgentErrorResponse } from "@/lib/types/agent";
+
+// The agent finishes within AGENT_DEADLINE_MS (50 s); this lets the platform
+// run it that long (Vercel's default limit can be shorter).
+export const maxDuration = 60;
 
 const MAX_MESSAGE_LENGTH = 500;
 const MAX_HISTORY_MESSAGES = 20;
@@ -19,48 +24,25 @@ const requestSchema = z.object({
   history: z.array(historyMessageSchema).max(MAX_HISTORY_MESSAGES).optional(),
 });
 
-// --- Minimal in-memory rate limiter -----------------------------------
-// TODO(production): this is per-server-instance, in-memory state that
-// resets on restart/redeploy and is NOT shared across multiple instances
-// or serverless invocations. It is a placeholder to avoid unmetered LLM +
-// market-data-provider spend during development. Before scaling beyond a
-// single long-lived instance, replace this with a shared store (e.g.
-// Redis) or a platform/edge-level rate limiter. Not replaced here per the
-// instruction to avoid introducing a large new dependency for this.
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
-const requestTimestampsByClient = new Map<string, number[]>();
-
-function isRateLimited(clientId: string): boolean {
-  const now = Date.now();
-  const recent = (requestTimestampsByClient.get(clientId) ?? []).filter(
-    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS
-  );
-
-  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
-    requestTimestampsByClient.set(clientId, recent);
-    return true;
-  }
-
-  recent.push(now);
-  requestTimestampsByClient.set(clientId, recent);
-  return false;
-}
-
-function getClientId(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  return forwardedFor?.split(",")[0]?.trim() || "unknown";
-}
-
-export async function POST(request: Request) {
-  const clientId = getClientId(request);
-
-  if (isRateLimited(clientId)) {
-    const body: AgentErrorResponse = {
-      error: "Too many requests. Please wait a moment and try again.",
-      code: "RATE_LIMITED",
-    };
-    return NextResponse.json(body, { status: 429 });
+/**
+ * POST /api/agent
+ *   Authorization: Bearer <Supabase access token>
+ *
+ * Signed-in members only, rate limited per account (see lib/agent/access.ts).
+ * A repeat of a recent stand-alone question is served from the answer cache
+ * and doesn't count against the limit.
+ */
+export async function POST(
+  request: Request,
+  _context?: unknown,
+  access: AgentAccess = defaultAgentAccess,
+  run: typeof runAgent = runAgent
+) {
+  const token = bearerToken(request);
+  const userId = token ? await access.verifyToken(token) : null;
+  if (!userId) {
+    const body: AgentErrorResponse = { error: "Sign in to use StockSphere AI.", code: "SIGNED_OUT" };
+    return NextResponse.json(body, { status: 401 });
   }
 
   let json: unknown;
@@ -88,8 +70,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ ...cached, conversationId: parsed.data.conversationId ?? cached.conversationId });
   }
 
+  const slot = await access.takeSlot(userId);
+  if (!slot.ok) {
+    const body: AgentErrorResponse = {
+      error:
+        slot.window === "day"
+          ? "You've reached today's limit for StockSphere AI. It resets within 24 hours."
+          : "Too many questions in a minute. Please wait a moment and try again.",
+      code: "RATE_LIMITED",
+    };
+    return NextResponse.json(body, { status: 429, headers: { "Retry-After": String(slot.retryAfterSeconds) } });
+  }
+
   try {
-    const result = await runAgent(parsed.data);
+    const result = await run(parsed.data);
     if (standalone) answerCache.set(parsed.data.message, result);
     return NextResponse.json(result);
   } catch (error) {

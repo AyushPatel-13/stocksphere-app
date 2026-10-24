@@ -1,77 +1,108 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+import type { AgentAccess, SlotResult } from "@/lib/agent/access";
+import type { runAgent } from "@/lib/agent/orchestrator";
 import { POST } from "../route";
 
-function makeRequest(body: unknown, headers: Record<string, string> = {}): Request {
+const TOKEN = "good-token";
+
+function makeRequest(body: unknown, token: string | null = TOKEN): Request {
   return new Request("http://localhost/api/agent", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
 
-test("rejects invalid JSON with 400 INVALID_REQUEST", async () => {
-  const request = new Request("http://localhost/api/agent", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{not json",
-  });
+/** Accepts TOKEN as user-1 and allows every request unless told otherwise. */
+function fakeAccess(slot: () => SlotResult = () => ({ ok: true, shared: true })) {
+  const calls: string[] = [];
+  const access: AgentAccess = {
+    async verifyToken(token) {
+      return token === TOKEN ? "user-1" : null;
+    },
+    async takeSlot(userId) {
+      calls.push(userId);
+      return slot();
+    },
+  };
+  return { access, calls };
+}
 
-  const response = await POST(request);
-  const json = await response.json();
+let counter = 0;
+const fakeRun = (async (input) => ({
+  answer: `answer ${++counter}`,
+  conversationId: input.conversationId ?? "c1",
+  toolCalls: [],
+  sources: [],
+  warnings: [],
+})) as typeof runAgent;
 
+test("a request with no token is refused with 401 SIGNED_OUT", async () => {
+  const { access, calls } = fakeAccess();
+  const response = await POST(makeRequest({ message: "hi" }, null), undefined, access, fakeRun);
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).code, "SIGNED_OUT");
+  assert.equal(calls.length, 0);
+});
+
+test("an invalid token is refused with 401 SIGNED_OUT", async () => {
+  const { access } = fakeAccess();
+  const response = await POST(makeRequest({ message: "hi" }, "forged"), undefined, access, fakeRun);
+  assert.equal(response.status, 401);
+});
+
+test("invalid JSON is 400 INVALID_REQUEST and uses no quota", async () => {
+  const { access, calls } = fakeAccess();
+  const response = await POST(makeRequest("{not json"), undefined, access, fakeRun);
   assert.equal(response.status, 400);
-  assert.equal(json.code, "INVALID_REQUEST");
+  assert.equal((await response.json()).code, "INVALID_REQUEST");
+  assert.equal(calls.length, 0);
 });
 
-test("rejects a missing message with 400 INVALID_REQUEST", async () => {
-  const response = await POST(makeRequest({}, { "x-forwarded-for": "1.1.1.1" }));
-  const json = await response.json();
-
-  assert.equal(response.status, 400);
-  assert.equal(json.code, "INVALID_REQUEST");
-});
-
-test("rejects a message over the length cap with 400 INVALID_REQUEST", async () => {
-  const response = await POST(
-    makeRequest({ message: "a".repeat(1000) }, { "x-forwarded-for": "1.1.1.2" })
-  );
-  const json = await response.json();
-
-  assert.equal(response.status, 400);
-  assert.equal(json.code, "INVALID_REQUEST");
-});
-
-test("rejects a history entry with an invalid role with 400 INVALID_REQUEST", async () => {
-  const response = await POST(
-    makeRequest(
-      { message: "hi", history: [{ role: "system", content: "nope" }] },
-      { "x-forwarded-for": "1.1.1.3" }
-    )
-  );
-
-  assert.equal(response.status, 400);
-});
-
-test("accepts a well-formed request and reaches the orchestrator (fails on missing GROQ_API_KEY, not on validation)", async () => {
-  const response = await POST(
-    makeRequest({ message: "hi" }, { "x-forwarded-for": "1.1.1.4" })
-  );
-
-  const json = await response.json();
-
-  // A well-formed request must not be rejected by request validation.
-  assert.notEqual(response.status, 400);
-});
-
-test("rate limits a client after the configured number of requests per window", async () => {
-  const clientIp = "9.9.9.9";
-  let lastStatus = 200;
-
-  for (let i = 0; i < 11; i++) {
-    const response = await POST(makeRequest({ message: "hi" }, { "x-forwarded-for": clientIp }));
-    lastStatus = response.status;
+test("a missing or over-long message, or a bad history role, is 400", async () => {
+  const { access } = fakeAccess();
+  for (const body of [{}, { message: "a".repeat(1000) }, { message: "hi", history: [{ role: "system", content: "x" }] }]) {
+    const response = await POST(makeRequest(body), undefined, access, fakeRun);
+    assert.equal(response.status, 400);
   }
+});
 
-  assert.equal(lastStatus, 429);
+test("a signed-in member gets an answer and one slot is taken for their account", async () => {
+  const { access, calls } = fakeAccess();
+  const response = await POST(makeRequest({ message: "route test unique question 1" }), undefined, access, fakeRun);
+  assert.equal(response.status, 200);
+  assert.match((await response.json()).answer, /^answer/);
+  assert.deepEqual(calls, ["user-1"]);
+});
+
+test("over the limit is 429 RATE_LIMITED with Retry-After, and the agent isn't run", async () => {
+  const { access } = fakeAccess(() => ({ ok: false, window: "day", retryAfterSeconds: 3600, shared: true }));
+  let ran = false;
+  const run = (async (input: Parameters<typeof runAgent>[0]) => {
+    ran = true;
+    return fakeRun(input);
+  }) as typeof runAgent;
+  const response = await POST(makeRequest({ message: "route test unique question 2" }), undefined, access, run);
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("Retry-After"), "3600");
+  const json = await response.json();
+  assert.equal(json.code, "RATE_LIMITED");
+  assert.match(json.error, /today/);
+  assert.equal(ran, false);
+});
+
+test("a cached repeat of a stand-alone question doesn't use quota", async () => {
+  const { access, calls } = fakeAccess();
+  const message = "route test cached question";
+  const first = await POST(makeRequest({ message }), undefined, access, fakeRun);
+  const second = await POST(makeRequest({ message }), undefined, access, fakeRun);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal((await second.json()).answer, (await first.json()).answer);
+  assert.equal(calls.length, 1);
 });
