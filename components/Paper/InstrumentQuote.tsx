@@ -9,8 +9,10 @@ import { exchangeLabel, quoteStatus, type QuoteStatus } from "@/lib/paper/ticket
 
 /**
  * The selected instrument's latest price, from the same 1-day history the
- * chart draws (so the two never disagree), refreshed every minute. Nothing is
- * invented: no history means the price is shown as unavailable.
+ * chart draws (so the two never disagree), refreshed every minute. Crypto
+ * shows the server's live fill price instead when it has one, since its INR
+ * bars run minutes behind. Nothing is invented: no history means the price is
+ * shown as unavailable.
  */
 
 export type Instrument = { assetType: PaperAssetType; symbol: string; name: string };
@@ -42,6 +44,16 @@ const EMPTY: InstrumentQuote = {
 
 const REFRESH_MS = 60_000;
 
+/** The server's fill price when it's live, as a bar-shaped point; otherwise null. */
+async function loadFillQuote(type: PaperAssetType, symbol: string): Promise<{ t: number; c: number } | null> {
+  try {
+    const data = await (await fetch(`/api/paper/quote?${new URLSearchParams({ type, symbol }).toString()}`)).json();
+    return data?.success && data.mode === "live" && data.price > 0 && Number.isFinite(data.time) ? { t: data.time, c: data.price } : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useInstrumentQuote(instrument: Instrument | null): InstrumentQuote {
   const key = instrument ? `${instrument.assetType}|${instrument.symbol}` : "";
   const [state, setState] = useState<InstrumentQuote & { key: string }>({ ...EMPTY, key: "" });
@@ -54,14 +66,19 @@ export function useInstrumentQuote(instrument: Instrument | null): InstrumentQuo
     async function load() {
       try {
         const params = new URLSearchParams({ type, symbol, range: "1d", vs: "INR" });
-        const data = await (await fetch(`/api/history?${params.toString()}`)).json();
+        const [data, live] = await Promise.all([
+          fetch(`/api/history?${params.toString()}`).then((response) => response.json()),
+          type === "crypto" ? loadFillQuote(type, symbol) : Promise.resolve(null),
+        ]);
         if (cancelled) return;
         if (!data?.success) {
           setState((previous) => (previous.key === key && previous.price !== null ? previous : { ...EMPTY, key, status: "error" }));
           return;
         }
         const candles: { t: number; c: number }[] = data.candles ?? [];
-        const last = candles.at(-1) ?? null;
+        const bar = candles.at(-1) ?? null;
+        // Crypto's INR bars lag Yahoo's dollar pair by minutes; the fill price is newer.
+        const last = live ?? (bar ? { t: bar.t, c: bar.c } : null);
         const price = last && last.c > 0 ? last.c : null;
         const previousClose: number | null = typeof data.previousClose === "number" && data.previousClose > 0 ? data.previousClose : null;
         const change = price !== null && previousClose !== null ? price - previousClose : null;
