@@ -53,7 +53,7 @@ export async function loadPaperAccount(): Promise<AccountLoad> {
 }
 
 export type OrderResponse =
-  | { ok: true; price: number; currency: PaperCurrency; replayed: boolean }
+  | { ok: true; price: number; currency: PaperCurrency; cashAfter: number | null; replayed: boolean }
   | { ok: false; error: string; code?: string };
 
 export async function submitPaperOrder(order: {
@@ -75,7 +75,13 @@ export async function submitPaperOrder(order: {
     });
     const json = await response.json();
     return json?.success
-      ? { ok: true, price: json.price, currency: json.currency, replayed: Boolean(json.replayed) }
+      ? {
+          ok: true,
+          price: json.price,
+          currency: json.currency,
+          cashAfter: typeof json.cashAfter === "number" ? json.cashAfter : null,
+          replayed: Boolean(json.replayed),
+        }
       : { ok: false, error: json?.error ?? "Couldn't place the order.", code: json?.code };
   } catch {
     return { ok: false, error: "Couldn't place the order. Check your connection." };

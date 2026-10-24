@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import HoldingForm from "@/components/Portfolio/HoldingForm";
 import PortfolioAnalytics from "@/components/Portfolio/PortfolioAnalytics";
 import AuthGuard from "@/components/AuthGuard";
 import MarketsNav from "@/components/Markets/MarketsNav";
@@ -10,7 +11,6 @@ import { Change, StockAvatar, absPercent, toneClass } from "@/components/Markets
 import {
   EmptyState,
   PageShell,
-  inputClass,
   primaryButtonClass,
   secondaryButtonClass,
 } from "@/components/ui/Page";
@@ -21,8 +21,7 @@ import {
   type HoldingView,
 } from "@/lib/client/holdings";
 import { formatMoney, useQuotes } from "@/lib/client/useQuotes";
-import { addHolding, getPortfolio, removeHolding } from "@/lib/portfolio";
-import { isValidSymbol } from "@/lib/validation/symbol";
+import { getPortfolio, removeHolding } from "@/lib/portfolio";
 
 /**
  * Holdings.
@@ -84,124 +83,6 @@ function SortButton({
 }
 
 /* ------------------------------------------------------------------ */
-/* Add holding                                                         */
-/* ------------------------------------------------------------------ */
-
-function AddHoldingForm({
-  onSaved,
-  onCancel,
-}: {
-  onSaved: () => Promise<void>;
-  onCancel: () => void;
-}) {
-  const [symbol, setSymbol] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [price, setPrice] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    const cleanSymbol = symbol.trim().toUpperCase();
-    const qty = Number(quantity);
-    const avg = Number(price);
-
-    // The database may or may not enforce these (it is not verified yet), so
-    // the form refuses a holding that could never be valued correctly.
-    if (!cleanSymbol || !isValidSymbol(cleanSymbol)) {
-      setError("Enter a valid stock symbol, e.g. TCS or AAPL.");
-      return;
-    }
-    if (!Number.isFinite(qty) || qty <= 0) {
-      setError("Quantity must be a number greater than 0.");
-      return;
-    }
-    if (!Number.isFinite(avg) || avg <= 0) {
-      setError("Average buy price must be a number greater than 0.");
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-
-    try {
-      const result = await addHolding(cleanSymbol, qty, avg);
-
-      if (!result || result.error) {
-        setError("Couldn't save this holding. Please check you're signed in and try again.");
-        return;
-      }
-
-      await onSaved();
-    } catch {
-      setError("Couldn't save this holding. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        save();
-      }}
-      className="mb-6 rounded-2xl border border-[#222] bg-[#111] p-5"
-    >
-      <p className="mb-4 font-semibold">Add a holding</p>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-[#888]">Symbol</span>
-          <input
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            placeholder="TCS"
-            autoCapitalize="characters"
-            autoFocus
-            className={inputClass}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-[#888]">Quantity</span>
-          <input
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="10"
-            inputMode="decimal"
-            className={inputClass}
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-[#888]">Avg. buy price</span>
-          <input
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            placeholder="3500"
-            inputMode="decimal"
-            className={inputClass}
-          />
-        </label>
-      </div>
-
-      {error && (
-        <p role="alert" className="mt-3 text-sm text-[#f87171]">
-          {error}
-        </p>
-      )}
-
-      <div className="mt-4 flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className={secondaryButtonClass}>
-          Cancel
-        </button>
-        <button type="submit" disabled={saving} className={primaryButtonClass}>
-          {saving ? "Saving…" : "Save holding"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -209,6 +90,7 @@ export default function PortfolioPage() {
   const [rows, setRows] = useState<HoldingRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "current", desc: true });
 
   async function refresh() {
@@ -267,7 +149,7 @@ export default function PortfolioPage() {
   }
 
   async function remove(view: HoldingView) {
-    if (!window.confirm(`Remove ${view.symbol} from your holdings?`)) return;
+    if (!window.confirm(`Remove ${view.symbol} from your holdings? This deletes your record only; nothing is sold.`)) return;
     await removeHolding(view.id);
     await refresh();
   }
@@ -291,7 +173,7 @@ export default function PortfolioPage() {
               onClick={() => setShowForm((open) => !open)}
               className={secondaryButtonClass}
             >
-              {showForm ? "Close" : "+ Add holding"}
+              {showForm ? "Close" : "+ Record holding"}
             </button>
           </div>
 
@@ -340,17 +222,52 @@ export default function PortfolioPage() {
           )}
         </section>
 
+        <p className="mb-6 flex items-start gap-2 rounded-xl border border-[#2a2a2a] bg-[#151515] px-4 py-3 text-[13px] leading-relaxed text-[#8a8a8a]">
+          <span aria-hidden="true" className="mt-px text-[#666]">
+            ⓘ
+          </span>
+          <span>
+            These are holdings you record yourself. They aren&apos;t synced with a broker, and StockSphere doesn&apos;t place real orders. Open a
+            holding for its chart and details. Simulated trades live separately in{" "}
+            <Link href="/paper" className="font-medium text-[#22c55e] hover:text-[#4ade80]">
+              Paper Trading
+            </Link>
+            .
+          </span>
+        </p>
+
         {!quotesLoading && <PortfolioAnalytics views={views} unpriced={unpriced} />}
 
         {showForm && (
-          <AddHoldingForm
-            onCancel={() => setShowForm(false)}
-            onSaved={async () => {
-              await refresh();
-              setShowForm(false);
-            }}
-          />
+          <section aria-label="Record a holding" className="mb-6 rounded-2xl border border-[#222] bg-[#111] p-5">
+            <p className="mb-4 font-semibold">Record a holding</p>
+            <HoldingForm
+              onCancel={() => setShowForm(false)}
+              onSaved={async () => {
+                await refresh();
+                setShowForm(false);
+              }}
+            />
+          </section>
         )}
+
+        {editing && (() => {
+          const view = views.find((v) => v.id === editing);
+          return view ? (
+            <section aria-label={`Edit ${view.symbol}`} className="mb-6 rounded-2xl border border-[#222] bg-[#111] p-5">
+              <p className="mb-4 font-semibold">Edit {view.symbol}</p>
+              <HoldingForm
+                key={view.id}
+                editing={{ id: view.id, symbol: view.symbol, quantity: view.quantity, avgPrice: view.avgPrice }}
+                onCancel={() => setEditing(null)}
+                onSaved={async () => {
+                  await refresh();
+                  setEditing(null);
+                }}
+              />
+            </section>
+          ) : null;
+        })()}
 
         {loadFailed && (
           <p role="status" className="mb-6 rounded-xl border border-[#3a2020] bg-[#1a1111] px-4 py-3 text-sm text-[#f0a0a0]">
@@ -361,18 +278,18 @@ export default function PortfolioPage() {
         {rows !== null && count === 0 && !loadFailed && !showForm && (
           <EmptyState
             icon="💼"
-            title="Add your first holding"
-            description="Enter the stocks you own to track their live value, daily change and total returns."
+            title="Record your first holding"
+            description="Enter the stocks you already own to track their live value, daily change and total returns. Recording a holding doesn't buy anything."
             action={
               <button type="button" onClick={() => setShowForm(true)} className={primaryButtonClass}>
-                + Add holding
+                + Record holding
               </button>
             }
           />
         )}
 
         {count > 0 && (
-          <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
+          <div className="overflow-x-auto rounded-2xl border border-[#222] bg-[#111]">
             <table className="w-full text-sm">
               <thead className="border-b border-[#222] bg-[#0f0f0f] text-xs text-[#888]">
                 <tr>
@@ -388,7 +305,7 @@ export default function PortfolioPage() {
                   <th scope="col" className="px-4 py-3 text-right font-medium">
                     <SortButton label="Current (Invested)" k="current" sort={sort} onSort={sortBy} />
                   </th>
-                  <th scope="col" className="w-10 px-2 py-3">
+                  <th scope="col" className="w-20 px-2 py-3">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -429,6 +346,11 @@ export default function PortfolioPage() {
                             <span className="block text-xs">
                               <Change change={view.quote.change} percent={view.quote.changePercent} />
                             </span>
+                            {view.dayChange !== null && (
+                              <span className={`block text-[11px] tabular-nums ${toneClass(view.dayChange)}`}>
+                                1D {formatMoney(view.dayChange, currency, true)}
+                              </span>
+                            )}
                           </>
                         ) : (
                           <Unavailable />
@@ -475,7 +397,18 @@ export default function PortfolioPage() {
                         )}
                       </td>
 
-                      <td className="px-2 py-3.5 text-right">
+                      <td className="whitespace-nowrap px-2 py-3.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowForm(false);
+                            setEditing(view.id);
+                          }}
+                          aria-label={`Edit ${view.symbol}`}
+                          className="rounded-lg p-2 text-[#666] opacity-100 transition-colors hover:bg-[#1c1c1c] hover:text-white sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                        >
+                          ✎
+                        </button>
                         <button
                           type="button"
                           onClick={() => remove(view)}

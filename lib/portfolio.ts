@@ -21,7 +21,8 @@ export async function addHolding(
       buy_price: buyPrice,
     });
 
-  await addActivity(`💼 Bought ${quantity} ${symbol}`);
+  // A recorded holding, not a purchase: nothing was bought through StockSphere.
+  await addActivity(`💼 Recorded ${quantity} ${symbol} in holdings`);
 
   return result;
 }
