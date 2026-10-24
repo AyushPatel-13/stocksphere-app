@@ -65,6 +65,7 @@ export default function WatchlistButton({
 }) {
   const [added, setAdded] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function checkWatchlist() {
@@ -78,13 +79,20 @@ export default function WatchlistButton({
 
   const handleClick = async () => {
     setLoading(true);
+    setError(null);
 
-    if (added) {
-      await removeFromWatchlist(symbol);
-      setAdded(false);
+    // The state only flips once the database confirms the change. No result
+    // means nobody is signed in; an error means the save didn't happen.
+    const result = added ? await removeFromWatchlist(symbol) : await addToWatchlist(symbol);
+
+    if (!result) {
+      window.location.assign("/login");
+      return;
+    }
+    if (result.error) {
+      setError(added ? "Couldn't remove it. Please try again." : "Couldn't add it. Please try again.");
     } else {
-      await addToWatchlist(symbol);
-      setAdded(true);
+      setAdded(!added);
     }
 
     setLoading(false);
@@ -107,6 +115,11 @@ export default function WatchlistButton({
           ? "✅ Added to Watchlist"
           : "⭐ Add to Watchlist"}
       </button>
+      {error && (
+        <p role="alert" style={{ marginTop: 6, fontSize: 13, color: "#f87171" }}>
+          {error}
+        </p>
+      )}
     </>
   );
 }

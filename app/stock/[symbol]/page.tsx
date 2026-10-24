@@ -7,6 +7,8 @@ import StockBoard from "@/components/Community/StockBoard";
 import StockEvents from "@/app/StockEvents";
 import StockHeader from "@/components/Stock/StockHeader";
 import PriceChart from "@/components/Charts/PriceChart";
+import TradePanel from "@/components/Stock/TradePanel";
+import { exchangeLabel } from "@/lib/paper/ticket";
 import CompanyOverview from "@/components/Stock/CompanyOverview";
 import AgentAssistant from "@/components/Agent/AgentAssistant";
 import { StockAvatar } from "@/components/Markets/StockBits";
@@ -76,6 +78,31 @@ const SP_STYLES = `
   max-width: 1080px;
   margin: 0 auto;
 }
+/* The stock view is a terminal layout: chart left, trade panel right. */
+.sp-shell.sp-wide { max-width: 1320px; }
+
+/* ---------- section links ---------- */
+.sp-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 30px;
+  overflow-x: auto;
+  border-bottom: 1px solid #222;
+  scrollbar-width: none;
+}
+.sp-tabs a {
+  flex-shrink: 0;
+  margin-bottom: -1px;
+  padding: 10px 12px;
+  border-bottom: 2px solid transparent;
+  color: #888;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.sp-tabs a:hover { color: #fff; border-bottom-color: #22c55e; }
+.sp-tabs a:focus-visible { outline: 2px solid #22c55e; outline-offset: -2px; border-radius: 6px; }
+.sp-anchor { scroll-margin-top: 80px; }
 
 /* ---------- header ---------- */
 .sp-hero {
@@ -147,7 +174,15 @@ const SP_STYLES = `
   border-color: rgba(239, 68, 68, 0.3);
 }
 
-.sp-actions { margin-top: 16px; }
+.sp-actions { margin-top: 16px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.sp-alert-link {
+  margin-top: 10px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 18px; border-radius: 10px; border: 1px solid #2a2a2a;
+  background: #151515; color: #e5e5e5; font-size: 14px; font-weight: 600; text-decoration: none;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.sp-alert-link:hover { background: #1c1c1c; border-color: #3a3a3a; }
+.sp-alert-link:focus-visible { outline: 2px solid #22c55e; outline-offset: 2px; }
 
 /* ---------- sections ---------- */
 .sp-section { margin-top: 30px; }
@@ -368,16 +403,20 @@ export default async function StockPage({
 
       <RecentSearchTracker symbol={symbol} name={company?.name} />
 
-      <div className="sp-shell">
+      <div className="sp-shell sp-wide">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="min-w-0 lg:col-start-1 lg:row-start-1">
         <header className="sp-hero">
           <div className="flex items-center gap-3">
             <StockAvatar symbol={decodeURIComponent(symbol)} size={48} />
             <div>
               <h1 className="sp-symbol">{symbol}</h1>
 
-              {company?.name ? (
-                <p className="sp-company">{company.name}</p>
-              ) : null}
+              <p className="sp-company">
+                {company?.name ?? companyName}
+                {(company?.name ?? companyName) ? " · " : ""}
+                {exchangeLabel("stock", decodeURIComponent(symbol))}
+              </p>
             </div>
           </div>
 
@@ -420,21 +459,32 @@ export default async function StockPage({
 
         <div className="sp-actions">
           <WatchlistButton symbol={symbol} />
+          <Link href={`/alerts?type=stock&symbol=${encodeURIComponent(symbol)}`} className="sp-alert-link">
+            🔔 Set price alert
+          </Link>
         </div>
 
         <div className="sp-section">
           <PriceChart type="stock" symbol={symbol} />
         </div>
+          </div>
 
-        <AgentAssistant symbol={symbol} companyName={company?.name} />
+          {/* Paper trading and the user's recorded holdings; beside the chart
+              on desktop, straight after it on a phone. */}
+          <aside aria-label="Trade" className="min-w-0 lg:sticky lg:top-20 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+            <TradePanel symbol={decodeURIComponent(symbol)} name={companyName ?? decodeURIComponent(symbol).toUpperCase()} />
+          </aside>
 
-        {/* Community board: sentiment from real posts, then the stock's
-            discussion. Replaces the per-device BullBearVote and
-            StockDiscussion, which nobody else could see. */}
-        <StockBoard symbol={symbol} />
+          <div className="min-w-0 lg:col-start-1 lg:row-start-2">
+        <nav aria-label="Sections" className="sp-tabs">
+          <a href="#overview">Overview</a>
+          <a href="#news">News</a>
+          <a href="#community">Community</a>
+          <a href="#events">Events</a>
+        </nav>
 
-        <CompanyOverview company={overview} source={!company?.description && wiki ? { label: "Wikipedia", url: wiki.url } : null} />
-
+        <div id="overview" className="sp-anchor">
+        <h2 className="sp-section-title">Key stats</h2>
         <dl className="sp-stats">
           <Stat label="Open" value={open || "N/A"} />
 
@@ -500,7 +550,12 @@ export default async function StockPage({
             ))}
         </ul>
 
-        <h2 className="sp-section-title">Latest News</h2>
+        <CompanyOverview company={overview} source={!company?.description && wiki ? { label: "Wikipedia", url: wiki.url } : null} />
+        </div>
+
+        <AgentAssistant symbol={symbol} companyName={company?.name} />
+
+        <h2 id="news" className="sp-section-title sp-anchor">Latest News</h2>
 
         <div className="sp-news">
           {(news as NewsArticle[]).slice(0, 10).map((item) => (
@@ -526,7 +581,18 @@ export default async function StockPage({
           ) : null}
         </div>
 
-        <StockEvents symbol={symbol} />
+        {/* Community board: sentiment from real posts, then the stock's
+            discussion. Replaces the per-device BullBearVote and
+            StockDiscussion, which nobody else could see. */}
+        <div id="community" className="sp-anchor">
+          <StockBoard symbol={symbol} />
+        </div>
+
+        <div id="events" className="sp-anchor">
+          <StockEvents symbol={symbol} />
+        </div>
+          </div>
+        </div>
       </div>
     </div>
   );

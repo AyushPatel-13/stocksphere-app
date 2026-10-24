@@ -1,5 +1,7 @@
 import { getAdminClient, getPublicClient } from "../supabase/server";
 import { isValidSymbol } from "../validation/symbol";
+import { stockBoardSymbol } from "./communities";
+import type { CommunityResolver } from "./ipoCommunity";
 import {
   LINK_UNLOCK_DAYS,
   accountAgeDays,
@@ -27,10 +29,17 @@ export type NewPostRow = {
   sentiment: Sentiment | null;
   symbols: string[];
   parent_id: string | null;
+  /** Only set when the post belongs to a community (communities migration). */
+  community_id?: string;
 };
+
+/** A community's feed: its own posts, plus (once listed) posts tagged with its ticker. */
+export type CommunityScope = { communityId: string; anySymbols: string[] };
 
 export type ListQuery = {
   symbol?: string;
+  /** Overrides `symbol` when set. */
+  community?: CommunityScope;
   parentId?: string;
   sentiment?: Sentiment;
   before?: string;
@@ -47,7 +56,7 @@ export interface CommunityStore {
   getParent(postId: string): Promise<{ symbols: string[] } | null>;
   insertPost(row: NewPostRow): Promise<PostView>;
   listPosts(query: ListQuery): Promise<PostView[]>;
-  sentiment(symbol: string, sinceIso: string): Promise<Omit<SentimentSummary, "symbol" | "windowDays">>;
+  sentiment(scope: string | CommunityScope, sinceIso: string): Promise<Omit<SentimentSummary, "symbol" | "windowDays">>;
   recentSymbols(sinceIso: string, limit: number): Promise<string[][]>;
 }
 
@@ -57,6 +66,8 @@ export type CreatePostInput = {
   sentiment?: unknown;
   symbol?: unknown;
   parentId?: unknown;
+  /** An Upstox IPO id: post in that IPO's community. */
+  ipoId?: unknown;
 };
 
 export type CreatePostResult =
@@ -68,7 +79,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function createPost(
   input: CreatePostInput,
   store: CommunityStore | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  communities: CommunityResolver | null = null
 ): Promise<CreatePostResult> {
   if (!store) {
     return { ok: false, status: 503, error: "Posting isn't set up yet.", code: "NOT_CONFIGURED" };
@@ -99,6 +111,11 @@ export async function createPost(
     typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.trim().toUpperCase() : null;
   if (board && !isValidSymbol(board)) {
     return { ok: false, status: 400, error: "Unknown stock." };
+  }
+
+  const ipoId = typeof input.ipoId === "string" && input.ipoId.trim() ? input.ipoId.trim() : null;
+  if (input.ipoId !== undefined && input.ipoId !== null && !ipoId) {
+    return { ok: false, status: 400, error: "Unknown IPO." };
   }
 
   let parentId: string | null = null;
@@ -133,9 +150,27 @@ export async function createPost(
     return { ok: false, status: 422, error: "You already posted this.", code: "DUPLICATE" };
   }
 
+  // The community, last: an IPO community is created by its first post, so
+  // only once every other rule has passed. A reply's community is its
+  // parent's (the database sets it).
+  let communityId: string | null = null;
+  let communityBoard: string | null = null;
+  if (!parentId && ipoId) {
+    if (!communities) {
+      return { ok: false, status: 503, error: "IPO communities aren't switched on yet.", code: "NOT_CONFIGURED" };
+    }
+    const resolved = await communities.forIpo(ipoId);
+    if (!resolved.ok) return { ok: false, status: resolved.status, error: resolved.error, code: resolved.code };
+    communityId = resolved.community.id;
+    const { exchange, symbol } = resolved.community;
+    if (resolved.community.type === "stock" && exchange && symbol) communityBoard = stockBoardSymbol(exchange, symbol);
+  } else if (!parentId && board && communities) {
+    communityId = (await communities.forBoard(board))?.id ?? null;
+  }
+
   const symbols = parentId
     ? Array.from(new Set([...parentSymbols, ...postSymbols(content.body)])).slice(0, 5)
-    : postSymbols(content.body, board);
+    : postSymbols(content.body, board ?? communityBoard);
 
   const post = await store.insertPost({
     author_id: author.id,
@@ -144,6 +179,7 @@ export async function createPost(
     sentiment: parentId ? null : sentiment,
     symbols,
     parent_id: parentId,
+    ...(communityId ? { community_id: communityId } : {}),
   });
 
   return { ok: true, post };
@@ -211,19 +247,31 @@ export function toPostView(row: PostRow): PostView {
   };
 }
 
+/**
+ * PostgREST filter for a community's feed. Symbols have passed isValidSymbol
+ * (letters, digits, ".", "&", "-") and are quoted, so none can break out.
+ */
+export function scopeFilter({ communityId, anySymbols }: CommunityScope): string {
+  if (!UUID.test(communityId)) throw new Error("Invalid community id");
+  const own = `community_id.eq.${communityId}`;
+  const tags = anySymbols.filter(isValidSymbol);
+  return tags.length ? `${own},symbols.ov.{${tags.map((s) => `"${s}"`).join(",")}}` : own;
+}
+
 export function getSupabaseStore(): CommunityStore | null {
   const admin = getAdminClient();
   const reader = getPublicClient();
   if (!admin || !reader) return null;
 
-  function listWith(columns: string, { symbol, parentId, sentiment, before, limit }: ListQuery) {
+  function listWith(columns: string, { symbol, community, parentId, sentiment, before, limit }: ListQuery) {
     let query = reader!.from("posts").select(columns);
 
     query = parentId
       ? query.eq("parent_id", parentId).order("created_at", { ascending: true })
       : query.is("parent_id", null).order("created_at", { ascending: false });
 
-    if (symbol) query = query.contains("symbols", [symbol]);
+    if (community) query = query.or(scopeFilter(community));
+    else if (symbol) query = query.contains("symbols", [symbol]);
     if (sentiment) query = query.eq("sentiment", sentiment);
     if (before) query = query.lt("created_at", before);
 
@@ -299,14 +347,15 @@ export function getSupabaseStore(): CommunityStore | null {
       return result.error?.code === UNDEFINED_COLUMN ? unwrap(await listWith(POST_COLUMNS_BASIC, query)) : unwrap(result);
     },
 
-    async sentiment(symbol, sinceIso) {
-      const base = () =>
-        reader
+    async sentiment(scope, sinceIso) {
+      const base = () => {
+        const query = reader
           .from("posts")
           .select("id", { count: "exact", head: true })
           .is("parent_id", null)
-          .contains("symbols", [symbol])
           .gte("created_at", sinceIso);
+        return typeof scope === "string" ? query.contains("symbols", [scope]) : query.or(scopeFilter(scope));
+      };
 
       const [bull, bear, all] = await Promise.all([
         base().eq("sentiment", "bullish"),
@@ -340,10 +389,11 @@ export const SENTIMENT_WINDOW_DAYS = 7;
 export async function getSentiment(
   symbol: string,
   store: CommunityStore,
-  now: number = Date.now()
+  now: number = Date.now(),
+  scope?: CommunityScope
 ): Promise<SentimentSummary> {
   const since = new Date(now - SENTIMENT_WINDOW_DAYS * 86_400_000).toISOString();
-  const counts = await store.sentiment(symbol, since);
+  const counts = await store.sentiment(scope ?? symbol, since);
   return { symbol, windowDays: SENTIMENT_WINDOW_DAYS, ...counts };
 }
 

@@ -9,18 +9,23 @@
  * agent, or the panel says they are unavailable.
  */
 function suggestionsFor(symbol: string | null): string[] {
+  // The first few start research workflows on the server (a sourced report,
+  // a move explanation, a comparison, a portfolio review).
   if (!symbol) {
     return [
-      "What can you help me with?",
-      "What data can you look up?",
+      "Research Reliance Industries",
+      "Why did TCS move?",
+      "Compare TCS and Infosys",
+      "Analyze my portfolio",
+      "Explain the P/E ratio with an example",
     ];
   }
 
   return [
-    `What does ${symbol} do?`,
+    `Research ${symbol}`,
+    `Why did ${symbol} move?`,
     `What's the current price of ${symbol}?`,
     `${symbol} recent news`,
-    `Summarize the latest results for ${symbol}`,
     `What are the key financials for ${symbol}?`,
     `How has ${symbol} performed recently?`,
   ];

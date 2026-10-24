@@ -23,6 +23,7 @@ import {
 } from "@/lib/alerts/client";
 import { ALERT_CONDITIONS, MAX_ACTIVE_ALERTS, checkAlertInput, describeAlert, type AlertAssetType, type AlertCondition } from "@/lib/alerts/rules";
 import { canonicalStockSymbol } from "@/lib/search/canonical";
+import { isValidSymbol } from "@/lib/validation/symbol";
 import type { SearchResult } from "@/lib/search/instruments";
 
 /**
@@ -69,6 +70,27 @@ function NewAlertForm({ activeCount, onCreated }: { activeCount: number; onCreat
   const [saving, setSaving] = useState(false);
 
   const unit = ALERT_CONDITIONS.find((c) => c.id === condition)?.unit;
+
+  // Arriving from a stock page (/alerts?type=stock&symbol=TCS) starts the form
+  // on that instrument. The symbol is validated here and again on save.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const symbol = (params.get("symbol") ?? "").trim().toUpperCase();
+    const type = params.get("type") ?? "stock";
+    if (!isValidSymbol(symbol) || !["stock", "etf", "index", "crypto"].includes(type)) return;
+    const assetType = type as AlertAssetType;
+    let cancelled = false;
+    const start = setTimeout(() => {
+      setPicked({ assetType, symbol, name: symbol, price: null });
+      currentPrice(assetType, symbol).then((price) => {
+        if (!cancelled) setPicked((current) => (current && current.symbol === symbol ? { ...current, price } : current));
+      });
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(start);
+    };
+  }, []);
 
   async function pick(result: SearchResult) {
     const assetType = assetTypeOf(result);

@@ -231,3 +231,17 @@ test("the whole spec example parses into the expected shape", () => {
     { type: "paragraph", lines: ["Then explanatory text."] },
   ]);
 });
+
+test("an http(s) link becomes a link part", () => {
+  assert.deepEqual(parseInline("See [1](https://upstox.com/news/a) now"), [
+    { type: "text", value: "See " },
+    { type: "link", value: "1", href: "https://upstox.com/news/a" },
+    { type: "text", value: " now" },
+  ]);
+});
+
+test("links with other schemes stay literal text", () => {
+  for (const text of ["[x](javascript:alert(1))", "[x](data:text/html,hi)", "[x](/relative)"]) {
+    assert.ok(parseInline(text).every((part) => part.type === "text"), text);
+  }
+});

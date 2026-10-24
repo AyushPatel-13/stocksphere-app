@@ -34,6 +34,20 @@ function Inline({ text }: { text: string }) {
           );
         }
 
+        if (part.type === "link") {
+          return (
+            <a
+              key={index}
+              href={part.href}
+              target="_blank"
+              rel="noopener noreferrer nofollow"
+              className="text-[#4ade80] underline decoration-[#4ade80]/40 underline-offset-2 hover:decoration-[#4ade80]"
+            >
+              {part.value}
+            </a>
+          );
+        }
+
         return <span key={index}>{part.value}</span>;
       })}
     </>

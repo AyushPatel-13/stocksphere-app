@@ -1,95 +1,68 @@
-import Groq from "groq-sdk";
-import { LLMMessage, LLMCompletionResult, LLMToolCallRequest, ToolDefinition } from "../types";
+import { LLMMessage, LLMCompletionResult, ToolDefinition } from "../types";
 import { LLMError } from "../errors";
-
-// Configurable via env so the model can be changed without a code change.
-const DEFAULT_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-
-let cachedClient: Groq | null = null;
-
-function getClient(): Groq {
-  const apiKey = process.env.GROQ_API_KEY;
-
-  if (!apiKey) {
-    throw new LLMError("GROQ_API_KEY is not configured on the server.");
-  }
-
-  if (!cachedClient) {
-    // A hung call gets 25s instead of the SDK's 60s; the orchestrator also
-    // keeps an overall budget for gathering data. Retries stay at 3 because
-    // Groq's free tier (8,000 tokens a minute, ~5,000 per assistant turn)
-    // answers 429 with a ~1-2s retry-after, which the SDK waits out.
-    cachedClient = new Groq({ apiKey, timeout: 25_000, maxRetries: 3 });
-  }
-
-  return cachedClient;
-}
-
-// --- Provider-format translation -------------------------------------------
-// Everything above/outside this file speaks LLMMessage / LLMCompletionResult.
-// These two functions are the only place that knows Groq's (OpenAI-compatible)
-// chat-completions wire format.
-
-function toGroqMessages(messages: LLMMessage[]): Groq.Chat.Completions.ChatCompletionMessageParam[] {
-  return messages.map((message) => {
-    if (message.role === "tool") {
-      return {
-        role: "tool",
-        tool_call_id: message.toolCallId ?? "",
-        content: message.content ?? "",
-      };
-    }
-
-    if (message.role === "assistant" && message.toolCalls?.length) {
-      return {
-        role: "assistant",
-        content: message.content,
-        tool_calls: message.toolCalls.map((call) => ({
-          id: call.id,
-          type: "function" as const,
-          function: { name: call.name, arguments: call.arguments },
-        })),
-      };
-    }
-
-    return {
-      role: message.role as "system" | "user" | "assistant",
-      content: message.content ?? "",
-    };
-  });
-}
-
-function toGroqTools(tools: ToolDefinition[]): Groq.Chat.Completions.ChatCompletionTool[] {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    },
-  }));
-}
+import { buildProviders, fallbackModel } from "./providers/registry";
+import { type LLMProvider, ProviderError } from "./providers/types";
 
 /**
- * Optional second model for when the main one is rate-limited, e.g.
- * GROQ_FALLBACK_MODEL=openai/gpt-oss-20b. Unset means no fallback.
+ * The assistant's one entry point to a language model: tries each configured
+ * provider in order (see providers/registry.ts) and returns the first answer.
+ * A timeout, rate limit (429), oversize request (413), server error or bad
+ * key at one provider moves on to the next. Everything outside lib/agent/llm
+ * speaks LLMMessage / LLMCompletionResult.
  */
-const FALLBACK_MODEL = process.env.GROQ_FALLBACK_MODEL || null;
+
+export { fallbackModel };
+
+/** Longest a single model call may take before the next provider is tried. */
+export const PROVIDER_TIMEOUT_MS = 20_000;
+/**
+ * A long write-up with no tools (a research note) may take longer: in the
+ * October 2026 benchmark Gemini Flash-Lite needed just over 20 s for one and
+ * was cut off, leaving only a data digest. Still bounded by the request's
+ * deadline, and the chain still moves on after it.
+ */
+export const LONG_ANSWER_TIMEOUT_MS = 35_000;
+/** A call isn't started with less time than this left before the deadline. */
+const MIN_CALL_MS = 3_000;
+/** How long a rate-limited provider is skipped when it doesn't say. */
+const DEFAULT_COOLDOWN_MS = 20_000;
+/**
+ * A provider that timed out is skipped for this long, so the next requests go
+ * straight to the next provider instead of each waiting out the timeout again
+ * (Gemini's free tier took 26–79 s for a 250-word answer when measured).
+ */
+export const TIMEOUT_COOLDOWN_MS = 2 * 60_000;
+/** Longest wait for a rate limit to clear when every provider is limited. */
+const MAX_RATE_LIMIT_WAIT_MS = 15_000;
+/** Passes over the chain; a rate-limit wait sits between passes. */
+const MAX_PASSES = 3;
+/** gpt-oss and Gemini reason before answering, and that counts against this. */
+const MAX_OUTPUT_TOKENS = 2048;
 
 export function statusOf(error: unknown): number | null {
   const status = (error as { status?: unknown } | null)?.status;
   return typeof status === "number" ? status : null;
 }
 
+/** 429: rate-limited. 413: one request above the per-minute token limit. Both are worth another model. */
+export function shouldFallBack(error: unknown): boolean {
+  const status = statusOf(error);
+  return status === 429 || status === 413;
+}
+
 /**
- * A provider failure as a message fit for the user. The raw Groq error names
- * the account's organisation and upgrade links, so it is logged in short form
- * on the server and never passed through.
+ * A provider failure as a message fit for the user. Raw provider errors can
+ * name the account and its upgrade links, so they are logged in short form on
+ * the server and never passed through.
  */
 export function toLLMError(error: unknown): LLMError {
   const status = statusOf(error);
-  console.error(`Groq request failed (${status ?? "no status"}):`, error instanceof Error ? error.message.slice(0, 200) : "unknown");
+  console.error(`LLM request failed (${status ?? "no status"}):`, error instanceof Error ? error.message.slice(0, 200) : "unknown");
+  if (status === 429 && error instanceof ProviderError && error.dailyQuota) {
+    return new LLMError("StockSphere AI has used its free AI quota for today. Please try again later.");
+  }
   if (status === 429) return new LLMError("The AI service is busy right now. Please try again in a minute.");
+  if (status === 413) return new LLMError("That question needed more data than the AI service accepts at once. Try asking about fewer items or a shorter period.");
   if (status === 401 || status === 403) return new LLMError("The AI service isn't configured correctly.");
   if (status === 400) return new LLMError("The AI service couldn't process that request. Please rephrase and try again.");
   return new LLMError("The AI service didn't respond. Please try again shortly.");
@@ -99,63 +72,104 @@ export interface ChatCompletionOptions {
   /**
    * "none" withholds tool calling for this one turn, so the model must answer
    * in prose from the conversation it already has. The orchestrator uses it to
-   * ask for a final answer once its tool budget is spent, instead of
-   * discarding the data it gathered and returning a failure. Defaults to
-   * "auto", which is the behaviour every other caller already had.
+   * ask for a final answer once its tool budget is spent. Defaults to "auto".
    */
   toolChoice?: "auto" | "none";
+  /** Epoch ms by which the call must be finished; no provider is started after it. */
+  deadline?: number;
+  /**
+   * A long write-up with no tools attached (a research note): uses the full
+   * output budget even where a provider normally caps it lower. The request is
+   * small without tool definitions, so it still fits Groq's per-minute limit.
+   */
+  longAnswer?: boolean;
+}
+
+export interface ChainDeps {
+  providers: LLMProvider[];
+  now: () => number;
+  /** Provider id → epoch ms until which it is skipped after a rate limit. Shared across requests. */
+  cooldowns: Map<string, number>;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const sharedCooldowns = new Map<string, number>();
+let cachedProviders: LLMProvider[] | null = null;
+
+function defaultDeps(): ChainDeps {
+  cachedProviders ??= buildProviders();
+  return { providers: cachedProviders, now: Date.now, cooldowns: sharedCooldowns, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
+}
+
+/**
+ * Providers to try, in order: those not cooling down first; cooling ones
+ * after, soonest-available first, so a single configured provider is still
+ * tried when it is the only one.
+ */
+export function orderForAttempt(providers: LLMProvider[], cooldowns: Map<string, number>, now: number): LLMProvider[] {
+  const ready = providers.filter((p) => (cooldowns.get(p.id) ?? 0) <= now);
+  const cooling = providers.filter((p) => (cooldowns.get(p.id) ?? 0) > now).sort((a, b) => cooldowns.get(a.id)! - cooldowns.get(b.id)!);
+  return [...ready, ...cooling];
 }
 
 export async function getChatCompletion(
   messages: LLMMessage[],
   tools: ToolDefinition[],
-  options: ChatCompletionOptions = {}
+  options: ChatCompletionOptions = {},
+  deps: ChainDeps = defaultDeps()
 ): Promise<LLMCompletionResult> {
-  const groq = getClient();
-  const request = (model: string) =>
-    groq.chat.completions.create({
-      model,
-      messages: toGroqMessages(messages),
-      tools: toGroqTools(tools),
-      tool_choice: options.toolChoice ?? "auto",
-      temperature: 0.2,
-      max_tokens: 1024,
-    });
+  if (deps.providers.length === 0) {
+    throw new LLMError("No AI provider is configured on the server (set GEMINI_API_KEY or GROQ_API_KEY).");
+  }
 
-  let completion;
-  try {
-    completion = await request(DEFAULT_MODEL);
-  } catch (error) {
-    // Still rate-limited after the SDK's retries: try the fallback model, if
-    // one is configured (a different model has its own token allowance).
-    if (FALLBACK_MODEL && FALLBACK_MODEL !== DEFAULT_MODEL && statusOf(error) === 429) {
+  let lastError: unknown = null;
+  // When every provider was rate-limited, the shortest wait any of them asked
+  // for (capped) is waited out and the chain tried again, as long as the
+  // deadline allows — this matters when Groq is the only provider configured.
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    let allRateLimited = true;
+    for (const provider of orderForAttempt(deps.providers, deps.cooldowns, deps.now())) {
+      const remaining = (options.deadline ?? Infinity) - deps.now();
+      if (remaining < MIN_CALL_MS) break;
+
       try {
-        completion = await request(FALLBACK_MODEL);
-      } catch (fallbackError) {
-        throw toLLMError(fallbackError);
+        const result = await provider.complete(messages, tools, {
+          toolChoice: options.toolChoice ?? "auto",
+          timeoutMs: Math.min(options.longAnswer ? LONG_ANSWER_TIMEOUT_MS : PROVIDER_TIMEOUT_MS, remaining),
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          longAnswer: options.longAnswer ?? false,
+        });
+        deps.cooldowns.delete(provider.id);
+        return result;
+      } catch (error) {
+        lastError = error;
+        const status = statusOf(error);
+        console.error(`LLM provider ${provider.id} failed (${status ?? "no status"}): ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
+        if (status === 429) {
+          const wait = error instanceof ProviderError && error.retryAfterSec ? error.retryAfterSec * 1000 : DEFAULT_COOLDOWN_MS;
+          deps.cooldowns.set(provider.id, deps.now() + wait);
+        } else {
+          if (status === null && error instanceof Error && /timed out/i.test(error.message)) {
+            deps.cooldowns.set(provider.id, deps.now() + TIMEOUT_COOLDOWN_MS);
+          }
+          allRateLimited = false;
+        }
       }
-    } else {
-      throw toLLMError(error);
     }
+
+    if (pass === MAX_PASSES - 1 || !allRateLimited || lastError === null) break;
+    const soonest = Math.min(...deps.providers.map((p) => deps.cooldowns.get(p.id) ?? 0)) - deps.now();
+    // A limit that won't clear soon (a spent daily quota) isn't waited on.
+    if (soonest > MAX_RATE_LIMIT_WAIT_MS) break;
+    const wait = Math.max(0, soonest);
+    if ((options.deadline ?? Infinity) - deps.now() - wait < MIN_CALL_MS) break;
+    await deps.sleep(wait);
   }
 
-  const choice = completion.choices?.[0]?.message;
-  if (!choice) {
-    throw new LLMError("The LLM provider returned no response choices.");
-  }
+  throw toLLMError(lastError ?? Object.assign(new Error("deadline reached before any provider answered"), { status: null }));
+}
 
-  const toolCalls: LLMToolCallRequest[] | null = choice.tool_calls?.length
-    ? choice.tool_calls
-        .filter((call) => call.type === "function")
-        .map((call) => ({
-          id: call.id,
-          name: call.function.name,
-          arguments: call.function.arguments ?? "{}",
-        }))
-    : null;
-
-  return {
-    content: choice.content ?? null,
-    toolCalls,
-  };
+/** The configured chain as "groq:… → gemini:gemini-3.5-flash-lite", for logs and the status check. No keys. */
+export function describeProviders(): string {
+  return defaultDeps().providers.map((p) => p.id).join(" → ") || "none";
 }

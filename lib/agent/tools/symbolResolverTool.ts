@@ -47,6 +47,14 @@ export function stripIndianSuffix(value: string): string {
   return value.replace(/\.(NS|BSE)$/i, "").trim();
 }
 
+/**
+ * Former names people still use, mapped to the name the listing has now
+ * (Upstox searches current names only). Lower-case keys.
+ */
+export const RENAMED_COMPANIES: Record<string, string> = {
+  zomato: "Eternal",
+};
+
 const argsSchema = z.object({
   query: z.string().trim().min(1).max(80),
 });
@@ -156,7 +164,7 @@ export function createSymbolResolverTool(
   return {
     name: "resolve_symbol",
     description:
-      "Find ticker candidates for a company name or ticker (e.g. 'Tata Consultancy', 'tcs', 'TCS.NS'). Indian stocks come from Upstox NSE search with a .NS suffix; a small built-in list covers well-known US/global names — it is not a full global search. Candidates are ranked: exact ticker, then exact name, then names starting with the query; several tied at the top is a real ambiguity. Use symbols exactly as returned and say when a match is uncertain. (get_performance resolves names itself.)",
+      "Find ticker candidates for a company name or ticker (e.g. 'Tata Consultancy', 'tcs'). Indian stocks via Upstox NSE search (.NS); a small built-in list covers well-known US names — not a full global search. Ranked exact ticker, exact name, then name prefix; bestMatch is set when one clearly fits. Use symbols exactly as returned.",
     parameters: {
       type: "object",
       properties: {
@@ -170,7 +178,9 @@ export function createSymbolResolverTool(
     },
     argsSchema,
     async execute({ query }) {
-      const searchTerm = stripIndianSuffix(query);
+      const asked = stripIndianSuffix(query);
+      const renamedTo = RENAMED_COMPANIES[asked.toLowerCase()];
+      const searchTerm = renamedTo ?? asked;
 
       if (!searchTerm) {
         const empty: SymbolResolution = { query, candidates: [], authoritative: false };
@@ -201,12 +211,13 @@ export function createSymbolResolverTool(
         searchTerm.toLowerCase()
       );
 
-      const picked = pickCandidate(query, candidates);
+      const picked = pickCandidate(renamedTo ?? query, candidates);
       const result: SymbolResolution = {
         query,
         candidates,
         authoritative: false,
         bestMatch: picked && "match" in picked ? picked.match : null,
+        ...(renamedTo ? { note: `"${asked}" is now listed as ${renamedTo}; searched for ${renamedTo}.` } : {}),
       };
       return okResult(result, upstoxConsulted ? SOURCE_WITH_UPSTOX : SOURCE_LOCAL);
     },

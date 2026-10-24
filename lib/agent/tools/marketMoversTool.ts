@@ -69,7 +69,7 @@ export function createMarketMoversTool(
   return {
     name: "get_market_movers",
     description:
-      "Today's Nifty 50 gainers and losers with advancing/declining counts. Use for any market-wide ranking ('top stocks today', 'biggest gainers', 'how is the market'), even when no market is named. Say the ranking is the Nifty 50 — never a whole-market, sector or global ranking — and state only ranks it returns. ok: false means the data is unavailable: say so, don't recall or estimate one.",
+      "Today's Nifty 50 gainers and losers with advancing/declining counts, for 'top gainers/losers' and market breadth. Say the ranking is the Nifty 50 only and state only ranks it returns.",
     parameters: {
       type: "object",
       properties: {

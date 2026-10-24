@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { AGENT_TOOLS, getToolByName } from "./tools";
+import type { FoBanList } from "@/lib/apis/nseFoBan";
+import { answerFoBan } from "./foBan";
+import { abbreviationTicker, isConceptQuestion, isFoBanConceptQuestion, toolsFor } from "./routing";
+import { GLOSSARY, matchTerm } from "./tools/glossaryTool";
+import { buildLinks, evidenceFromFetched } from "./navigation";
 import { getChatCompletion as defaultGetChatCompletion } from "./llm/client";
-import { AGENT_SYSTEM_PROMPT } from "./llm/prompts";
+import { AGENT_SYSTEM_PROMPT, dateContext } from "./llm/prompts";
+import { LLMError } from "./errors";
+import { UNSOURCED_NOTE, findUnsourcedComparisons, marketCapRefs, verifyMarketCaps } from "./guards";
 import { LLMMessage, ToolResult } from "./types";
 import { AgentRequest, AgentResponse, AgentToolCallTrace, AgentMessage } from "@/lib/types/agent";
 
-// The LLM call is injectable (defaulting to the real Groq-backed client) so
+// The LLM call is injectable (defaulting to the real provider chain) so
 // the tool-calling loop itself can be exercised in tests without making a
 // real network call. Callers outside tests never need to pass `deps`.
 export interface RunAgentDeps {
@@ -14,6 +20,12 @@ export interface RunAgentDeps {
   now?: () => number;
   /** Overall budget for gathering data, in ms (default AGENT_BUDGET_MS). */
   budgetMs?: number;
+  /** Hard limit for the whole request, in ms (default AGENT_DEADLINE_MS). */
+  deadlineMs?: number;
+  /** Longest one tool may run, in ms (default TOOL_TIMEOUT_MS). */
+  toolTimeoutMs?: number;
+  /** NSE's F&O ban list, injectable for tests (default: the live file). */
+  foBanList?: () => Promise<FoBanList | null>;
 }
 
 /**
@@ -22,7 +34,34 @@ export interface RunAgentDeps {
  * A live two-stock comparison took 83s, and one attempt passed 90s, before
  * this existed.
  */
-export const AGENT_BUDGET_MS = 60_000;
+export const AGENT_BUDGET_MS = 30_000;
+
+/**
+ * The whole request, final answer included, ends within this. The browser
+ * gives up at 65 s (lib/agent/client/request.ts) and the route allows 60 s
+ * (maxDuration), so a slow provider now produces a partial answer from the
+ * data already fetched instead of "took too long to respond". A production
+ * follow-up ("Jio financials") hit that timeout.
+ */
+export const AGENT_DEADLINE_MS = 50_000;
+
+/** Time kept back from tool rounds for the final answer. */
+const FINAL_ANSWER_RESERVE_MS = 12_000;
+
+/** A data source that hangs is answered as unavailable after this long. */
+export const TOOL_TIMEOUT_MS = 12_000;
+
+export async function executeWithTimeout(run: () => Promise<ToolResult<unknown>>, source: string, timeoutMs: number): Promise<ToolResult<unknown>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ToolResult<unknown>>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, data: null, source, fetchedAt: new Date().toISOString() }), timeoutMs);
+  });
+  try {
+    return await Promise.race([run(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // How many turns may request tools.
 //
@@ -45,9 +84,12 @@ const FALLBACK_ANSWER =
 
 function buildInitialMessages(
   history: AgentMessage[] | undefined,
-  message: string
+  message: string,
+  now: Date
 ): LLMMessage[] {
-  const messages: LLMMessage[] = [{ role: "system", content: AGENT_SYSTEM_PROMPT }];
+  const messages: LLMMessage[] = [{ role: "system", content: `${AGENT_SYSTEM_PROMPT}
+
+${dateContext(now)}` }];
 
   for (const entry of history ?? []) {
     messages.push({ role: entry.role, content: entry.content });
@@ -63,7 +105,26 @@ export async function runAgent(
   deps: RunAgentDeps = { getChatCompletion: defaultGetChatCompletion }
 ): Promise<AgentResponse> {
   const conversationId = request.conversationId ?? randomUUID();
-  const messages = buildInitialMessages(request.history, request.message);
+  const now = deps.now ?? Date.now;
+
+  // What the F&O ban is, or which stocks are in it: answered from the
+  // glossary and NSE's file, never from a model that might read "F and O"
+  // as Ford and Occidental (lib/agent/foBan.ts).
+  const foBan = await answerFoBan(request.message, { loadList: deps.foBanList, now }, conversationId);
+  if (foBan) return foBan;
+
+  const messages = buildInitialMessages(request.history, request.message, new Date(now()));
+  // A concept question is offered only the glossary and app guide (lib/agent/routing.ts).
+  const tools = toolsFor(request.message);
+  // A glossary concept is never answered with "no data": the glossary's own
+  // explanation replaces a refusal, a give-up or a failed provider call.
+  const conceptAnswer = conceptFallback(request.message);
+  // Every answer carries the pages and official sources its data points to.
+  const finish = (response: AgentResponse): AgentResponse => ({
+    ...response,
+    answer: conceptAnswer && isNoDataAnswer(response.answer) ? conceptAnswer : response.answer,
+    links: buildLinks(request.message, evidenceFromFetched(fetched)),
+  });
 
   const toolCallTrace: AgentToolCallTrace[] = [];
   const sources = new Set<string>();
@@ -74,9 +135,13 @@ export async function runAgent(
   // and every repeat spends a round that a comparison needs elsewhere.
   const fetched = new Map<string, ToolResult<unknown>>();
 
-  const now = deps.now ?? Date.now;
   const startedAt = now();
   const budgetMs = deps.budgetMs ?? AGENT_BUDGET_MS;
+  const deadline = startedAt + (deps.deadlineMs ?? AGENT_DEADLINE_MS);
+  const toolTimeoutMs = deps.toolTimeoutMs ?? TOOL_TIMEOUT_MS;
+  // Set when the model answered with nothing at all (gpt-oss can spend its
+  // whole output budget reasoning): it is asked once more, below.
+  let emptyReply = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (round > 0 && now() - startedAt > budgetMs) {
@@ -84,16 +149,41 @@ export async function runAgent(
       break;
     }
 
-    const completion = await deps.getChatCompletion(messages, AGENT_TOOLS);
-
-    if (!completion.toolCalls || completion.toolCalls.length === 0) {
-      return {
-        answer: completion.content?.trim() || FALLBACK_ANSWER,
+    let completion;
+    try {
+      completion = await deps.getChatCompletion(messages, tools, { deadline: deadline - FINAL_ANSWER_RESERVE_MS });
+    } catch (error) {
+      // A provider failure after data was gathered (usually the per-minute
+      // token limit) should not throw away what was fetched: list it instead.
+      // With nothing gathered yet there is nothing to show, so it propagates.
+      const gathered = summariseGathered(fetched);
+      if (conceptAnswer && error instanceof LLMError) {
+        warnings.push("The AI service didn't respond, so this is StockSphere's glossary entry.");
+        return finish({ answer: conceptAnswer, toolCalls: toolCallTrace, sources: Array.from(sources), warnings, conversationId });
+      }
+      if (!gathered || !(error instanceof LLMError)) throw error;
+      warnings.push("The AI service stopped responding part-way; the answer lists the data that was retrieved.");
+      return finish({
+        answer: gathered,
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
         conversationId,
-      };
+      });
+    }
+
+    if (!completion.toolCalls || completion.toolCalls.length === 0) {
+      if (!completion.content?.trim()) {
+        emptyReply = true;
+        break;
+      }
+      return finish({
+        answer: checkAnswer(completion.content.trim(), fetched, warnings),
+        toolCalls: toolCallTrace,
+        sources: Array.from(sources),
+        warnings,
+        conversationId,
+      });
     }
 
     // Record the assistant's tool-call request before the results, so the
@@ -102,10 +192,12 @@ export async function runAgent(
       role: "assistant",
       content: completion.content,
       toolCalls: completion.toolCalls,
+      raw: completion.raw,
     });
 
     for (const call of completion.toolCalls) {
-      const tool = getToolByName(call.name);
+      // Only the tools this question was offered can run.
+      const tool = tools.find((candidate) => candidate.name === call.name);
 
       if (!tool) {
         warnings.push(`The assistant tried to use an unknown tool "${call.name}".`);
@@ -123,6 +215,7 @@ export async function runAgent(
             data: null,
             source: call.name,
             fetchedAt: new Date().toISOString(),
+            note: UNAVAILABLE_TOOL_NOTE,
           }),
         });
         continue;
@@ -142,12 +235,24 @@ export async function runAgent(
 
       if (!validation.success) {
         warnings.push(`Invalid arguments were provided to "${tool.name}".`);
+        const issue = validation.error.issues[0];
         result = {
           ok: false,
           data: null,
           source: tool.name,
           fetchedAt: new Date().toISOString(),
-        };
+          note: invalidArgumentsNote(issue ? `${issue.path.join(".") || "arguments"}: ${issue.message}` : "invalid arguments"),
+        } as ToolResult<unknown>;
+      } else if (abbreviationTicker(request.message, validation.data)) {
+        // "F" from "F and O ban" is futures and options, not Ford: never looked up.
+        inputForTrace = validation.data as Record<string, unknown>;
+        result = {
+          ok: false,
+          data: null,
+          source: tool.name,
+          fetchedAt: new Date().toISOString(),
+          note: abbreviationNote(abbreviationTicker(request.message, validation.data)!),
+        } as ToolResult<unknown>;
       } else {
         inputForTrace = validation.data as Record<string, unknown>;
 
@@ -162,12 +267,12 @@ export async function runAgent(
           messages.push({
             role: "tool",
             toolCallId: call.id,
-            content: JSON.stringify(previously),
+            content: serialiseForModel(withFailureNote(previously)),
           });
           continue;
         }
 
-        result = await tool.execute(validation.data);
+        result = await executeWithTimeout(() => tool.execute(validation.data), tool.name, toolTimeoutMs);
         fetched.set(cacheKey, result);
       }
 
@@ -189,7 +294,7 @@ export async function runAgent(
       messages.push({
         role: "tool",
         toolCallId: call.id,
-        content: JSON.stringify(result),
+        content: serialiseForModel(withFailureNote(result)),
       });
     }
   }
@@ -209,24 +314,26 @@ export async function runAgent(
   // (Groq rejects that turn with tool_use_failed).
   messages.push({
     role: "system",
-    content:
-      "No more tool calls are possible. Answer now using only the tool results above. Where a figure was not computed by the calculate tool, give the raw values it would use and say the calculation wasn't run, rather than working it out yourself.",
+    content: emptyReply
+      ? "Your last reply was empty. Answer the user's question now in prose, using the tool results above for any figures and general knowledge for concepts. Where a figure was not computed by the calculate tool, give the raw values rather than working it out yourself."
+      : "No more tool calls are possible. Answer now using only the tool results above. Where a figure was not computed by the calculate tool, give the raw values it would use and say the calculation wasn't run, rather than working it out yourself.",
   });
 
   try {
-    const finalCompletion = await deps.getChatCompletion(messages, AGENT_TOOLS, {
+    const finalCompletion = await deps.getChatCompletion(messages, tools, {
       toolChoice: "none",
+      deadline,
     });
     const finalAnswer = finalCompletion.content?.trim();
 
     if (finalAnswer) {
-      return {
-        answer: finalAnswer,
+      return finish({
+        answer: checkAnswer(finalAnswer, fetched, warnings),
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
         conversationId,
-      };
+      });
     }
   } catch (error) {
     // A provider that rejects the withheld-tool turn must not turn a partial
@@ -238,13 +345,131 @@ export async function runAgent(
     "Reached the maximum number of tool-calling steps before producing a final answer."
   );
 
-  return {
+  return finish({
     answer: summariseGathered(fetched) ?? FALLBACK_ANSWER,
     toolCalls: toolCallTrace,
     sources: Array.from(sources),
     warnings,
     conversationId,
-  };
+  });
+}
+
+/**
+ * What the model is told when a tool gives nothing. A bare {ok: false} read
+ * like "no such thing", and a model once answered "StockSphere has no data
+ * entry defining F&O ban" after a lookup failed. These say plainly that the
+ * data was missing, not the concept.
+ */
+export const NO_DATA_NOTE =
+  "No data was available from this source right now. This is missing data, not evidence that a concept doesn't exist: say what couldn't be verified, and still explain any concept from general knowledge.";
+export const UNAVAILABLE_TOOL_NOTE =
+  "That tool isn't available for this question. It says nothing about the topic: answer from general knowledge or with the tools you have.";
+
+/**
+ * "I'm sorry, but I don't have any data on F and O ban in the StockSphere
+ * resources" — a reply that treats a concept as missing data. Only short
+ * replies count: a full explanation that mentions one missing figure is kept.
+ */
+const NO_DATA_REFUSAL =
+  /\b(?:(?:don't|do not|doesn't|does not|didn't|did not) (?:have|find|hold|contain) (?:any )?(?:data|information|details|entry|entries|records?)|no (?:data|information|details|entry|entries|records?)\b[^.]{0,40}\b(?:on|about|for|defining|regarding|available|in)|(?:couldn't|could not|can't|cannot|unable to) find (?:any )?(?:data|information|details))/i;
+
+export function isNoDataAnswer(answer: string): boolean {
+  return answer === FALLBACK_ANSWER || (answer.length < 600 && NO_DATA_REFUSAL.test(answer));
+}
+
+/**
+ * The glossary's explanation for a concept question about one of its terms,
+ * without the internal tool names. For the F&O ban it points to NSE's page,
+ * which every such answer links (lib/agent/navigation.ts).
+ */
+export function conceptFallback(message: string): string | null {
+  const question = message.replace(/^\[Context:[^\]]*\]\s*/, "");
+  if (!isConceptQuestion(question) && !isFoBanConceptQuestion(question)) return null;
+  const term = matchTerm(question);
+  if (!term) return null;
+  const text = GLOSSARY[term].replace(/\s*[^.]*\bget_[a-z_]+\b[^.]*\.?/g, "").trim();
+  const official =
+    term === "fo_ban"
+      ? "\n\nNSE publishes the ban list every day; its file is for the next trade date, so check the date on it. Use **Check Today's NSE F&O Ban List** below for the official list."
+      : "";
+  return `**General information**\n\n${text}${official}`;
+}
+
+export function abbreviationNote(abbreviation: string): string {
+  return `Not looked up: in this question those letters are part of ${abbreviation}, not stock tickers. Answer about ${abbreviation} itself.`;
+}
+
+export function invalidArgumentsNote(issue: string): string {
+  return `The request to this tool was invalid (${issue}). That is a request error, not missing information about the topic: retry with valid arguments, or answer from general knowledge where that fits.`;
+}
+
+/** A failed result as sent to the model: with a note, unless it already has one. */
+export function withFailureNote(result: ToolResult<unknown>): ToolResult<unknown> {
+  if (result.ok || "note" in result) return result;
+  return { ...result, note: NO_DATA_NOTE } as ToolResult<unknown>;
+}
+
+/**
+ * Checks a final answer against the tool results it was written from (see
+ * lib/agent/guards.ts): a market cap that matches no source is corrected or
+ * marked, and a comparison with an index or average figure no tool returned
+ * gets a visible "unverified" note. Only when tools ran — a concept
+ * explanation with an illustrative example has nothing to check against.
+ */
+export function checkAnswer(answer: string, fetched: Map<string, ToolResult<unknown>>, warnings: string[]): string {
+  const results = Array.from(fetched.values()).filter((r) => r.ok && r.data);
+  if (results.length === 0) return answer;
+
+  const caps = verifyMarketCaps(answer, results.flatMap((r) => marketCapRefs(r.data)));
+  let checked = caps.answer;
+  if (caps.corrected) warnings.push(`Corrected ${caps.corrected} market-cap figure(s) that didn't match the source.`);
+  if (caps.flagged) warnings.push(`Marked ${caps.flagged} market-cap figure(s) that didn't match the source.`);
+
+  if (findUnsourcedComparisons(checked, results.map((r) => JSON.stringify(r.data))).length) {
+    checked = `${checked}\n\n${UNSOURCED_NOTE}`;
+    warnings.push("The answer compared against a figure that no tool returned.");
+  }
+  return checked;
+}
+
+/**
+ * Most characters of one tool result sent to the model (~2,000 tokens). Groq's
+ * free tier allows 8,000 tokens a minute and rejects any single request above
+ * that (413), which a 500-candle history used to cause on its own.
+ */
+export const MAX_TOOL_RESULT_CHARS = 8_000;
+
+/**
+ * A tool result as JSON, cut to MAX_TOOL_RESULT_CHARS by dropping the oldest
+ * entries of its longest list (history is ascending, so the most recent data
+ * is kept) and saying so in `truncated`. Values are never altered.
+ */
+export function serialiseForModel(result: ToolResult<unknown>, maxChars: number = MAX_TOOL_RESULT_CHARS): string {
+  let json = JSON.stringify(result);
+  if (json.length <= maxChars || !result.data || typeof result.data !== "object") return json;
+
+  const data = { ...(result.data as Record<string, unknown>) };
+  const isList = Array.isArray(result.data);
+  const listKey = isList
+    ? null
+    : Object.keys(data)
+        .filter((key) => Array.isArray(data[key]))
+        .sort((a, b) => JSON.stringify(data[b]).length - JSON.stringify(data[a]).length)[0];
+  const original = (isList ? result.data : listKey ? data[listKey] : null) as unknown[] | null;
+  if (!original || original.length < 2) return json;
+
+  let keep = original.length;
+  while (keep > 1) {
+    keep = Math.max(1, Math.floor(keep * 0.7));
+    const slice = original.slice(-keep);
+    const note = `Only the last ${keep} of ${original.length} entries are shown, to fit the AI service's size limit.`;
+    const shrunk = isList
+      ? { ...result, data: slice, truncated: note }
+      : { ...result, data: { ...data, [listKey as string]: slice, truncated: note } };
+    json = JSON.stringify(shrunk);
+    if (json.length <= maxChars) break;
+  }
+  return json;
 }
 
 /**
@@ -265,6 +490,20 @@ export function summariseGathered(fetched: Map<string, ToolResult<unknown>>): st
       const change = typeof data.changePercent === "number" ? ` (${data.changePercent >= 0 ? "+" : ""}${data.changePercent.toFixed(2)}% today)` : "";
       lines.push(`- ${String(data.symbol ?? "")}: ${data.price} ${String(data.currency ?? "")}${change}`);
     }
+    if (tool === "get_market_quotes" && Array.isArray(data.quotes)) {
+      for (const q of data.quotes as Record<string, unknown>[]) {
+        if (typeof q.price !== "number") continue;
+        const unit = q.unit === "percent" ? "%" : q.currency ? ` ${String(q.currency)}` : "";
+        const change = typeof q.changePercent === "number" ? ` (${q.changePercent >= 0 ? "+" : ""}${q.changePercent.toFixed(2)}% today)` : "";
+        lines.push(`- ${String(q.name ?? q.symbol)}: ${q.price}${unit}${change}`);
+      }
+    }
+    if (tool === "get_performance" && Array.isArray(data.rows)) {
+      for (const row of data.rows as Record<string, unknown>[]) {
+        if (row.status !== "ok" || typeof row.returnPct !== "number") continue;
+        lines.push(`- ${String(row.symbol)}: ${row.startClose} (${String(row.startDate)}) → ${row.endClose} (${String(row.endDate)}), ${row.returnPct >= 0 ? "+" : ""}${row.returnPct}% over ${String(data.period)}`);
+      }
+    }
     if (tool === "calculate" && typeof data.rounded === "number" && Array.isArray(data.inputs)) {
       const unit = data.unit === "percent" ? "%" : "";
       lines.push(`- ${String(data.operation).replace(/_/g, " ")} of ${(data.inputs as number[]).join(" → ")}: ${data.rounded}${unit}`);
@@ -277,6 +516,6 @@ export function summariseGathered(fetched: Map<string, ToolResult<unknown>>): st
     "",
     ...lines,
     "",
-    "Prices are the latest StockSphere had and may be delayed.",
+    "Prices are the latest StockSphere had and may be delayed. This is general information, not investment advice.",
   ].join("\n");
 }

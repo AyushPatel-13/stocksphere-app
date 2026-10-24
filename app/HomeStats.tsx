@@ -25,7 +25,7 @@ function Card({ title, href, children }: { title: string; href: string; children
     <section className="rounded-2xl border border-[#222] bg-[#111] p-5">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold">{title}</h2>
-        <Link href={href} className="text-sm text-[#4ade80] hover:underline">
+        <Link href={href} className="rounded text-sm text-[#4ade80] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40">
           See all →
         </Link>
       </div>
@@ -79,7 +79,7 @@ export default function HomeStats() {
               <li key={entry.symbol}>
                 <Link
                   href={`/stock/${encodeURIComponent(entry.symbol)}`}
-                  className="group flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[#161616]"
+                  className="group flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[#161616] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
                 >
                   <span className="w-4 text-xs tabular-nums text-[#666]">{index + 1}</span>
                   <StockAvatar symbol={entry.symbol} size={28} />
@@ -106,7 +106,7 @@ export default function HomeStats() {
                 <li key={leader.username}>
                   <Link
                     href={`/profile/${leader.username}`}
-                    className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[#161616]"
+                    className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[#161616] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
                   >
                     <span className="w-4 text-xs tabular-nums text-[#666]">{index + 1}</span>
                     <span className="min-w-0 flex-1 truncate font-semibold">{leader.displayName}</span>

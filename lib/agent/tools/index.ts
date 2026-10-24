@@ -10,6 +10,11 @@ import { calculatorTool } from "./calculatorTool";
 import { screenerTool } from "./screenerTool";
 import { performanceTool } from "./performanceTool";
 import { earningsTool } from "./earningsTool";
+import { marketQuotesTool } from "./marketQuotesTool";
+import { ipoTool } from "./ipoTool";
+import { appGuideTool } from "./appGuideTool";
+import { glossaryTool } from "./glossaryTool";
+import { foBanTool } from "./foBanTool";
 
 export const AGENT_TOOLS: ToolDefinition[] = [
   symbolResolverTool,
@@ -23,6 +28,11 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   screenerTool,
   performanceTool,
   earningsTool,
+  marketQuotesTool,
+  ipoTool,
+  appGuideTool,
+  glossaryTool,
+  foBanTool,
 ];
 
 export function getToolByName(name: string): ToolDefinition | undefined {

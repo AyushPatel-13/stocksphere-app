@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef } from "react";
 
 import type { ChatFailure, ChatMessage } from "@/lib/agent/client/types";
@@ -54,13 +55,22 @@ function FailureNotice({
         {failure.message}
       </p>
 
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11.5px] font-semibold text-red-300 transition hover:border-red-400/50 hover:bg-red-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
-      >
-        Try again
-      </button>
+      {failure.code === "SIGNED_OUT" ? (
+        <Link
+          href="/login"
+          className="mt-2 inline-block rounded-lg bg-[#22c55e] px-2.5 py-1 text-[11.5px] font-semibold text-black transition hover:bg-[#4ade80] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#22c55e]/50"
+        >
+          Sign in
+        </Link>
+      ) : (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11.5px] font-semibold text-red-300 transition hover:border-red-400/50 hover:bg-red-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+        >
+          Try again
+        </button>
+      )}
     </div>
   );
 }
