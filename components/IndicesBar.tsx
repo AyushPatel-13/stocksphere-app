@@ -88,7 +88,7 @@ export default function IndicesBar() {
               <Link
                 key={symbol}
                 href={`/asset/index/${symbol}`}
-                className="min-w-[150px] flex-1 border-r border-[#242424] px-4 py-3 text-left transition-colors last:border-r-0 hover:bg-[#161616]"
+                className="min-w-[150px] flex-1 border-r border-[#242424] px-4 py-3 text-left transition-colors last:border-r-0 hover:bg-[#161616] focus-visible:bg-[#161616] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-green-500/40"
               >
                 <div className="text-[12px] font-medium text-[#bdbdbd]">
                   {BAR_LABELS[symbol]}
@@ -130,7 +130,7 @@ export default function IndicesBar() {
           href="/indices"
           aria-label="View all markets"
           title="View all markets"
-          className="flex h-[66px] w-[66px] shrink-0 items-center justify-center border-l border-[#242424] text-[#a1a1aa] transition-colors hover:bg-[#161616] hover:text-white"
+          className="flex h-[66px] w-[66px] shrink-0 items-center justify-center border-l border-[#242424] text-[#a1a1aa] transition-colors hover:bg-[#161616] hover:text-white focus-visible:bg-[#161616] focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-green-500/40"
         >
           <span className="grid grid-cols-2 gap-[3px]">
             <span className="h-[5px] w-[5px] rounded-[1px] bg-current" />

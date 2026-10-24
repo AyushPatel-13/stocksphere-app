@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useState, useEffect, type ReactNode } from "react";
 import RecentlyViewed from "@/components/Markets/RecentlyViewed";
 import Image from "next/image";
@@ -17,22 +17,32 @@ import IndicesBar from "@/components/IndicesBar";
  * Presentation only — every number comes from `/api/market`. `loading` means
  * the request has not settled yet and draws a placeholder, so a pending fetch
  * never reads as missing data; a quote that came back null says Unavailable.
+ *
+ * The whole card is one link to the stock's page. `symbol` is the bare ticker
+ * /api/market prices under this label, which is what /stock/[symbol] takes.
+ * It links whether or not a quote came back: the stock page fetches its own.
  */
 function QuoteCard({
   label,
+  symbol,
   quote,
   loading,
 }: {
   label: string;
+  symbol: string;
   quote: { price: number; changePercent?: number } | null;
   loading: boolean;
 }) {
   const changePercent = quote?.changePercent;
 
   return (
-    <div className="rounded-2xl border border-[#222] bg-[#111] p-5 transition-colors hover:border-[#2e2e2e]">
+    <Link
+      href={`/stock/${symbol}`}
+      className="block rounded-2xl border border-[#222] bg-[#111] p-5 transition-colors hover:border-[#2e2e2e] hover:bg-[#141414] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
+    >
       <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#777]">
         {label}
+        <span className="sr-only"> ({symbol})</span>
       </p>
 
       {loading ? (
@@ -59,7 +69,7 @@ function QuoteCard({
           Unavailable
         </p>
       )}
-    </div>
+    </Link>
   );
 }
 
@@ -69,35 +79,25 @@ function QuoteCard({
  * `tone` is the only difference between the four lists that use this: the
  * advancing ones prefix a "+" and render green, the declining ones keep the
  * number's own minus sign and render red. The figure itself is the provider's.
+ *
+ * The row is a real link to /stock/[symbol] (the APIs answer bare NSE
+ * symbols), so it can open in a new tab, prefetches and reads as a link.
  */
 function MoveRow({
   symbol,
   price,
   changePercent,
   tone,
-  onSelect,
 }: {
   symbol: string;
   price: number;
   changePercent?: number;
   tone: "up" | "down";
-  onSelect: () => void;
 }) {
   return (
-    <div
-      role="link"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        // A link's activation key is Enter. Space is deliberately left to its
-        // default (page scroll) so a focused row can never navigate by
-        // accident while someone is scrolling the page.
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-[#1a1a1a] p-4 transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-green-500/40"
+    <Link
+      href={`/stock/${encodeURIComponent(symbol)}`}
+      className="flex items-center justify-between gap-3 rounded-xl bg-[#1a1a1a] p-4 transition-colors hover:bg-[#242424] focus-visible:bg-[#242424] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-green-500/40"
     >
       <div className="min-w-0">
         <p className="truncate font-bold">{symbol}</p>
@@ -115,7 +115,7 @@ function MoveRow({
         {tone === "up" ? "+" : ""}
         {changePercent?.toFixed(2)}%
       </p>
-    </div>
+    </Link>
   );
 }
 
@@ -160,8 +160,6 @@ function UnavailableNote({ children }: { children: ReactNode }) {
 }
 
 export default function Home() {
-  const router = useRouter();
-
   const [marketData, setMarketData] =
   useState<{
     success: boolean;
@@ -334,15 +332,13 @@ useEffect(() => {
         "NVDA",
         "TSLA",
       ].map((item) => (
-        <button
+        <Link
           key={item}
-          onClick={() =>
-            router.push(`/stock/${item}`)
-          }
+          href={`/stock/${item}`}
           className="rounded-full border border-[#222] bg-[#111] px-4 py-2 text-[#c9c9c9] transition-colors hover:border-green-500 hover:text-green-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
         >
           {item}
-        </button>
+        </Link>
       ))}
 
     </div>
@@ -370,24 +366,28 @@ useEffect(() => {
 
     <QuoteCard
       label="Apple"
+      symbol="AAPL"
       quote={marketData?.us?.apple ?? null}
       loading={marketData === null}
     />
 
     <QuoteCard
       label="Microsoft"
+      symbol="MSFT"
       quote={marketData?.us?.microsoft ?? null}
       loading={marketData === null}
     />
 
     <QuoteCard
       label="Tesla"
+      symbol="TSLA"
       quote={marketData?.us?.tesla ?? null}
       loading={marketData === null}
     />
 
     <QuoteCard
       label="NVIDIA"
+      symbol="NVDA"
       quote={marketData?.us?.nvidia ?? null}
       loading={marketData === null}
     />
@@ -425,11 +425,6 @@ useEffect(() => {
               price={stock.price}
               changePercent={stock.changePercent}
               tone="up"
-              onSelect={() =>
-                router.push(
-                  `/stock/${stock.symbol}`
-                )
-              }
             />
           ))}
         </div>
@@ -463,11 +458,6 @@ useEffect(() => {
               price={stock.price}
               changePercent={stock.changePercent}
               tone="down"
-              onSelect={() =>
-                router.push(
-                  `/stock/${stock.symbol}`
-                )
-              }
             />
           ))}
         </div>
@@ -527,11 +517,6 @@ useEffect(() => {
                 price={stock.price}
                 changePercent={stock.changePercent}
                 tone="up"
-                onSelect={() =>
-                  router.push(
-                    `/stock/${stock.symbol}`
-                  )
-                }
               />
             ))}
           </div>
@@ -578,11 +563,6 @@ useEffect(() => {
                 price={stock.price}
                 changePercent={stock.changePercent}
                 tone="down"
-                onSelect={() =>
-                  router.push(
-                    `/stock/${stock.symbol}`
-                  )
-                }
               />
             ))}
           </div>
