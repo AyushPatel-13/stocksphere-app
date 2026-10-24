@@ -120,6 +120,7 @@ export function useAgentChat({
             role: "assistant",
             content: response.answer,
             sources: response.sources,
+            links: response.links,
             warnings: response.warnings,
             tools: response.toolCalls.map((call) => call.tool),
           },

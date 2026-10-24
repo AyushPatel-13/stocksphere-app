@@ -158,3 +158,15 @@ test("an explicit workflow is validated, and the body can't choose whose data is
   const sneaky = await POST(makeRequest({ message: "my portfolio please", workflow: { type: "portfolio" }, userId: "victim" }), undefined, access, fakeRun, wf.impl);
   assert.equal((await sneaky.json()).answer, "for user-1");
 });
+
+test("an 'open X' request is answered with a link and doesn't use the member's allowance", async () => {
+  const { access, calls } = fakeAccess();
+  const navigate = async () => ({ answer: "Here's the Heatmap page.", toolCalls: [], sources: [], warnings: [], conversationId: "n", links: [{ label: "Open Heatmap", href: "/heatmap", kind: "internal" as const, primary: true }] });
+  let ran = false;
+  const run = (async (input: Parameters<typeof fakeRun>[0]) => { ran = true; return fakeRun(input); }) as typeof fakeRun;
+  const response = await POST(makeRequest({ message: "Open heatmap" }), undefined, access, run, undefined, navigate);
+  const json = await response.json();
+  assert.equal(json.links[0].href, "/heatmap");
+  assert.equal(calls.length, 0);
+  assert.equal(ran, false);
+});

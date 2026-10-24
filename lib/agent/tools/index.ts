@@ -14,6 +14,7 @@ import { marketQuotesTool } from "./marketQuotesTool";
 import { ipoTool } from "./ipoTool";
 import { appGuideTool } from "./appGuideTool";
 import { glossaryTool } from "./glossaryTool";
+import { foBanTool } from "./foBanTool";
 
 export const AGENT_TOOLS: ToolDefinition[] = [
   symbolResolverTool,
@@ -31,6 +32,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   ipoTool,
   appGuideTool,
   glossaryTool,
+  foBanTool,
 ];
 
 export function getToolByName(name: string): ToolDefinition | undefined {

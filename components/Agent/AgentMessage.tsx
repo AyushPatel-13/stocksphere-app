@@ -1,6 +1,7 @@
 "use client";
 
 import type { ChatMessage } from "@/lib/agent/client/types";
+import AgentLinks from "./AgentLinks";
 import AgentMarkdown from "./AgentMarkdown";
 
 /**
@@ -45,6 +46,8 @@ export default function AgentMessage({ message }: { message: ChatMessage }) {
             long symbol — wraps inside the card instead of widening it. */}
         <div className="break-words rounded-2xl rounded-bl-md border border-[#222] bg-[#141414] px-4 py-3">
           <AgentMarkdown content={message.content} />
+
+          {message.links && message.links.length > 0 && <AgentLinks links={message.links} />}
 
           {(sources.length > 0 || tools.length > 0) && (
             <div className="mt-3 space-y-2 border-t border-[#222] pt-2.5">

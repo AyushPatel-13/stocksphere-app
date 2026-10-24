@@ -31,6 +31,7 @@ test("registry includes the six V1 tools, market movers, the calculator, the scr
     "get_company",
     "get_earnings_calendar",
     "get_financials",
+    "get_fo_ban_list",
     "get_historical",
     "get_ipos",
     "get_market_movers",

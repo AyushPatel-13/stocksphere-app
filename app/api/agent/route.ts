@@ -5,6 +5,14 @@ import { runAgent } from "@/lib/agent/orchestrator";
 import { AgentError } from "@/lib/agent/errors";
 import { bearerToken, defaultAgentAccess, type AgentAccess } from "@/lib/agent/access";
 import { detectWorkflow, runDefaultWorkflow, type Workflow } from "@/lib/agent/workflows";
+import { answerNavigation } from "@/lib/agent/navigation";
+import { runAllowlistedTool } from "@/lib/agent/workflows/run";
+import { randomUUID } from "node:crypto";
+
+/** "Open the heatmap", "show me Reliance": answered with a link, no model call. */
+function defaultNavigate(message: string, conversationId?: string) {
+  return answerNavigation(message, { runTool: runAllowlistedTool }, conversationId ?? randomUUID());
+}
 import { AgentErrorResponse } from "@/lib/types/agent";
 
 // The agent finishes within AGENT_DEADLINE_MS (50 s); this lets the platform
@@ -54,7 +62,8 @@ export async function POST(
   _context?: unknown,
   access: AgentAccess = defaultAgentAccess,
   run: typeof runAgent = runAgent,
-  workflow: typeof runDefaultWorkflow = runDefaultWorkflow
+  workflow: typeof runDefaultWorkflow = runDefaultWorkflow,
+  navigate: typeof defaultNavigate = defaultNavigate
 ) {
   const token = bearerToken(request);
   const userId = token ? await access.verifyToken(token) : null;
@@ -90,6 +99,12 @@ export async function POST(
   const cached = cacheable ? answerCache.get(parsed.data.message) : null;
   if (cached) {
     return NextResponse.json({ ...cached, conversationId: parsed.data.conversationId ?? cached.conversationId });
+  }
+
+  // A request to open a page needs no AI answer, so it doesn't use the member's allowance.
+  if (standalone && !parsed.data.workflow) {
+    const navigation = await navigate(parsed.data.message, parsed.data.conversationId);
+    if (navigation) return NextResponse.json(navigation);
   }
 
   const slot = await access.takeSlot(userId);

@@ -8,6 +8,7 @@ import { getToolByName } from "../tools";
 import type { ToolResult } from "../types";
 import type { AgentResponse, AgentToolCallTrace } from "@/lib/types/agent";
 import { UNSOURCED_NOTE, findUnsourcedComparisons, marketCapRefs, verifyMarketCaps, type MarketCapRef } from "../guards";
+import { buildLinks, type ToolEvidence } from "../navigation";
 import { ensureDisclaimer, renderCitations, serialiseEvidence, type Evidence } from "./citations";
 import type { Workflow } from "./detect";
 import { analysePortfolio, type HoldingInput, type PriceInput } from "./portfolio";
@@ -59,12 +60,15 @@ class Gatherer {
   missing: string[] = [];
   /** Raw market caps from the sources, to check the answer against. */
   marketCaps: MarketCapRef[] = [];
+  /** Every call with its result, for the links that go with the answer. */
+  calls: ToolEvidence[] = [];
 
   constructor(private readonly deps: WorkflowDeps) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<ToolResult<unknown>> {
     const result = await this.deps.runTool(name, args);
     this.trace.push({ tool: name, input: args, ok: result.ok, source: result.source });
+    this.calls.push({ tool: name, input: args, ok: result.ok, data: result.data });
     if (result.ok) this.sources.add(result.source);
     return result;
   }
@@ -264,6 +268,7 @@ export async function runWorkflow(
     answer,
     toolCalls: g.trace,
     sources: Array.from(g.sources),
+    links: buildLinks(question, g.calls),
     warnings,
     conversationId,
   });

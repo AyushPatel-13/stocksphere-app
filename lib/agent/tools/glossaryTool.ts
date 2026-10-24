@@ -13,7 +13,7 @@ const SOURCE = "StockSphere market glossary (exchange/SEBI rules; general inform
 
 export const GLOSSARY = {
   fo_ban:
-    "F&O ban period (NSE): a stock enters the ban when market-wide open interest in its futures and options exceeds 95% of its market-wide position limit (MWPL). During the ban no fresh F&O positions may be created — traders may only reduce or close existing positions, and increasing one can draw a penalty. The stock leaves the ban once open interest falls below 80% of MWPL. Cash-market (delivery/intraday equity) trading is not affected. NSE publishes the list daily; StockSphere does not carry the live ban list.",
+    "F&O ban period (NSE): a stock enters the ban when market-wide open interest in its futures and options exceeds 95% of its market-wide position limit (MWPL). During the ban no fresh F&O positions may be created — traders may only reduce or close existing positions, and increasing one can draw a penalty. The stock leaves the ban once open interest falls below 80% of MWPL. Cash-market (delivery/intraday equity) trading is not affected. NSE publishes the list daily; the current list comes from get_fo_ban_list.",
   circuit_limits:
     "Price bands / circuits: exchanges set a daily price band for most stocks (commonly 2%, 5%, 10% or 20%); a stock at its upper or lower band is 'in circuit' and trades only at that price until the band allows otherwise. Stocks in the F&O segment have no fixed band but dynamic price bands that the exchange can widen. Separately, index-wide circuit breakers halt all equity trading when the Nifty 50 or Sensex moves 10%, 15% or 20%.",
   settlement:
@@ -33,21 +33,58 @@ export const GLOSSARY = {
 type Term = keyof typeof GLOSSARY;
 const TERMS = Object.keys(GLOSSARY) as Term[];
 
-const argsSchema = z.object({ term: z.enum(TERMS as [Term, ...Term[]]) });
+/**
+ * What a model might send for each entry. Free text is accepted and matched
+ * here, because a strict enum turned "F&O ban" into a bare validation failure
+ * that the model then reported as "no entry defining F&O ban".
+ */
+const ALIASES: Record<Term, RegExp> = {
+  fo_ban: /\b(?:f\s*&\s*o|f\s*and\s*o|fno|futures\s*(?:and|&)\s*options|derivatives?)\b.*\bban\b|\bban\s*(?:list|period)\b|\bmwpl\b|^fo_?ban$/i,
+  circuit_limits: /\bcircuits?\b|\bprice\s*bands?\b|^circuit_limits$/i,
+  settlement: /\bsettlement\b|\bt\s*\+\s*[01]\b/i,
+  asm_gsm: /\basm\b|\bgsm\b|\bsurveillance\b|^asm_gsm$/i,
+  ipo_allotment: /\ballot(?:ment|ted)\b|^ipo_allotment$/i,
+  gmp: /\bgmp\b|\bgrey\s*market\b/i,
+  sme_ipo: /\bsme\b/i,
+  lot_size: /\blot\s*size\b|^lot_size$/i,
+};
+
+export function matchTerm(raw: string): Term | null {
+  const text = raw.trim();
+  if ((TERMS as string[]).includes(text)) return text as Term;
+  return TERMS.find((term) => ALIASES[term].test(text)) ?? null;
+}
+
+const argsSchema = z.object({ term: z.string().trim().min(1).max(80) });
 
 export type GlossaryArgs = z.infer<typeof argsSchema>;
 
-export const glossaryTool: ToolDefinition<GlossaryArgs, { term: Term; explanation: string }> = {
+type GlossaryResult =
+  | { found: true; term: Term; explanation: string }
+  | { found: false; asked: string; known: Term[]; guidance: string };
+
+export const glossaryTool: ToolDefinition<GlossaryArgs, GlossaryResult> = {
   name: "get_market_term",
   description:
     "Exact rules for Indian market mechanics: fo_ban (F&O ban period), circuit_limits, settlement (T+1), asm_gsm (surveillance), ipo_allotment, gmp, sme_ipo, lot_size. Use it before explaining any of these; for other concepts answer from general knowledge.",
   parameters: {
     type: "object",
-    properties: { term: { type: "string", enum: TERMS, description: "The term to explain." } },
+    properties: { term: { type: "string", description: `The term to explain, e.g. one of: ${TERMS.join(", ")}.` } },
     required: ["term"],
   },
   argsSchema,
   async execute({ term }) {
-    return okResult({ term, explanation: GLOSSARY[term] }, SOURCE);
+    const match = matchTerm(term);
+    if (match) return okResult({ found: true, term: match, explanation: GLOSSARY[match] }, SOURCE);
+    // Not an error: the glossary only holds rules models tend to get wrong.
+    return okResult(
+      {
+        found: false,
+        asked: term,
+        known: TERMS,
+        guidance: "Not in StockSphere's glossary. That says nothing about the concept: explain it from general knowledge under a \"General information\" label.",
+      },
+      SOURCE
+    );
   },
 };

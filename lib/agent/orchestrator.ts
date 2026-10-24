@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { AGENT_TOOLS, getToolByName } from "./tools";
+import { toolsFor } from "./routing";
+import { buildLinks, evidenceFromFetched } from "./navigation";
 import { getChatCompletion as defaultGetChatCompletion } from "./llm/client";
 import { AGENT_SYSTEM_PROMPT, dateContext } from "./llm/prompts";
 import { LLMError } from "./errors";
@@ -101,6 +102,10 @@ export async function runAgent(
   const conversationId = request.conversationId ?? randomUUID();
   const now = deps.now ?? Date.now;
   const messages = buildInitialMessages(request.history, request.message, new Date(now()));
+  // A concept question is offered only the glossary and app guide (lib/agent/routing.ts).
+  const tools = toolsFor(request.message);
+  // Every answer carries the pages and official sources its data points to.
+  const finish = (response: AgentResponse): AgentResponse => ({ ...response, links: buildLinks(request.message, evidenceFromFetched(fetched)) });
 
   const toolCallTrace: AgentToolCallTrace[] = [];
   const sources = new Set<string>();
@@ -127,7 +132,7 @@ export async function runAgent(
 
     let completion;
     try {
-      completion = await deps.getChatCompletion(messages, AGENT_TOOLS, { deadline: deadline - FINAL_ANSWER_RESERVE_MS });
+      completion = await deps.getChatCompletion(messages, tools, { deadline: deadline - FINAL_ANSWER_RESERVE_MS });
     } catch (error) {
       // A provider failure after data was gathered (usually the per-minute
       // token limit) should not throw away what was fetched: list it instead.
@@ -135,13 +140,13 @@ export async function runAgent(
       const gathered = summariseGathered(fetched);
       if (!gathered || !(error instanceof LLMError)) throw error;
       warnings.push("The AI service stopped responding part-way; the answer lists the data that was retrieved.");
-      return {
+      return finish({
         answer: gathered,
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
         conversationId,
-      };
+      });
     }
 
     if (!completion.toolCalls || completion.toolCalls.length === 0) {
@@ -149,13 +154,13 @@ export async function runAgent(
         emptyReply = true;
         break;
       }
-      return {
+      return finish({
         answer: checkAnswer(completion.content.trim(), fetched, warnings),
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
         conversationId,
-      };
+      });
     }
 
     // Record the assistant's tool-call request before the results, so the
@@ -168,7 +173,8 @@ export async function runAgent(
     });
 
     for (const call of completion.toolCalls) {
-      const tool = getToolByName(call.name);
+      // Only the tools this question was offered can run.
+      const tool = tools.find((candidate) => candidate.name === call.name);
 
       if (!tool) {
         warnings.push(`The assistant tried to use an unknown tool "${call.name}".`);
@@ -186,6 +192,7 @@ export async function runAgent(
             data: null,
             source: call.name,
             fetchedAt: new Date().toISOString(),
+            note: UNAVAILABLE_TOOL_NOTE,
           }),
         });
         continue;
@@ -205,12 +212,14 @@ export async function runAgent(
 
       if (!validation.success) {
         warnings.push(`Invalid arguments were provided to "${tool.name}".`);
+        const issue = validation.error.issues[0];
         result = {
           ok: false,
           data: null,
           source: tool.name,
           fetchedAt: new Date().toISOString(),
-        };
+          note: invalidArgumentsNote(issue ? `${issue.path.join(".") || "arguments"}: ${issue.message}` : "invalid arguments"),
+        } as ToolResult<unknown>;
       } else {
         inputForTrace = validation.data as Record<string, unknown>;
 
@@ -225,7 +234,7 @@ export async function runAgent(
           messages.push({
             role: "tool",
             toolCallId: call.id,
-            content: serialiseForModel(previously),
+            content: serialiseForModel(withFailureNote(previously)),
           });
           continue;
         }
@@ -252,7 +261,7 @@ export async function runAgent(
       messages.push({
         role: "tool",
         toolCallId: call.id,
-        content: serialiseForModel(result),
+        content: serialiseForModel(withFailureNote(result)),
       });
     }
   }
@@ -278,20 +287,20 @@ export async function runAgent(
   });
 
   try {
-    const finalCompletion = await deps.getChatCompletion(messages, AGENT_TOOLS, {
+    const finalCompletion = await deps.getChatCompletion(messages, tools, {
       toolChoice: "none",
       deadline,
     });
     const finalAnswer = finalCompletion.content?.trim();
 
     if (finalAnswer) {
-      return {
+      return finish({
         answer: checkAnswer(finalAnswer, fetched, warnings),
         toolCalls: toolCallTrace,
         sources: Array.from(sources),
         warnings,
         conversationId,
-      };
+      });
     }
   } catch (error) {
     // A provider that rejects the withheld-tool turn must not turn a partial
@@ -303,13 +312,34 @@ export async function runAgent(
     "Reached the maximum number of tool-calling steps before producing a final answer."
   );
 
-  return {
+  return finish({
     answer: summariseGathered(fetched) ?? FALLBACK_ANSWER,
     toolCalls: toolCallTrace,
     sources: Array.from(sources),
     warnings,
     conversationId,
-  };
+  });
+}
+
+/**
+ * What the model is told when a tool gives nothing. A bare {ok: false} read
+ * like "no such thing", and a model once answered "StockSphere has no data
+ * entry defining F&O ban" after a lookup failed. These say plainly that the
+ * data was missing, not the concept.
+ */
+export const NO_DATA_NOTE =
+  "No data was available from this source right now. This is missing data, not evidence that a concept doesn't exist: say what couldn't be verified, and still explain any concept from general knowledge.";
+export const UNAVAILABLE_TOOL_NOTE =
+  "That tool isn't available for this question. It says nothing about the topic: answer from general knowledge or with the tools you have.";
+
+export function invalidArgumentsNote(issue: string): string {
+  return `The request to this tool was invalid (${issue}). That is a request error, not missing information about the topic: retry with valid arguments, or answer from general knowledge where that fits.`;
+}
+
+/** A failed result as sent to the model: with a note, unless it already has one. */
+export function withFailureNote(result: ToolResult<unknown>): ToolResult<unknown> {
+  if (result.ok || "note" in result) return result;
+  return { ...result, note: NO_DATA_NOTE } as ToolResult<unknown>;
 }
 
 /**
