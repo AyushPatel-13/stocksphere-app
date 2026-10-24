@@ -61,31 +61,90 @@ export function isConceptQuestion(message: string): boolean {
   return true;
 }
 
-/** Any mention of the F&O ban: "F&O ban", "F and O ban", "FnO ban", "MWPL"… */
-export const FO_BAN_QUESTION =
-  /\b(?:f\s*&\s*o|f\s*(?:and|n)\s*o|fno|futures\s*(?:and|&)\s*options)\b[^?]*\bban\b|\bban\s*(?:list|period)\b|\bmwpl\b/i;
+// --- the F&O ban -------------------------------------------------------------
 
-/** Asks which securities are in the ban, not what the ban is. */
-const CURRENT_BAN =
-  /\b(?:today|todays|today's|tomorrow|now|currently|current|latest|right now|this week|list|which (?:stocks|shares|securities|companies|scrips)|banned (?:stocks|shares)|stocks in|shares in|is [A-Za-z&.-]+ in)\b/i;
+const FNO = String.raw`(?:f\s*&\s*o|f\s*(?:and|n)\s*o|fno|futures\s*(?:and|&)\s*options|derivatives?)`;
 
 /**
- * "F&O ban", "tell me about F&O ban", "Why is a stock put in F&O ban?" — the
- * ban as a concept, however it's phrased. isConceptQuestion needs a "what
- * is…" lead, so these used to get every tool, news included, and could end
- * in "no data on F&O ban". "Which stocks are in the F&O ban today?" is not
- * one of these: it needs get_fo_ban_list.
+ * Any question about NSE's F&O ban, however it's worded: "F&O ban", "f and o
+ * ban in stocks in india", "futures and options ban", "NSE ban list", "stocks
+ * in ban period", "MWPL".
  */
-export function isFoBanConceptQuestion(message: string): boolean {
+export const FO_BAN_QUESTION = new RegExp(
+  [
+    String.raw`\b${FNO}\b[^?]*\bban(?:ned)?\b`,
+    String.raw`\bban(?:ned)?\b[^?]*\b${FNO}\b`,
+    String.raw`\b(?:nse|securities|stocks?|shares?|scrips?)\s+(?:in\s+(?:the\s+)?)?ban\b`,
+    String.raw`\bban\s*(?:list|period)\b`,
+    String.raw`\bmwpl\b`,
+    String.raw`\bmarket[- ]wide position limits?\b`,
+  ].join("|"),
+  "i"
+);
+
+/** Asks which securities are in the ban now. */
+const CURRENT_BAN =
+  /\b(?:today|todays|today's|tomorrow|now|currently|current|latest|right now|this week|list|which|what (?:stocks|shares|securities)|banned\b[^?]*\b(?:stocks|shares|securities|scrips)|(?:stocks|shares|securities|scrips) (?:in|under))\b/i;
+
+/** Asks about one named stock: "Is SAIL in the F&O ban?" */
+const ONE_STOCK = /\bis\s+(?!it\b|there\b|the\b|a\b|any\b)[A-Za-z][A-Za-z&.-]*\s+(?:in|under|banned)\b/i;
+
+export type FoBanIntent = "concept" | "list" | "stock";
+
+/**
+ * What an F&O ban question wants — or null when it isn't one.
+ *
+ * "concept" (what the ban is) and "list" (which securities are in it) are
+ * answered by lib/agent/foBan.ts without a model call. "stock" ("Is SAIL in
+ * the ban?") goes to the model with only the ban list and glossary. None of
+ * them is offered a company tool: "f and o ban in stocks in india" was read
+ * as Ford (F) and Occidental (O) when it was.
+ */
+export function foBanIntent(message: string): FoBanIntent | null {
   const text = message.replace(CONTEXT_PREFIX, "").trim();
-  return text.length <= 200 && FO_BAN_QUESTION.test(text) && !CURRENT_BAN.test(text);
+  if (!text || text.length > 200 || !FO_BAN_QUESTION.test(text)) return null;
+  if (ONE_STOCK.test(text)) return "stock";
+  return CURRENT_BAN.test(text) ? "list" : "concept";
 }
 
+/** "F&O ban", "tell me about F&O ban", "What is MWPL?" — the ban as a concept. */
+export function isFoBanConceptQuestion(message: string): boolean {
+  return foBanIntent(message) === "concept";
+}
+
+// --- abbreviations that aren't tickers -----------------------------------------
+
+const ABBREVIATIONS: Array<{ pattern: RegExp; letters: string[]; name: string }> = [
+  { pattern: /\bf\s*(?:&|and|n)\s*o\b|\bfno\b/i, letters: ["F", "O", "FO", "FNO"], name: "F&O (futures and options)" },
+  { pattern: /\bp\s*\/\s*e\b/i, letters: ["P", "E"], name: "P/E (price-to-earnings)" },
+  { pattern: /\bp\s*\/\s*b\b/i, letters: ["P", "B"], name: "P/B (price-to-book)" },
+];
+
+/**
+ * The abbreviation a symbol argument was cut from, if any: in "f and o ban",
+ * F and O are futures and options, not Ford and Occidental. "Show me Ford
+ * stock" has no such abbreviation, so F stays a ticker there.
+ */
+export function abbreviationTicker(message: string, args: unknown): string | null {
+  if (!args || typeof args !== "object") return null;
+  const values = Object.entries(args as Record<string, unknown>)
+    .filter(([key]) => /^(?:symbol|symbols|query|names?|tickers?)$/i.test(key))
+    .flatMap(([, value]) => (Array.isArray(value) ? value : [value]))
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().toUpperCase().replace(/\.(?:NS|BO|US)$/, ""));
+  for (const { pattern, letters, name } of ABBREVIATIONS) {
+    if (pattern.test(message) && values.some((value) => letters.includes(value))) return name;
+  }
+  return null;
+}
+
+export const FO_BAN_TOOL_NAMES = [...CONCEPT_TOOL_NAMES, "get_fo_ban_list"] as const;
+
 export function toolsFor(message: string, all: ToolDefinition[] = AGENT_TOOLS): ToolDefinition[] {
-  if (isConceptQuestion(message) || isFoBanConceptQuestion(message)) {
-    // The glossary's F&O entry names get_fo_ban_list; leaving it out made the model call it anyway and the provider reject the turn.
-    const allowed: readonly string[] = FO_BAN_QUESTION.test(message) ? [...CONCEPT_TOOL_NAMES, "get_fo_ban_list"] : CONCEPT_TOOL_NAMES;
-    return all.filter((tool) => allowed.includes(tool.name));
+  // Any F&O ban question: the ban list and the glossary, never a company or price tool.
+  if (foBanIntent(message)) return all.filter((tool) => (FO_BAN_TOOL_NAMES as readonly string[]).includes(tool.name));
+  if (isConceptQuestion(message)) {
+    return all.filter((tool) => (CONCEPT_TOOL_NAMES as readonly string[]).includes(tool.name));
   }
   // An index move gets index levels and breadth; get_news takes a stock symbol and returns nothing for "NIFTY".
   if (isIndexMoveQuestion(message)) return all.filter((tool) => tool.name !== "get_news");

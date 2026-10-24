@@ -15,6 +15,7 @@ import type { LLMCompletionResult, LLMMessage, ToolDefinition } from "../types";
  */
 
 const answer = (content: string): LLMCompletionResult => ({ content, toolCalls: null });
+const noModel = { getChatCompletion: async (): Promise<LLMCompletionResult> => { throw new Error("no model call expected"); } };
 const names = (tools: ToolDefinition[]) => tools.map((t) => t.name).sort();
 
 test("concept questions are recognised; time-sensitive and company questions aren't", () => {
@@ -43,24 +44,11 @@ test("concept questions are recognised; time-sensitive and company questions are
   }
 });
 
-test("regression: 'What is F&O ban in the Indian market?' is offered only the glossary and app guide", async () => {
-  const offered: string[][] = [];
-  let call = 0;
-  const result = await runAgent(
-    { message: "What is F&O ban in the Indian market?" },
-    {
-      getChatCompletion: async (_messages, tools) => {
-        offered.push(names(tools));
-        call += 1;
-        // The model sends the term in its own words; it must still resolve.
-        if (call === 1) return { content: null, toolCalls: [{ id: "t1", name: "get_market_term", arguments: '{"term":"F&O ban"}' }] };
-        return answer("An F&O ban stops fresh derivative positions in a stock once open interest passes 95% of its MWPL.");
-      },
-    }
-  );
-  assert.deepEqual(offered[0], ["get_app_help", "get_fo_ban_list", "get_market_term"]);
-  assert.deepEqual(result.toolCalls.map((c) => [c.tool, c.ok]), [["get_market_term", true]]);
+test("regression: 'What is F&O ban in the Indian market?' is explained without a model call, and offered only F&O tools", async () => {
+  assert.deepEqual(names(toolsFor("What is F&O ban in the Indian market?")), ["get_app_help", "get_fo_ban_list", "get_market_term"]);
+  const result = await runAgent({ message: "What is F&O ban in the Indian market?" }, noModel);
   assert.match(result.answer, /95%/);
+  assert.deepEqual(result.toolCalls, []);
 });
 
 test("regression: 'What is the P/E ratio?' needs no live tools", () => {
@@ -82,11 +70,11 @@ test("a concept question can't be sent to the news service: the call is refused 
   let toolMessage = "";
   let call = 0;
   const result = await runAgent(
-    { message: "What is the F&O ban?" },
+    { message: "What is the P/E ratio?" },
     {
       getChatCompletion: async (messages: LLMMessage[]) => {
         call += 1;
-        if (call === 1) return { content: null, toolCalls: [{ id: "n1", name: "get_news", arguments: '{"symbol":"F&O"}' }] };
+        if (call === 1) return { content: null, toolCalls: [{ id: "n1", name: "get_news", arguments: '{"symbol":"PE"}' }] };
         toolMessage = String(messages.find((m) => m.role === "tool")?.content);
         return answer("Explained from general knowledge.");
       },
@@ -160,17 +148,8 @@ test("regression: F&O ban phrasings without 'what is' still get the concept path
   }
 });
 
-test("regression: when internal lookups find nothing and the model refuses, the answer explains the F&O ban and links NSE", async () => {
-  let call = 0;
-  const result = await runAgent({ message: "What is F and O ban?" }, {
-    getChatCompletion: async () => {
-      call += 1;
-      // The internal knowledge base has nothing under this wording…
-      if (call === 1) return { content: null, toolCalls: [{ id: "g", name: "get_market_term", arguments: '{"term":"StockSphere resources"}' }] };
-      // …and the model reports that as "no data".
-      return answer(REFUSAL);
-    },
-  });
+test("regression: 'What is F and O ban?' never reaches a model that could refuse it as 'no data'", async () => {
+  const result = await runAgent({ message: "What is F and O ban?" }, { getChatCompletion: async () => answer(REFUSAL) });
   assert.doesNotMatch(result.answer, /don't have any data/);
   assert.match(result.answer, /General information/);
   assert.match(result.answer, /95% of its market-wide position limit/);
@@ -179,23 +158,31 @@ test("regression: when internal lookups find nothing and the model refuses, the 
   assert.equal(result.links?.[0]?.label, "Check Today's NSE F&O Ban List");
 });
 
-test("regression: an F&O ban question still gets the explanation and NSE link when the AI service fails", async () => {
+test("regression: an F&O ban question is still explained, with the NSE link, when the AI service is down", async () => {
   const result = await runAgent({ message: "tell me about F&O ban" }, {
     getChatCompletion: async () => { throw new LLMError("The AI service didn't respond. Please try again shortly."); },
   });
   assert.match(result.answer, /95% of its market-wide position limit/);
   assert.equal(result.links?.[0]?.href, NSE_BAN_PAGE);
-  assert.ok(result.warnings?.some((w) => /glossary/.test(w)));
+});
+
+test("other glossary concepts: a model's 'no data' refusal is replaced by the glossary entry", async () => {
+  const result = await runAgent({ message: "What is a circuit limit?" }, { getChatCompletion: async () => answer("Sorry, I don't have any data on circuit limits in StockSphere.") });
+  assert.match(result.answer, /General information/);
+  assert.match(result.answer, /daily price band/);
 });
 
 test("a real explanation from the model is kept, not replaced by the glossary", async () => {
-  const explanation = "**General information** — the F&O ban stops fresh positions in a stock once open interest passes 95% of MWPL; it lifts below 80%.";
-  const result = await runAgent({ message: "What is F&O ban?" }, { getChatCompletion: async () => answer(explanation) });
+  const explanation = "**General information** — a circuit limit is the daily price band a stock can't trade beyond.";
+  const result = await runAgent({ message: "What is a circuit limit?" }, { getChatCompletion: async () => answer(explanation) });
   assert.equal(result.answer, explanation);
 });
 
-test("a 'which stocks are in the ban' question is never answered from the glossary", async () => {
-  const result = await runAgent({ message: "Which stocks are in the F&O ban today?" }, { getChatCompletion: async () => answer("NSE's list couldn't be fetched right now.") });
-  assert.equal(result.answer, "NSE's list couldn't be fetched right now.");
+test("'Which stocks are in the F&O ban today?' with NSE unreachable: no list is invented, the ban is explained, NSE is linked", async () => {
+  const result = await runAgent({ message: "Which stocks are in the F&O ban today?" }, { ...noModel, foBanList: async () => null });
+  assert.match(result.answer, /couldn't fetch NSE's ban-period file/);
+  assert.match(result.answer, /95% of its market-wide position limit/);
+  assert.doesNotMatch(result.answer, /\| Security \|/);
   assert.equal(result.links?.[0]?.href, NSE_BAN_PAGE);
+  assert.ok(result.warnings.some((w) => /couldn't be fetched/.test(w)));
 });

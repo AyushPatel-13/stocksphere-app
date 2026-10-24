@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { isConceptQuestion, isFoBanConceptQuestion, toolsFor } from "./routing";
+import type { FoBanList } from "@/lib/apis/nseFoBan";
+import { answerFoBan } from "./foBan";
+import { abbreviationTicker, isConceptQuestion, isFoBanConceptQuestion, toolsFor } from "./routing";
 import { GLOSSARY, matchTerm } from "./tools/glossaryTool";
 import { buildLinks, evidenceFromFetched } from "./navigation";
 import { getChatCompletion as defaultGetChatCompletion } from "./llm/client";
@@ -22,6 +24,8 @@ export interface RunAgentDeps {
   deadlineMs?: number;
   /** Longest one tool may run, in ms (default TOOL_TIMEOUT_MS). */
   toolTimeoutMs?: number;
+  /** NSE's F&O ban list, injectable for tests (default: the live file). */
+  foBanList?: () => Promise<FoBanList | null>;
 }
 
 /**
@@ -102,6 +106,13 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   const conversationId = request.conversationId ?? randomUUID();
   const now = deps.now ?? Date.now;
+
+  // What the F&O ban is, or which stocks are in it: answered from the
+  // glossary and NSE's file, never from a model that might read "F and O"
+  // as Ford and Occidental (lib/agent/foBan.ts).
+  const foBan = await answerFoBan(request.message, { loadList: deps.foBanList, now }, conversationId);
+  if (foBan) return foBan;
+
   const messages = buildInitialMessages(request.history, request.message, new Date(now()));
   // A concept question is offered only the glossary and app guide (lib/agent/routing.ts).
   const tools = toolsFor(request.message);
@@ -231,6 +242,16 @@ export async function runAgent(
           source: tool.name,
           fetchedAt: new Date().toISOString(),
           note: invalidArgumentsNote(issue ? `${issue.path.join(".") || "arguments"}: ${issue.message}` : "invalid arguments"),
+        } as ToolResult<unknown>;
+      } else if (abbreviationTicker(request.message, validation.data)) {
+        // "F" from "F and O ban" is futures and options, not Ford: never looked up.
+        inputForTrace = validation.data as Record<string, unknown>;
+        result = {
+          ok: false,
+          data: null,
+          source: tool.name,
+          fetchedAt: new Date().toISOString(),
+          note: abbreviationNote(abbreviationTicker(request.message, validation.data)!),
         } as ToolResult<unknown>;
       } else {
         inputForTrace = validation.data as Record<string, unknown>;
@@ -372,6 +393,10 @@ export function conceptFallback(message: string): string | null {
       ? "\n\nNSE publishes the ban list every day; its file is for the next trade date, so check the date on it. Use **Check Today's NSE F&O Ban List** below for the official list."
       : "";
   return `**General information**\n\n${text}${official}`;
+}
+
+export function abbreviationNote(abbreviation: string): string {
+  return `Not looked up: in this question those letters are part of ${abbreviation}, not stock tickers. Answer about ${abbreviation} itself.`;
 }
 
 export function invalidArgumentsNote(issue: string): string {

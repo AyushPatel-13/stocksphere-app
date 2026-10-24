@@ -1,7 +1,7 @@
 import { FO_BAN_URL } from "@/lib/apis/nseFoBan";
 import type { AgentResponse, AgentToolCallTrace } from "@/lib/types/agent";
 import { OFFICIAL, pageFor, pageLink, safeLink, stockPath, type AgentLink } from "./links";
-import { FO_BAN_QUESTION } from "./routing";
+import { FO_BAN_QUESTION, foBanIntent } from "./routing";
 import type { ToolResult } from "./types";
 
 /**
@@ -112,7 +112,8 @@ export type NavigationDeps = { runTool: (name: string, args: unknown) => Promise
 export async function answerNavigation(message: string, deps: NavigationDeps, conversationId: string): Promise<AgentResponse | null> {
   const text = message.replace(CONTEXT_PREFIX, "").trim();
   const request = text.match(NAV_REQUEST);
-  if (!request) return null;
+  // "Show me the F&O ban list" is a question for lib/agent/foBan.ts, not a company to look up.
+  if (!request || foBanIntent(text)) return null;
   const subject = request[1].trim();
 
   const page = pageFor(subject);
