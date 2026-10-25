@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isCronAuthorized } from "@/lib/utils/cronAuth";
 import { batchedQuotes, checkAlerts, getAlertStore, type AlertStore, type QuoteSource } from "@/lib/alerts/service";
 
 /**
@@ -24,7 +25,7 @@ export async function POST(
   secret: string | undefined = process.env.CRON_SECRET
 ) {
   const header = request.headers.get("authorization") ?? "";
-  if (!secret || header !== `Bearer ${secret}`) {
+  if (!isCronAuthorized(header, secret)) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
   if (!store) {
