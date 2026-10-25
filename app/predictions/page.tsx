@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import PredictionBadge from "@/components/Predictions/Badge";
 import BadgeGuide from "@/components/Predictions/BadgeGuide";
 import PredictionCard from "@/components/Predictions/PredictionCard";
+import InstrumentField, { pickedFromResult, type PickedInstrument } from "@/components/Search/InstrumentField";
 import {
   PageHeader,
   PageShell,
@@ -27,6 +28,7 @@ import {
   type PredictionStats,
 } from "@/lib/predictions/rules";
 import type { PredictionView } from "@/lib/predictions/service";
+import { storedSymbolFor } from "@/lib/search/pick";
 import type { CallDirection } from "@/lib/predictions/v2/config";
 
 /**
@@ -100,7 +102,8 @@ function useLivePrice(assetType: PredictionAssetType, symbol: string): LivePrice
 
 function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: PredictionView) => void }) {
   const [assetType, setAssetType] = useState<PredictionAssetType>("stock");
-  const [symbol, setSymbol] = useState("");
+  const [picked, setPicked] = useState<PickedInstrument | null>(null);
+  const symbol = picked?.symbol ?? "";
   const [direction, setDirection] = useState<CallDirection>("up");
   const [horizon, setHorizon] = useState<Horizon>("1w");
   const [target, setTarget] = useState("");
@@ -128,7 +131,7 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
 
   async function submit() {
     if (!symbol.trim()) {
-      setError("Enter a symbol.");
+      setError("Pick an instrument from the suggestions.");
       return;
     }
     setSaving(true);
@@ -149,7 +152,7 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
     }
     // A new call gets a new id; a failed one keeps its id so a retry is safe.
     setRequestId(newRequestId());
-    setSymbol("");
+    setPicked(null);
     setTarget("");
     setNote("");
     onCreated(result.prediction);
@@ -173,7 +176,11 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
             key={t.id}
             type="button"
             aria-pressed={assetType === t.id}
-            onClick={() => setAssetType(t.id)}
+            onClick={() => {
+              if (assetType === t.id) return;
+              setAssetType(t.id);
+              setPicked(null);
+            }}
             className={`rounded-lg border px-3 py-1 text-xs font-medium ${
               assetType === t.id ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-white" : "border-[#2a2a2a] text-[#999] hover:text-white"
             }`}
@@ -183,14 +190,18 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
         ))}
       </div>
 
-      <label className="mt-3 block">
-        <span className="mb-1.5 block text-xs font-medium text-[#888]">Symbol</span>
-        <input
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-          placeholder={selected.placeholder}
-          autoCapitalize="characters"
-          className={inputClass}
+      <div className="mt-3">
+        <InstrumentField
+          label="Symbol"
+          inputId="prediction-symbol"
+          value={picked}
+          filterTypes={[assetType]}
+          placeholder={`Search ${selected.placeholder}`}
+          onPick={(result) => {
+            setPicked(pickedFromResult(result, storedSymbolFor(result)));
+            setError(null);
+          }}
+          onClear={() => setPicked(null)}
         />
         <span className="mt-1.5 block min-h-[1.1rem] text-xs text-[#888]">
           {price.status === "loading" && "Getting live price…"}
@@ -204,7 +215,7 @@ function PredictForm({ user, onCreated }: { user: CommunityUser; onCreated: (p: 
             </>
           )}
         </span>
-      </label>
+      </div>
 
       <div className="mt-2 grid grid-cols-3 gap-2" role="group" aria-label="Direction">
         {DIRECTIONS.map((d) => (
