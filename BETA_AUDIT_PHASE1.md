@@ -30,6 +30,12 @@ Scope: audit only. Nothing was edited apart from this file. Nothing was committe
 >   - **P2-12** CSP.
 >   - Everything in Stage 0 (deploy, Vercel protection, Supabase URLs, env vars).
 > - Tests 945/945, tsc and eslint clean.
+> - `380a393`:
+>   - The dashboard briefing and Watchtower name a member's stocks in NSE's F&O ban, via a new `GET /api/fo-ban`.
+>   - `/api/market/movers` is now force-dynamic with a 60 s CDN cache header. Its old `revalidate = 60` never took effect.
+> - **Production build verified (P2-13):** `next build` of `a5ccfdb` in a separate worktree, with the dev server untouched. It exited 0, compiled in 10.6 s, and classified every API route as dynamic. The only noise was ~100 prerender errors from the movers route, fixed in `380a393`.
+> - **P2-10 explained:** the 4 accounts without a profile were created 20–24 Oct and each signed in once. That matches P1-2: the account is created, then Google returns the person to localhost, so they never reach onboarding. Fixed by the Stage 0 Supabase URL settings, not code.
+> - Tests 948/948.
 
 ---
 
