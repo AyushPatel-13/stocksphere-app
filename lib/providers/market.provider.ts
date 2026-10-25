@@ -1,5 +1,5 @@
 import { AssetQuote } from "../types/quote";
-import { yahooFallbackQuote, type ChartQuoteLookup } from "./yahooFallback";
+import { chartToAssetQuote, yahooFallbackQuote, yahooTickerFor, type ChartQuoteLookup } from "./yahooFallback";
 import { getYahooChartQuote } from "../apis/yahooChart";
 
 import { getYahooQuote } from "../apis/yahoo";
@@ -238,9 +238,14 @@ export async function withYahooFill(
  *   Upstox → primary
  *
  * US / Global:
- *   Twelve Data → primary
- *   Alpha Vantage → backup
- *   Yahoo → last resort
+ *   Yahoo chart → primary (no key or quota; the same source as the US charts,
+ *                 heatmap and alerts, so a page's price and chart agree)
+ *   Twelve Data → backup (free plan: 8 credits a minute)
+ *   Alpha Vantage → backup (free plan: 25 a day)
+ *   Yahoo quote API → last resort
+ *
+ * Yahoo went first on 25 Oct 2026: Twelve Data's free credits ran out within
+ * minutes of normal browsing, and every quote then fell through to Yahoo anyway.
  */
 export async function getMarketQuote(
   symbol: string,
@@ -262,7 +267,16 @@ export async function getMarketQuote(
   }
 
   // 🇺🇸 US / GLOBAL
-  // TWELVE DATA → PRIMARY
+  // YAHOO CHART → PRIMARY
+
+  try {
+    const primary = chartToAssetQuote(symbol, await lookupChart(yahooTickerFor(symbol)));
+    if (primary) return { ...primary, source: "Yahoo" };
+  } catch (error) {
+    console.error(`Yahoo chart quote error [${symbol}]:`, error instanceof Error ? error.message : "unknown");
+  }
+
+  // TWELVE DATA → BACKUP
 
   try {
     const twelve =
@@ -319,7 +333,6 @@ export async function getMarketQuote(
     );
   }
 
-  // Yahoo's chart endpoint needs no crumb and keeps answering when the
-  // quote API above is rate-limited.
-  return yahooFallbackQuote(symbol, lookupChart);
+  // The chart endpoint was already asked first; nobody else could price it.
+  return null;
 }
