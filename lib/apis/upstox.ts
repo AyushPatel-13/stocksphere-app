@@ -440,3 +440,15 @@ export function getUpstoxIpos(params: {
 export function getUpstoxIpoDetail(id: string): Promise<UpstoxResult> {
   return upstoxIpoRequest(`/v2/ipos/${encodeURIComponent(id)}`);
 }
+
+/**
+ * Whether UPSTOX_ACCESS_TOKEN is still accepted, from one last-price lookup
+ * for NIFTY 50. (The account profile endpoint would be cheaper, but this app's
+ * token is a market-data token and Upstox refuses it there with UDAPI1221 —
+ * verified 24 Oct 2026 — so it would always look expired.) Every Indian price,
+ * IPO, mover and MCX contract depends on this one token, so /api/health
+ * reports it.
+ */
+export function checkUpstoxToken(): Promise<UpstoxResult> {
+  return upstoxIpoRequest("/v2/market-quote/ltp?instrument_key=" + encodeURIComponent("NSE_INDEX|Nifty 50"));
+}

@@ -47,6 +47,23 @@ test("getNseConstituents: caches a day, keeps the last good list on failure, nul
   clearConstituentCache();
 });
 
+test("getNseConstituents: falls back to NSE's archive copy when niftyindices.com answers with a status page", async () => {
+  clearConstituentCache();
+  const hosts: string[] = [];
+  const fetcher = (async (url: string) => {
+    const host = new URL(url).host;
+    hosts.push(host);
+    return host === "www.niftyindices.com"
+      ? new Response("<html>Sitefinity status</html>", { status: 200 })
+      : new Response(CSV, { status: 200 });
+  }) as unknown as typeof fetch;
+  const list = await getNseConstituents("niftyit", fetcher, 0);
+  assert.deepEqual(hosts, ["www.niftyindices.com", "nsearchives.nseindia.com"]);
+  assert.equal(list?.constituents.length, 4);
+  assert.equal(list?.source, "NSE Indices constituent list (NSE archive copy)");
+  clearConstituentCache();
+});
+
 /* ------------------------------------------------------------ spark */
 
 test("parseSpark: closes aligned with times, null closes skipped, periods in ms", () => {

@@ -49,7 +49,7 @@ const FRIENDLY_MESSAGES: Record<AgentClientErrorCode, string> = {
     "StockSphere AI sent back a response that couldn't be read. Please try again.",
   SIGNED_OUT: "Sign in to ask StockSphere AI.",
   RATE_LIMITED:
-    "You've reached the StockSphere AI limit (5 questions a minute, 40 a day). Please try again a little later.",
+    "You've reached the StockSphere AI limit (5 questions a minute, 20 a day). Please try again a little later.",
   INVALID_REQUEST:
     "That question couldn't be sent. Try shortening it or rephrasing.",
   LLM_ERROR: "StockSphere AI is temporarily unavailable. Please try again.",

@@ -17,7 +17,10 @@ import { getAdminClient, getPublicClient } from "@/lib/supabase/server";
  */
 
 export const AI_LIMIT_PER_MINUTE = 5;
-export const AI_LIMIT_PER_DAY = 40;
+// Sized for the free tiers during the beta: Groq allows ~200k tokens a day for
+// the whole app, and an answer costs roughly 4–8k, so 40 per member let a handful
+// of members spend the day's capacity. Gemini picks up beyond that when configured.
+export const AI_LIMIT_PER_DAY = 20;
 
 export type SlotResult =
   | { ok: true; shared: boolean }

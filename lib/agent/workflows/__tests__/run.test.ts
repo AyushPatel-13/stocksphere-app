@@ -179,6 +179,53 @@ test("an empty or unreadable portfolio is answered without calling the model", a
   assert.equal(empty.seen.length + broken.seen.length, 0);
 });
 
+const PAPER = {
+  cash: { INR: 999_240, USD: 10_000 },
+  positions: [
+    { assetType: "crypto" as const, symbol: "BTC", currency: "INR" as const, quantity: 0.0001, averageCost: 7_586_464.88, invested: 758.65, realizedPnl: 0.17 },
+    { assetType: "stock" as const, symbol: "INFY", currency: "INR" as const, quantity: 0, averageCost: 0, invested: 0, realizedPnl: -12.5 },
+  ],
+};
+
+test("a portfolio review includes the paper account separately, at cost, and never prices it", async () => {
+  const paperFor: string[] = [];
+  const h = harness({
+    loadHoldings: async () => [],
+    loadPaper: async (ctx) => {
+      paperFor.push(ctx.userId);
+      return PAPER;
+    },
+  });
+  const result = await runWorkflow({ type: "portfolio" }, "Analyze my portfolio", CTX, h.deps);
+  assert.ok(result);
+  assert.deepEqual(paperFor, ["user-a"]);
+  assert.equal(h.calls.length, 0, "no price lookups: a paper BTC must not be priced as a stock ticker");
+  const user = String(h.seen[0].messages[1].content);
+  assert.match(user, /SUBJECT: your paper-trading account/);
+  assert.match(user, /virtual money, not real holdings/);
+  assert.match(user, /"openPositions":\[\{"assetType":"crypto","symbol":"BTC"/);
+  assert.doesNotMatch(user, /INFY/, "closed positions only contribute realised P&L");
+  assert.match(user, /"realisedPnlByCurrency":\{"INR":-12.33\}/);
+  assert.match(user, /UNAVAILABLE[^\n]*current prices for paper-trading positions/);
+});
+
+test("real holdings and the paper account are reported side by side", async () => {
+  const h = harness({ loadPaper: async () => PAPER });
+  await runWorkflow({ type: "portfolio" }, "Analyze my portfolio", CTX, h.deps);
+  const user = String(h.seen[0].messages[1].content);
+  assert.match(user, /SUBJECT: your portfolio and your paper-trading account/);
+  assert.match(user, /"totalValue":25300/);
+  assert.match(user, /paper-trading ledger/);
+});
+
+test("unreadable holdings with a readable paper account still answer, and say what's missing", async () => {
+  const h = harness({ loadHoldings: async () => null, loadPaper: async () => PAPER });
+  await runWorkflow({ type: "portfolio" }, "x", CTX, h.deps);
+  assert.match(String(h.seen[0].messages[1].content), /your real holdings \(they couldn't be read just now\)/);
+  const none = harness({ loadHoldings: async () => [], loadPaper: async () => ({ cash: PAPER.cash, positions: [] }) });
+  assert.match((await runWorkflow({ type: "portfolio" }, "x", CTX, none.deps))!.answer, /or made any paper trades/);
+});
+
 test("cost: a full research request stays well inside Groq's 8,000 tokens a minute", async () => {
   const h = harness();
   await runWorkflow({ type: "research", query: "TCS" }, "Research TCS", CTX, h.deps);

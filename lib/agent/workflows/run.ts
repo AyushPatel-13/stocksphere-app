@@ -13,6 +13,10 @@ import { ensureDisclaimer, renderCitations, serialiseEvidence, type Evidence } f
 import type { Workflow } from "./detect";
 import { analysePortfolio, type HoldingInput, type PriceInput } from "./portfolio";
 import { workflowSystemPrompt } from "./prompts";
+import type { PaperCurrency, PaperPosition } from "@/lib/paper/ledger";
+
+/** The member's paper-trading account: virtual cash and positions rebuilt from their own trades. */
+export type PaperPortfolio = { cash: Record<PaperCurrency, number>; positions: PaperPosition[] };
 
 /**
  * Research workflows: gather the evidence on the server, in parallel, through
@@ -36,6 +40,8 @@ export interface WorkflowDeps {
   runTool: (name: string, args: unknown) => Promise<ToolResult<unknown>>;
   /** The member's holdings, or null when they can't be read. */
   loadHoldings: (ctx: WorkflowContext) => Promise<HoldingInput[] | null>;
+  /** Their paper-trading account, or null when it can't be read. Omitted: not consulted. */
+  loadPaper?: (ctx: WorkflowContext) => Promise<PaperPortfolio | null>;
   now: () => number;
 }
 
@@ -217,10 +223,42 @@ async function gatherCompare(g: Gatherer, queries: string[]): Promise<string | n
   return unique.map((r) => `${r.name} (${r.symbol})`).join(" vs ");
 }
 
+/**
+ * Paper positions as cost basis only. They aren't re-priced here: a paper
+ * "BTC" is the coin, but get_price would read it as a stock ticker (BTC is
+ * also a US-listed ETF), so pricing it that way would value the wrong
+ * instrument. The member's Paper page has the live valuation.
+ */
+function addPaper(g: Gatherer, paper: PaperPortfolio, deps: WorkflowDeps) {
+  const open = paper.positions.filter((p) => p.quantity > 0);
+  const realised: Partial<Record<PaperCurrency, number>> = {};
+  for (const p of paper.positions) {
+    if (p.realizedPnl !== 0) realised[p.currency] = Math.round(((realised[p.currency] ?? 0) + p.realizedPnl) * 100) / 100;
+  }
+  g.add({
+    title: "Your paper-trading account (virtual money, not real holdings), from your StockSphere paper trades",
+    source: "StockSphere paper-trading ledger",
+    fetchedAt: new Date(deps.now()).toISOString(),
+    data: {
+      virtualCash: paper.cash,
+      openPositions: open.map(({ assetType, symbol, currency, quantity, averageCost, invested }) => ({ assetType, symbol, currency, quantity, averageCost, invested })),
+      realisedPnlByCurrency: realised,
+    },
+  });
+  if (open.length) g.missing.push("current prices for paper-trading positions (only their cost basis is included; the Paper page shows live values)");
+}
+
 async function gatherPortfolio(g: Gatherer, ctx: WorkflowContext, deps: WorkflowDeps): Promise<string | "empty" | "unavailable"> {
-  const holdings = await deps.loadHoldings(ctx);
-  if (holdings === null) return "unavailable";
-  if (holdings.length === 0) return "empty";
+  const [holdings, paper] = await Promise.all([deps.loadHoldings(ctx), deps.loadPaper ? deps.loadPaper(ctx) : Promise.resolve(undefined)]);
+  const hasPaper = !!paper && paper.positions.length > 0;
+  if (holdings === null && !hasPaper) return "unavailable";
+  if ((holdings ?? []).length === 0 && !hasPaper) return "empty";
+
+  if (hasPaper) addPaper(g, paper!, deps);
+  if (holdings === null) g.missing.push("your real holdings (they couldn't be read just now)");
+  if (paper === null) g.missing.push("your paper-trading account (it couldn't be read just now)");
+  if (!holdings || holdings.length === 0) return "your paper-trading account";
+
   const list = holdings.slice(0, MAX_HOLDINGS);
   const quotes = await Promise.all(list.map((h) => g.call("get_price", { symbol: h.symbol })));
   const prices: Record<string, PriceInput | null> = {};
@@ -240,7 +278,7 @@ async function gatherPortfolio(g: Gatherer, ctx: WorkflowContext, deps: Workflow
   });
   if (holdings.length > MAX_HOLDINGS) g.missing.push(`${holdings.length - MAX_HOLDINGS} holdings beyond the first ${MAX_HOLDINGS}`);
   if (figures.unpriced.length) g.missing.push(`prices for ${figures.unpriced.join(", ")}`);
-  return "your portfolio";
+  return hasPaper ? "your portfolio and your paper-trading account" : "your portfolio";
 }
 
 /** Puts a note before the Sources list (or at the end). */
@@ -277,7 +315,7 @@ export async function runWorkflow(
   if (workflow.type === "portfolio") {
     const outcome = await gatherPortfolio(g, ctx, deps);
     if (outcome === "unavailable") return respond("I couldn't read your holdings just now. Please try again, or open the Portfolio page to check they load.");
-    if (outcome === "empty") return respond("You haven't added any holdings yet. Add them on the Portfolio page and I can review allocation, concentration and returns for you.");
+    if (outcome === "empty") return respond("You haven't added any holdings or made any paper trades yet. Add holdings on the Portfolio page, or place a paper trade, and I can review allocation, concentration and returns for you.");
     subject = outcome;
   } else if (workflow.type === "research") {
     subject = await gatherResearch(g, workflow.query);

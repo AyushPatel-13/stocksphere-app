@@ -46,7 +46,7 @@ const SECTIONS: Record<Workflow["type"], Section[]> = {
     ["Research next", "3 questions."],
   ],
   portfolio: [
-    ["Overview", "total value, invested amount and P/L per currency, called \"calculated by StockSphere\"."],
+    ["Overview", "total value, invested amount and P/L per currency, called \"calculated by StockSphere\". A paper-trading account, if present, gets its own paragraph called virtual money: cash, open positions at cost and realised P/L. Never add it to real holdings and never give it a current value."],
     ["Allocation", "a table: Holding | Weight | P/L % | Price as of."],
     ["Concentration", "largest holding, top-3 weight and effective number of holdings; explain what these mean."],
     ["Observations", "your interpretation, labelled as such. No advice on what to buy or sell."],
