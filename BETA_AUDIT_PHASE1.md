@@ -16,6 +16,20 @@ Scope: audit only. Nothing was edited apart from this file. Nothing was committe
 >   - The AI portfolio review now includes the paper account separately, at cost only and labelled virtual money.
 >   - PKCE sign-in is confirmed in the Supabase logs (`grant_type: pkce`, 200, from localhost:3001).
 > - Tests now 924/924.
+>
+> **25 Oct (committed on the branch, not pushed):**
+> - `57d28b5` smart alerts plus the fixes above. Migration `20261025000100_smart_alerts` applied with approval; its SQL tests pass.
+> - `02d3d66`:
+>   - Upstox 429 cooldown: one minute of going straight to Yahoo after a rate limit.
+>   - India heatmap filled from Yahoo for stocks Upstox didn't price, labelled per tile. Indian indices already had a Yahoo fallback, so the earlier "no fallback" note was wrong for them.
+> - `ee3d896` US quotes are Yahoo first, with Twelve Data and Alpha Vantage as backups (P2-1 largely resolved).
+> - `a5ccfdb` constant-time `CRON_SECRET` checks (P3).
+> - Still open:
+>   - **P2-4** paper fill price stored unrounded. The stale-quote cause was fixed by the crypto session in `7896420`. Rounding belongs to the paper-trading sessions' code.
+>   - **P2-6** migration-history drift.
+>   - **P2-12** CSP.
+>   - Everything in Stage 0 (deploy, Vercel protection, Supabase URLs, env vars).
+> - Tests 945/945, tsc and eslint clean.
 
 ---
 
