@@ -60,7 +60,7 @@ export default function HomeNews({ limit = 6 }: { limit?: number }) {
                 setRegion(id);
                 setState({ status: "loading" });
               }}
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+              className={`cursor-pointer rounded-full border px-3 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40 ${
                 region === id ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-white" : "border-[#2a2a2a] text-[#999] hover:text-white"
               }`}
             >
@@ -68,7 +68,7 @@ export default function HomeNews({ limit = 6 }: { limit?: number }) {
             </button>
           ))}
         </div>
-        <Link href="/news" className="text-sm text-[#4ade80] hover:underline">
+        <Link href="/news" className="rounded text-sm text-[#4ade80] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40">
           All news →
         </Link>
       </div>
@@ -98,7 +98,7 @@ export default function HomeNews({ limit = 6 }: { limit?: number }) {
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block px-5 py-3.5 transition-colors hover:bg-[#151515] focus-visible:bg-[#151515] focus-visible:outline-none"
+                  className="block px-5 py-3.5 transition-colors hover:bg-[#151515] focus-visible:bg-[#151515] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-green-500/40"
                 >
                   <p className="text-[15px] font-medium leading-snug text-white">{item.title}</p>
                   <p className="mt-1 text-xs text-[#888]">

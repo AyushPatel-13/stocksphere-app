@@ -47,6 +47,23 @@ test("getNseConstituents: caches a day, keeps the last good list on failure, nul
   clearConstituentCache();
 });
 
+test("getNseConstituents: falls back to NSE's archive copy when niftyindices.com answers with a status page", async () => {
+  clearConstituentCache();
+  const hosts: string[] = [];
+  const fetcher = (async (url: string) => {
+    const host = new URL(url).host;
+    hosts.push(host);
+    return host === "www.niftyindices.com"
+      ? new Response("<html>Sitefinity status</html>", { status: 200 })
+      : new Response(CSV, { status: 200 });
+  }) as unknown as typeof fetch;
+  const list = await getNseConstituents("niftyit", fetcher, 0);
+  assert.deepEqual(hosts, ["www.niftyindices.com", "nsearchives.nseindia.com"]);
+  assert.equal(list?.constituents.length, 4);
+  assert.equal(list?.source, "NSE Indices constituent list (NSE archive copy)");
+  clearConstituentCache();
+});
+
 /* ------------------------------------------------------------ spark */
 
 test("parseSpark: closes aligned with times, null closes skipped, periods in ms", () => {
@@ -161,6 +178,42 @@ test("buildHeatmap NSE: ISIN instrument keys, NSE sector, real caps only, missin
   assert.equal(infy.sector, null);
   assert.equal(mm.price, null);
   assert.equal(data.capsPending, 0);
+  clearHeatmapCache();
+});
+
+test("buildHeatmap NSE: stocks Upstox didn't price are filled from Yahoo and labelled per tile", async () => {
+  clearHeatmapCache();
+  const asked: string[][] = [];
+  const yahooFill = async (symbols: string[]) => {
+    asked.push(symbols);
+    return new Map([["M&M.NS", { price: 3200, previousClose: 3100, time: "2026-10-20T09:59:00.000Z" }]]);
+  };
+  const data = await buildHeatmap("nifty50", deps({ yahooFill }));
+  assert.ok(data);
+  assert.deepEqual(asked, [["M&M.NS"]], "only the stock Upstox missed goes to Yahoo");
+  assert.equal(data.priceSource, "Upstox; Yahoo for 1 stock Upstox didn't price");
+  const [tcs, , mm] = data.tiles;
+  assert.equal(tcs.priceSource, "Upstox");
+  assert.equal(mm.price, 3200);
+  assert.ok(Math.abs(mm.changePercent! - (100 / 31)) < 1e-9);
+  assert.equal(mm.priceSource, "Yahoo (Upstox unavailable, may be delayed)");
+  assert.equal(mm.quoteTime, "2026-10-20T09:59:00.000Z");
+  clearHeatmapCache();
+});
+
+test("buildHeatmap NSE: Upstox rate-limited or down → the whole map from Yahoo; both down → unavailable", async () => {
+  clearHeatmapCache();
+  const all = new Map([
+    ["TCS.NS", { price: 4040, previousClose: 4000, time: null }],
+    ["INFY.NS", { price: 1500, previousClose: 1490, time: null }],
+  ]);
+  const data = await buildHeatmap("nifty50", deps({ upstoxQuotes: async () => new Map(), yahooFill: async () => all }));
+  assert.ok(data);
+  assert.equal(data.priceSource, "Yahoo (Upstox unavailable, may be delayed)");
+  assert.equal(data.tiles.filter((t) => t.price !== null).length, 2);
+  clearHeatmapCache();
+  const failing = await buildHeatmap("nifty50", deps({ upstoxQuotes: async () => Promise.reject(new Error("429")), yahooFill: async () => new Map() }));
+  assert.equal(failing, null);
   clearHeatmapCache();
 });
 

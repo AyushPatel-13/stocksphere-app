@@ -1,3 +1,4 @@
+import { upstoxFetch } from "./upstoxGate";
 const ACCESS_TOKEN = process.env.UPSTOX_ACCESS_TOKEN;
 
 /**
@@ -42,7 +43,7 @@ export async function getUpstoxKeyRatios(
   }
 
   try {
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v2/fundamentals/${encodeURIComponent(
         trimmedIsin
       )}/key-ratios`,

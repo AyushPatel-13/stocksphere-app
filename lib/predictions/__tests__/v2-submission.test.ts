@@ -11,7 +11,16 @@ import {
   timeOfDayMs,
   type LiveQuote,
 } from "../v2/reference";
-import { completedDailyCandles, parseUpstoxLiveQuote, yahooLiveQuote } from "../v2/sources";
+import type { ChartSeries } from "../../apis/yahooChart";
+import type { History } from "../../services/history";
+import {
+  MAX_CONVERSION_GAP,
+  completedDailyCandles,
+  convertedCryptoQuote,
+  createMarketData,
+  parseUpstoxLiveQuote,
+  yahooLiveQuote,
+} from "../v2/sources";
 import { isExcludedSymbol, isRequestId, parseSubmission } from "../v2/submission";
 
 // Monday 19 Oct 2026, 08:00 UTC = 13:30 IST, inside the NSE session.
@@ -190,4 +199,90 @@ test("today's daily bar is left out while its session is running", () => {
   assert.deepEqual(completedDailyCandles(candles, NSE, NOW).map((c) => c.c), [98]);
   assert.deepEqual(completedDailyCandles(candles, NSE, NSE.end + 1).map((c) => c.c), [98, 100]);
   assert.equal(yahooLiveQuote(null), null);
+});
+
+/* ------------------------------------------------------------ crypto in rupees */
+
+// Saturday 24 Oct 2026, 17:00 UTC: crypto trades, the currency market is shut.
+const SAT = Date.parse("2026-10-24T17:00:00.000Z");
+const FX_SESSION = { sessionStart: Date.parse("2026-10-22T23:00:00.000Z"), sessionEnd: Date.parse("2026-10-23T22:59:00.000Z") };
+const series = (price: number, time: number, session: Partial<ChartSeries> = {}): ChartSeries => ({
+  name: null,
+  currency: null,
+  exchangeTimezone: null,
+  previousClose: null,
+  fiftyTwoWeekHigh: null,
+  fiftyTwoWeekLow: null,
+  regularMarketPrice: price,
+  marketTime: new Date(time).toISOString(),
+  sessionStart: null,
+  sessionEnd: null,
+  candles: [],
+  ...session,
+});
+const BTC_USD = series(80_000, SAT - 5_000);
+const FX_WEEKEND = series(94.94, Date.parse("2026-10-23T22:58:00.000Z"), FX_SESSION);
+
+test("rupee crypto is the dollar pair at USD/INR, timed by the coin while the currency market is shut", () => {
+  const quote = convertedCryptoQuote({ usd: BTC_USD, fx: FX_WEEKEND, inrReference: 7_590_000, now: SAT });
+  assert.ok(quote);
+  assert.equal(quote.price, 80_000 * 94.94);
+  assert.equal(quote.quoteTime, SAT - 5_000);
+  assert.equal(quote.source, "yahoo");
+});
+
+test("while the currency market is open the older leg sets the quote time", () => {
+  const weekday = Date.parse("2026-10-23T12:00:00.000Z");
+  const usd = series(80_000, weekday - 5_000);
+  const fx = series(94.94, weekday - 90_000, FX_SESSION);
+  assert.equal(convertedCryptoQuote({ usd, fx, inrReference: 7_595_000, now: weekday })?.quoteTime, weekday - 90_000);
+  // Without a known session the rate's time counts too.
+  const noSession = series(94.94, weekday - 600_000);
+  const quote = convertedCryptoQuote({ usd, fx: noSession, inrReference: 7_595_000, now: weekday });
+  assert.equal(quote?.quoteTime, weekday - 600_000);
+  assert.deepEqual(chooseReference({ assetType: "crypto", now: weekday, session: null, live: [quote!], lastClose: null }), { error: "stale" });
+});
+
+test("a converted price is refused without a cross-check, off it, or with an old rate", () => {
+  assert.equal(convertedCryptoQuote({ usd: BTC_USD, fx: FX_WEEKEND, inrReference: null, now: SAT }), null);
+  // More than MAX_CONVERSION_GAP away from Yahoo's own INR pair.
+  const far = 80_000 * 94.94 * (1 + MAX_CONVERSION_GAP + 0.01);
+  assert.equal(convertedCryptoQuote({ usd: BTC_USD, fx: FX_WEEKEND, inrReference: far, now: SAT }), null);
+  // A shut market's rate from before its latest session isn't the current rate.
+  const oldRate = series(94.94, FX_SESSION.sessionStart - 1, FX_SESSION);
+  assert.equal(convertedCryptoQuote({ usd: BTC_USD, fx: oldRate, inrReference: 7_590_000, now: SAT }), null);
+  assert.equal(convertedCryptoQuote({ usd: null, fx: FX_WEEKEND, inrReference: 7_590_000, now: SAT }), null);
+  assert.equal(convertedCryptoQuote({ usd: BTC_USD, fx: null, inrReference: 7_590_000, now: SAT }), null);
+});
+
+test("a crypto snapshot fills at the converted price when Yahoo's INR bars are minutes old", async () => {
+  // Yahoo's INR pair, refreshed in batches: its newest bar started four minutes ago.
+  const inrBar = { t: SAT - 240_000, o: null, h: null, l: null, c: 7_590_000, v: null };
+  const intraday = { candles: [inrBar], currency: "INR", sessionStart: null, sessionEnd: null } as unknown as History;
+  const asked: string[] = [];
+  const market = createMarketData({
+    getHistory: async (_asset, range) => (range === "1d" ? intraday : null),
+    upstoxLive: async () => {
+      throw new Error("crypto has no Upstox quote");
+    },
+    yahooLatest: async (symbol) => {
+      asked.push(symbol);
+      return symbol === "BTC-USD" ? BTC_USD : symbol === "USDINR=X" ? FX_WEEKEND : null;
+    },
+  });
+
+  const snapshot = await market.snapshot("crypto", "BTC", SAT);
+  assert.ok(snapshot);
+  assert.deepEqual(asked.sort(), ["BTC-USD", "USDINR=X"]);
+  const ref = chooseReference({ assetType: "crypto", now: SAT, session: snapshot.session, live: snapshot.live, lastClose: snapshot.lastClose });
+  assert.deepEqual(ref, { mode: "live", price: 80_000 * 94.94, quoteTime: SAT - 5_000, source: "yahoo" });
+
+  // Without the conversion the four-minute-old bar alone is refused, as before.
+  const without = createMarketData({
+    getHistory: async (_asset, range) => (range === "1d" ? intraday : null),
+    upstoxLive: async () => null,
+    yahooLatest: async () => null,
+  });
+  const old = await without.snapshot("crypto", "BTC", SAT);
+  assert.deepEqual(chooseReference({ assetType: "crypto", now: SAT, session: null, live: old!.live, lastClose: null }), { error: "stale" });
 });

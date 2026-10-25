@@ -27,16 +27,19 @@ type State =
 
 /**
  * A post box over a stream of posts: one stock's board when `symbol` is set,
- * otherwise every post on StockSphere.
+ * one IPO's community when `ipoId` is set, otherwise every post on StockSphere.
  */
 export default function Feed({
   user,
   symbol,
+  ipoId,
   label,
   onPosted,
 }: {
   user: CommunityUser;
   symbol?: string;
+  /** An Upstox IPO id: that IPO's community (and, once listed, its stock's posts). */
+  ipoId?: string;
   /** How the board's instrument is named to people (e.g. "NIFTY 50"). */
   label?: string;
   onPosted?: () => void;
@@ -50,7 +53,7 @@ export default function Feed({
   useEffect(() => {
     let cancelled = false;
 
-    fetchPosts({ symbol, sentiment: filter === "all" ? undefined : filter, limit: PAGE }).then((result) => {
+    fetchPosts({ symbol, ipo: ipoId, sentiment: filter === "all" ? undefined : filter, limit: PAGE }).then((result) => {
       if (cancelled) return;
       if ("error" in result) {
         setState({ status: result.code === "NOT_CONFIGURED" ? "not-configured" : "error" });
@@ -62,7 +65,7 @@ export default function Feed({
     return () => {
       cancelled = true;
     };
-  }, [symbol, filter, attempt]);
+  }, [symbol, ipoId, filter, attempt]);
 
   // Which visible posts the viewer has liked.
   const userId = user.status === "ready" ? user.profile.id : null;
@@ -84,6 +87,7 @@ export default function Feed({
     setLoadingMore(true);
     const result = await fetchPosts({
       symbol,
+      ipo: ipoId,
       sentiment: filter === "all" ? undefined : filter,
       before: state.posts[state.posts.length - 1].createdAt,
       limit: PAGE,
@@ -100,7 +104,7 @@ export default function Feed({
         <p className="text-2xl" aria-hidden="true">💬</p>
         <p className="mt-3 font-semibold">Discussions are launching soon</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-[#888]">
-          Posting on {symbol ? label ?? symbol : "StockSphere"} opens as soon as community accounts are switched on.
+          Posting on {symbol || ipoId ? label ?? symbol ?? "this IPO" : "StockSphere"} opens as soon as community accounts are switched on.
         </p>
       </div>
     );
@@ -111,6 +115,7 @@ export default function Feed({
       <Composer
         user={user}
         symbol={symbol}
+        ipoId={ipoId}
         label={label}
         onPosted={(post) => {
           // A new post shows at the top of the list it belongs in.
@@ -178,7 +183,7 @@ export default function Feed({
               {filter === "all" ? "No posts yet" : `No ${filter} posts yet`}
             </p>
             <p className="mt-1 text-sm text-[#888]">
-              {symbol ? `Be the first to share a view on ${label ?? symbol}.` : "Start the conversation."}
+              {symbol || ipoId ? `Be the first to share a view on ${label ?? symbol ?? "this IPO"}.` : "Start the conversation."}
             </p>
           </div>
         )}

@@ -1,3 +1,4 @@
+import type { AgentLink } from "@/lib/types/agent";
 import type { AgentClientErrorCode } from "./request";
 
 /**
@@ -15,6 +16,8 @@ export interface ChatMessage {
   wire?: string;
   /** From AgentResponse — real provenance, never fabricated in the UI. */
   sources?: string[];
+  /** Pages and official sources from the server; re-checked before rendering. */
+  links?: AgentLink[];
   warnings?: string[];
   tools?: string[];
   /** Set on a user turn whose request failed, so the panel can offer a retry. */

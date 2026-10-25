@@ -121,7 +121,43 @@ test("a rate-limited response is reported as rate limiting", async () => {
   const error = await sendAgentMessage({ message: "hi" }, impl).catch((e) => e);
 
   assert.equal(error.code, "RATE_LIMITED");
-  assert.match(error.message, /moment/i);
+  assert.match(error.message, /limit/i);
+});
+
+test("a signed-out response asks the user to sign in", async () => {
+  const { impl } = stubFetch(json({ error: "Sign in to use StockSphere AI.", code: "SIGNED_OUT" }, 401));
+
+  const error = await sendAgentMessage({ message: "hi" }, impl).catch((e) => e);
+
+  assert.equal(error.code, "SIGNED_OUT");
+  assert.match(error.message, /sign in/i);
+});
+
+test("a 401 with no readable body still maps to SIGNED_OUT", async () => {
+  const { impl } = stubFetch(new Response("nope", { status: 401 }));
+
+  const error = await sendAgentMessage({ message: "hi" }, impl).catch((e) => e);
+
+  assert.equal(error.code, "SIGNED_OUT");
+});
+
+test("the access token travels as a Bearer header, never in the body", async () => {
+  const { calls, impl } = stubFetch(json(ANSWER));
+
+  await sendAgentMessage({ message: "hi" }, impl, undefined, "tok-1");
+
+  const headers = calls[0].init.headers as Record<string, string>;
+  assert.equal(headers.Authorization, "Bearer tok-1");
+  assert.doesNotMatch(String(calls[0].init.body), /tok-1/);
+});
+
+test("without a token no Authorization header is sent", async () => {
+  const { calls, impl } = stubFetch(json(ANSWER));
+
+  await sendAgentMessage({ message: "hi" }, impl);
+
+  const headers = calls[0].init.headers as Record<string, string>;
+  assert.equal(headers.Authorization, undefined);
 });
 
 test("a 429 with no readable body still maps to RATE_LIMITED", async () => {

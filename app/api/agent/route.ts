@@ -3,7 +3,21 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { runAgent } from "@/lib/agent/orchestrator";
 import { AgentError } from "@/lib/agent/errors";
+import { bearerToken, defaultAgentAccess, type AgentAccess } from "@/lib/agent/access";
+import { detectWorkflow, runDefaultWorkflow, type Workflow } from "@/lib/agent/workflows";
+import { answerNavigation } from "@/lib/agent/navigation";
+import { runAllowlistedTool } from "@/lib/agent/workflows/run";
+import { randomUUID } from "node:crypto";
+
+/** "Open the heatmap", "show me Reliance": answered with a link, no model call. */
+function defaultNavigate(message: string, conversationId?: string) {
+  return answerNavigation(message, { runTool: runAllowlistedTool }, conversationId ?? randomUUID());
+}
 import { AgentErrorResponse } from "@/lib/types/agent";
+
+// The agent finishes within AGENT_DEADLINE_MS (50 s); this lets the platform
+// run it that long (Vercel's default limit can be shorter).
+export const maxDuration = 60;
 
 const MAX_MESSAGE_LENGTH = 500;
 const MAX_HISTORY_MESSAGES = 20;
@@ -13,54 +27,49 @@ const historyMessageSchema = z.object({
   content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
 });
 
+const companyQuery = z.string().trim().min(1).max(60);
+
+/** A research entry point chosen in the UI; the server still resolves and validates every name. */
+const workflowSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("research"), query: companyQuery }),
+  z.object({ type: z.literal("explain_move"), query: companyQuery }),
+  z.object({ type: z.literal("compare"), queries: z.array(companyQuery).min(2).max(3) }),
+  z.object({ type: z.literal("portfolio") }),
+]);
+
 const requestSchema = z.object({
   message: z.string().trim().min(1, "message is required").max(MAX_MESSAGE_LENGTH),
   conversationId: z.string().trim().min(1).max(100).optional(),
   history: z.array(historyMessageSchema).max(MAX_HISTORY_MESSAGES).optional(),
+  workflow: workflowSchema.optional(),
 });
 
-// --- Minimal in-memory rate limiter -----------------------------------
-// TODO(production): this is per-server-instance, in-memory state that
-// resets on restart/redeploy and is NOT shared across multiple instances
-// or serverless invocations. It is a placeholder to avoid unmetered LLM +
-// market-data-provider spend during development. Before scaling beyond a
-// single long-lived instance, replace this with a shared store (e.g.
-// Redis) or a platform/edge-level rate limiter. Not replaced here per the
-// instruction to avoid introducing a large new dependency for this.
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
-const requestTimestampsByClient = new Map<string, number[]>();
-
-function isRateLimited(clientId: string): boolean {
-  const now = Date.now();
-  const recent = (requestTimestampsByClient.get(clientId) ?? []).filter(
-    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS
-  );
-
-  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
-    requestTimestampsByClient.set(clientId, recent);
-    return true;
-  }
-
-  recent.push(now);
-  requestTimestampsByClient.set(clientId, recent);
-  return false;
-}
-
-function getClientId(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  return forwardedFor?.split(",")[0]?.trim() || "unknown";
-}
-
-export async function POST(request: Request) {
-  const clientId = getClientId(request);
-
-  if (isRateLimited(clientId)) {
-    const body: AgentErrorResponse = {
-      error: "Too many requests. Please wait a moment and try again.",
-      code: "RATE_LIMITED",
-    };
-    return NextResponse.json(body, { status: 429 });
+/**
+ * POST /api/agent
+ *   Authorization: Bearer <Supabase access token>
+ *
+ * Signed-in members only, rate limited per account (see lib/agent/access.ts).
+ * A repeat of a recent stand-alone question is served from the answer cache
+ * and doesn't count against the limit.
+ *
+ * Research questions (a report on a stock, why it moved, a comparison, a
+ * portfolio review) run as workflows: the data is gathered server-side and
+ * written up in one model call (lib/agent/workflows). Everything else, and any
+ * workflow whose company can't be identified, goes to the tool loop.
+ */
+export async function POST(
+  request: Request,
+  _context?: unknown,
+  access: AgentAccess = defaultAgentAccess,
+  run: typeof runAgent = runAgent,
+  workflow: typeof runDefaultWorkflow = runDefaultWorkflow,
+  navigate: typeof defaultNavigate = defaultNavigate
+) {
+  const token = bearerToken(request);
+  const userId = token ? await access.verifyToken(token) : null;
+  if (!userId) {
+    const body: AgentErrorResponse = { error: "Sign in to use StockSphere AI.", code: "SIGNED_OUT" };
+    return NextResponse.json(body, { status: 401 });
   }
 
   let json: unknown;
@@ -83,14 +92,39 @@ export async function POST(request: Request) {
   // A stand-alone question asked again within a couple of minutes is answered
   // from the cache (same answer, new conversation id).
   const standalone = !parsed.data.history || parsed.data.history.length === 0;
-  const cached = standalone ? answerCache.get(parsed.data.message) : null;
+  const chosen: Workflow | null = parsed.data.workflow ?? (standalone ? detectWorkflow(parsed.data.message) : null);
+  // The answer cache is shared by everyone and keyed by the question alone, so
+  // an answer built from one member's own data must never enter or leave it.
+  const cacheable = standalone && chosen?.type !== "portfolio";
+  const cached = cacheable ? answerCache.get(parsed.data.message) : null;
   if (cached) {
     return NextResponse.json({ ...cached, conversationId: parsed.data.conversationId ?? cached.conversationId });
   }
 
+  // A request to open a page needs no AI answer, so it doesn't use the member's allowance.
+  if (standalone && !parsed.data.workflow) {
+    const navigation = await navigate(parsed.data.message, parsed.data.conversationId);
+    if (navigation) return NextResponse.json(navigation);
+  }
+
+  const slot = await access.takeSlot(userId);
+  if (!slot.ok) {
+    const body: AgentErrorResponse = {
+      error:
+        slot.window === "day"
+          ? "You've reached today's limit for StockSphere AI. It resets within 24 hours."
+          : "Too many questions in a minute. Please wait a moment and try again.",
+      code: "RATE_LIMITED",
+    };
+    return NextResponse.json(body, { status: 429, headers: { "Retry-After": String(slot.retryAfterSeconds) } });
+  }
+
   try {
-    const result = await runAgent(parsed.data);
-    if (standalone) answerCache.set(parsed.data.message, result);
+    const fromWorkflow = chosen
+      ? await workflow(chosen, parsed.data.message, { userId, accessToken: token! }, parsed.data.conversationId)
+      : null;
+    const result = fromWorkflow ?? (await run({ message: parsed.data.message, conversationId: parsed.data.conversationId, history: parsed.data.history }));
+    if (cacheable) answerCache.set(parsed.data.message, result);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AgentError) {

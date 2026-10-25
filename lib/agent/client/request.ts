@@ -9,11 +9,12 @@ import type {
 export const AGENT_ENDPOINT = "/api/agent";
 
 /**
- * A tool-calling turn can make several provider calls plus up to five LLM
- * round-trips, so this is generous. It exists to bound a hung request, not to
- * hurry a normal one.
+ * A tool-calling turn can make several provider calls plus several LLM
+ * round-trips. The server always answers within 50 s (AGENT_DEADLINE_MS, a
+ * partial answer if need be), so this only bounds a request that hung on the
+ * way, with room for the network on top.
  */
-export const AGENT_TIMEOUT_MS = 60_000;
+export const AGENT_TIMEOUT_MS = 65_000;
 
 /** Server-side codes, plus the two failure modes that never reach the server. */
 export type AgentClientErrorCode =
@@ -46,8 +47,9 @@ const FRIENDLY_MESSAGES: Record<AgentClientErrorCode, string> = {
   TIMEOUT: "StockSphere AI took too long to respond. Please try again.",
   MALFORMED_RESPONSE:
     "StockSphere AI sent back a response that couldn't be read. Please try again.",
+  SIGNED_OUT: "Sign in to ask StockSphere AI.",
   RATE_LIMITED:
-    "You've sent a lot of questions in a short time. Give it a moment, then try again.",
+    "You've reached the StockSphere AI limit (5 questions a minute, 20 a day). Please try again a little later.",
   INVALID_REQUEST:
     "That question couldn't be sent. Try shortening it or rephrasing.",
   LLM_ERROR: "StockSphere AI is temporarily unavailable. Please try again.",
@@ -62,6 +64,7 @@ export function friendlyMessage(code: AgentClientErrorCode): string {
 function isErrorCode(value: unknown): value is AgentErrorCode {
   return (
     value === "INVALID_REQUEST" ||
+    value === "SIGNED_OUT" ||
     value === "RATE_LIMITED" ||
     value === "LLM_ERROR" ||
     value === "INTERNAL_ERROR"
@@ -121,7 +124,12 @@ export async function toRequestError(
 
   const { code, technical } = readErrorBody(body);
   const resolved: AgentClientErrorCode =
-    code ?? (response.status === 429 ? "RATE_LIMITED" : "INTERNAL_ERROR");
+    code ??
+    (response.status === 429
+      ? "RATE_LIMITED"
+      : response.status === 401
+        ? "SIGNED_OUT"
+        : "INTERNAL_ERROR");
 
   const error = new AgentRequestError(resolved, friendlyMessage(resolved));
   // Developer-facing detail, never rendered. See FRIENDLY_MESSAGES above.
@@ -134,12 +142,14 @@ export async function toRequestError(
  *
  * `fetchImpl` is injected so the request/response handling can be tested
  * without a server, and without a GROQ_API_KEY — the same convention the agent
- * tools use for their provider clients.
+ * tools use for their provider clients. `accessToken` is the signed-in
+ * member's Supabase token; without one the server answers SIGNED_OUT.
  */
 export async function sendAgentMessage(
   request: AgentRequest,
   fetchImpl: typeof fetch = fetch,
-  timeoutMs: number = AGENT_TIMEOUT_MS
+  timeoutMs: number = AGENT_TIMEOUT_MS,
+  accessToken: string | null = null
 ): Promise<AgentResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -148,7 +158,10 @@ export async function sendAgentMessage(
   try {
     response = await fetchImpl(AGENT_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
       body: JSON.stringify(request),
       signal: controller.signal,
     });

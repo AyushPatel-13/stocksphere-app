@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 
+import { supabase } from "@/lib/supabase";
 import type { AgentMessage } from "@/lib/types/agent";
 import { buildHistory, composeMessage, maxQuestionLength } from "./contract";
 import { AgentRequestError, sendAgentMessage } from "./request";
@@ -92,13 +93,21 @@ export function useAgentChat({
       );
 
       try {
-        const response = await sendTurn({
-          message: wire,
-          ...(conversationId.current
-            ? { conversationId: conversationId.current }
-            : {}),
-          ...(history.length > 0 ? { history } : {}),
-        });
+        // The server only answers signed-in members; it reads who is asking
+        // from this token, never from the request body.
+        const { data: auth } = await supabase.auth.getSession();
+        const response = await sendTurn(
+          {
+            message: wire,
+            ...(conversationId.current
+              ? { conversationId: conversationId.current }
+              : {}),
+            ...(history.length > 0 ? { history } : {}),
+          },
+          undefined,
+          undefined,
+          auth.session?.access_token ?? null
+        );
 
         conversationId.current = response.conversationId;
 
@@ -111,6 +120,7 @@ export function useAgentChat({
             role: "assistant",
             content: response.answer,
             sources: response.sources,
+            links: response.links,
             warnings: response.warnings,
             tools: response.toolCalls.map((call) => call.tool),
           },

@@ -56,6 +56,16 @@ export interface LLMToolCallRequest {
   arguments: string;
 }
 
+/**
+ * A provider's own record of an assistant turn (reasoning items, thinking
+ * blocks, Gemini thought signatures). Some providers require it back unchanged
+ * with the tool results; it is replayed only to the provider that produced it.
+ */
+export interface ProviderRaw {
+  provider: string;
+  data: unknown;
+}
+
 export interface LLMMessage {
   role: LLMRole;
   content: string | null;
@@ -63,11 +73,16 @@ export interface LLMMessage {
   toolCallId?: string;
   /** Present only on assistant messages that requested tool calls. */
   toolCalls?: LLMToolCallRequest[];
+  /** Assistant turns only: the producing provider's raw turn, see ProviderRaw. */
+  raw?: ProviderRaw;
 }
 
 export interface LLMCompletionResult {
   content: string | null;
   toolCalls: LLMToolCallRequest[] | null;
+  /** Which provider/model answered, e.g. "gemini:gemini-3.5-flash-lite". */
+  servedBy?: string;
+  raw?: ProviderRaw;
 }
 
 // --- Normalized domain types exposed to the LLM ----------------------------
@@ -120,4 +135,6 @@ export interface SymbolResolution {
   authoritative: false;
   /** The candidate the query plainly names (exact ticker or exact company name), or null when it's ambiguous. */
   bestMatch?: SymbolCandidate | null;
+  /** Set when the query was a former company name and the current one was searched. */
+  note?: string;
 }

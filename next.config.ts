@@ -27,12 +27,39 @@ import type { NextConfig } from "next";
  * deliberately left off: both are commitments about domains this repository
  * does not describe, and neither is needed to get the protection.
  *
- * Deliberately NOT here: Content-Security-Policy and CORS. A CSP that is not
- * written against this app's actual inline styles and data flow is a
- * speculative policy that breaks pages, and CORS is currently the safe default
- * (no cross-origin headers, so the API routes stay same-origin). Both are
- * separate work.
+ * Content-Security-Policy ships as Report-Only for now: browsers log each
+ * violation to the console but block nothing, so a missed origin cannot break
+ * a page. Once a beta round shows no violations, rename the header to
+ * Content-Security-Policy to enforce it. The browser only talks to this app
+ * and Supabase (REST, auth and realtime); market data is fetched server-side.
+ * Images may come from any HTTPS host (Google avatars, news thumbnails, coin
+ * logos). 'unsafe-inline' scripts are needed by Next's inline bootstrap
+ * without nonces; 'unsafe-eval' only by the dev server.
+ *
+ * CORS is deliberately not set: no cross-origin headers, so the API routes
+ * stay same-origin.
  */
+
+const supabaseOrigin = (() => {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").origin;
+  } catch {
+    return "";
+  }
+})();
+
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  `connect-src 'self'${supabaseOrigin ? ` ${supabaseOrigin} ${supabaseOrigin.replace(/^https/, "wss")}` : ""}`,
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join("; ");
 
 const SECURITY_HEADERS = [
   {
@@ -54,6 +81,10 @@ const SECURITY_HEADERS = [
   {
     key: "Strict-Transport-Security",
     value: "max-age=63072000",
+  },
+  {
+    key: "Content-Security-Policy-Report-Only",
+    value: CONTENT_SECURITY_POLICY,
   },
 ];
 

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Candle } from "@/lib/apis/yahooChart";
 import { getHistory, resolveAsset, type History } from "@/lib/services/history";
 import { ToolDefinition, failResult, okResult, type SymbolCandidate, type SymbolResolution } from "../types";
-import { pickCandidate, symbolResolverTool } from "./symbolResolverTool";
+import { pickCandidate, RENAMED_COMPANIES, stripIndianSuffix, symbolResolverTool } from "./symbolResolverTool";
 
 export { pickCandidate };
 
@@ -17,17 +17,25 @@ export { pickCandidate };
 
 const SOURCE = "StockSphere Performance (Yahoo Finance history, may be delayed)";
 
-export const PERIODS = ["1w", "1m", "3m", "6m", "1y", "3y", "5y"] as const;
+export const PERIODS = ["1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"] as const;
 export type Period = (typeof PERIODS)[number];
 
-const PERIOD_DAYS: Record<Period, number> = { "1w": 7, "1m": 30, "3m": 91, "6m": 182, "1y": 365, "3y": 1095, "5y": 1826 };
+// "ytd" has no fixed length: it starts from the last close of the previous
+// calendar year (see cutoffFor).
+const PERIOD_DAYS: Record<Exclude<Period, "ytd">, number> = { "1w": 7, "1m": 30, "3m": 91, "6m": 182, "1y": 365, "3y": 1095, "5y": 1826 };
+
+/** The latest time the start bar may have: the period's length before the end, or 31 Dec of last year for ytd. */
+function cutoffFor(endT: number, period: Period): number {
+  if (period === "ytd") return Date.UTC(new Date(endT).getUTCFullYear(), 0, 1) - 1;
+  return endT - PERIOD_DAYS[period] * 86_400_000;
+}
 
 /**
  * How many days after the cutoff the first available bar may fall and still
  * stand as the start (a provider's "1 year" often begins a day or two late;
  * weekly bars can be up to a week off). The dates used are always reported.
  */
-const START_TOLERANCE_DAYS: Record<Period, number> = { "1w": 2, "1m": 4, "3m": 5, "6m": 5, "1y": 7, "3y": 10, "5y": 10 };
+const START_TOLERANCE_DAYS: Record<Period, number> = { "1w": 2, "1m": 4, "3m": 5, "6m": 5, ytd: 7, "1y": 7, "3y": 10, "5y": 10 };
 
 const argsSchema = z.object({
   stocks: z.array(z.string().trim().min(1).max(60)).min(1).max(5),
@@ -67,7 +75,7 @@ export function periodReturn(candles: Candle[], period: Period): Omit<Extract<Pe
   const bars = candles.filter((c) => c.c > 0).sort((a, b) => a.t - b.t);
   if (bars.length < 2) return null;
   const end = bars[bars.length - 1];
-  const cutoff = end.t - PERIOD_DAYS[period] * 86_400_000;
+  const cutoff = cutoffFor(end.t, period);
   let startIndex = bars.findLastIndex((b) => b.t <= cutoff);
   if (startIndex < 0 && bars[0].t - cutoff <= START_TOLERANCE_DAYS[period] * 86_400_000) startIndex = 0;
   // History doesn't reach back far enough: say so rather than shorten the period.
@@ -109,7 +117,7 @@ export async function getPerformance(args: PerformanceArgs, deps: PerformanceDep
   const rows = await Promise.all(
     args.stocks.map(async (query): Promise<PerformanceRow> => {
       const candidates = await deps.resolve(query).catch(() => null);
-      const pick = candidates ? pickCandidate(query, candidates) : null;
+      const pick = candidates ? pickCandidate(RENAMED_COMPANIES[stripIndianSuffix(query).toLowerCase()] ?? query, candidates) : null;
       if (!pick) return { query, status: "not_found" };
       if ("tied" in pick) return { query, status: "ambiguous", candidates: pick.tied };
 
@@ -135,12 +143,12 @@ export async function getPerformance(args: PerformanceArgs, deps: PerformanceDep
 export const performanceTool: ToolDefinition<PerformanceArgs, PerformanceResult> = {
   name: "get_performance",
   description:
-    "Best tool for returns and comparisons. Give 1–5 company names or tickers and a period (1w,1m,3m,6m,1y,3y,5y); it resolves each name, and returns start/end dates and closes, the % return (already computed — quote it as is), annualised return for 1y+, and the period high/low. Names matching several companies come back 'ambiguous' with candidates: ask the user which one.",
+    "Best tool for returns and comparisons. Give 1–5 company names or tickers and a period (1w,1m,3m,6m,ytd,1y,3y,5y); it resolves each name, and returns start/end dates and closes, the % return (already computed — quote it as is), annualised return for 1y+, and the period high/low. Names matching several companies come back 'ambiguous' with candidates: ask the user which one.",
   parameters: {
     type: "object",
     properties: {
       stocks: { type: "array", items: { type: "string" }, description: "Company names or tickers, e.g. ['TCS', 'Infosys']." },
-      period: { type: "string", enum: [...PERIODS], description: "Look-back period." },
+      period: { type: "string", enum: [...PERIODS], description: "Look-back period; ytd = since the start of this calendar year ('this year')." },
     },
     required: ["stocks", "period"],
   },

@@ -15,8 +15,26 @@ import { getStockQuote as getAlphaQuote } from "@/lib/apis/alphavantage";
 import { getYahooQuote } from "@/lib/apis/yahoo";
 
 import { isValidSymbol } from "@/lib/validation/symbol";
+import { clientAddress, createWindowLimiter } from "@/lib/utils/rateLimit";
 
-export const revalidate = 60;
+/**
+ * This route is public and a US symbol spends Twelve Data / Alpha Vantage
+ * credits, so it guards itself. (It used to rely on `revalidate = 60`, but a
+ * GET handler that reads the request URL is never cached, so that did nothing.)
+ *
+ *   - a priced quote is reused for QUOTE_CACHE_MS by every caller on this
+ *     instance, so a page full of watchers costs one provider call per symbol;
+ *   - one client gets PER_CLIENT_LIMIT single-symbol lookups a minute, then 429.
+ *
+ * Both apply only with the real providers; tests inject their own and opt out.
+ */
+const QUOTE_CACHE_MS = 60_000;
+const QUOTE_CACHE_MAX = 500;
+const PER_CLIENT_LIMIT = 60;
+const quoteCache = new Map<string, { at: number; body: unknown }>();
+// Not a valid symbol, so it can't collide with one.
+const OVERVIEW_KEY = "#overview";
+const clientLimiter = createWindowLimiter({ limit: PER_CLIENT_LIMIT, windowMs: 60_000 });
 
 const US_SYMBOLS = {
   apple: "AAPL",
@@ -432,11 +450,39 @@ export async function GET(
   }
 
   if (symbol) {
-    return getSingleQuote(
-      symbol,
-      loadQuote,
-      lookups
-    );
+    const guarded = loadQuote === getMarketQuote && lookups === REAL_GLOBAL_LOOKUPS;
+    if (!guarded) return getSingleQuote(symbol, loadQuote, lookups);
+
+    const key = symbol.toUpperCase();
+    const now = Date.now();
+    const hit = quoteCache.get(key);
+    if (hit && now - hit.at < QUOTE_CACHE_MS) return NextResponse.json(hit.body);
+
+    const client = clientAddress(request);
+    if (client && !clientLimiter.take(client, now)) {
+      const retryAfter = Math.ceil(clientLimiter.retryAfterMs(client, now) / 1000);
+      return NextResponse.json(
+        { success: false, symbol, quote: null, error: "Too many quote requests. Try again in a minute." },
+        { status: 429, headers: { "Retry-After": String(Math.max(1, retryAfter)) } }
+      );
+    }
+
+    const response = await getSingleQuote(symbol, loadQuote, lookups);
+    if (response.status === 200) {
+      if (quoteCache.size >= QUOTE_CACHE_MAX) quoteCache.delete(quoteCache.keys().next().value as string);
+      quoteCache.set(key, { at: now, body: await response.clone().json() });
+    }
+    return response;
+  }
+
+  // Every home-page visit asks for this, and it prices four US symbols.
+  if (loadQuote === getMarketQuote && lookups === REAL_GLOBAL_LOOKUPS) {
+    const now = Date.now();
+    const hit = quoteCache.get(OVERVIEW_KEY);
+    if (hit && now - hit.at < QUOTE_CACHE_MS) return NextResponse.json(hit.body);
+    const response = await getMarketOverview(loadQuote, lookups);
+    if (response.status === 200) quoteCache.set(OVERVIEW_KEY, { at: now, body: await response.clone().json() });
+    return response;
   }
 
   return getMarketOverview(

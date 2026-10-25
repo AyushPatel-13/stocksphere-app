@@ -111,10 +111,17 @@ export function checkOrder(raw: { requestId?: unknown; assetType?: unknown; symb
   if (raw.side !== "buy" && raw.side !== "sell") return { ok: false, reason: "Choose buy or sell." };
 
   const quantity = Number(raw.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) return { ok: false, reason: "Enter a quantity above zero." };
-  // Shares trade in whole units; crypto may be fractional (up to 8 decimals).
-  if (assetType !== "crypto" && !Number.isInteger(quantity)) return { ok: false, reason: "Shares trade in whole numbers." };
-  if (assetType === "crypto" && Math.round(quantity * 1e8) / 1e8 !== quantity) return { ok: false, reason: "Use at most 8 decimal places." };
+  const problem = quantityProblem(assetType, quantity);
+  if (problem) return { ok: false, reason: problem };
 
   return { ok: true, value: { requestId: raw.requestId.toLowerCase(), assetType, symbol, side: raw.side, quantity } };
+}
+
+/** Why a quantity can't be ordered, or null. Shared by the server check and the order ticket. */
+export function quantityProblem(assetType: PaperAssetType, quantity: number): string | null {
+  if (!Number.isFinite(quantity) || quantity <= 0) return "Enter a quantity above zero.";
+  // Shares trade in whole units; crypto may be fractional (up to 8 decimals).
+  if (assetType !== "crypto" && !Number.isInteger(quantity)) return "Shares trade in whole numbers.";
+  if (assetType === "crypto" && Math.round(quantity * 1e8) / 1e8 !== quantity) return "Use at most 8 decimal places.";
+  return null;
 }

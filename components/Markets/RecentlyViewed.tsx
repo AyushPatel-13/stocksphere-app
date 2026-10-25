@@ -44,7 +44,7 @@ export default function RecentlyViewed({ className = "" }: { className?: string 
             clearRecentlyViewed();
             setAssets([]);
           }}
-          className="text-sm text-[#888] transition-colors hover:text-white"
+          className="cursor-pointer rounded text-sm text-[#888] transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
         >
           Clear
         </button>
@@ -59,7 +59,7 @@ export default function RecentlyViewed({ className = "" }: { className?: string 
             <li key={`${asset.type}-${symbol}`} className="w-[168px] shrink-0 snap-start">
               <Link
                 href={`/stock/${encodeURIComponent(symbol)}`}
-                className="group flex h-full flex-col rounded-2xl border border-[#222] bg-[#111] p-4 transition-colors hover:border-[#2f2f2f] hover:bg-[#141414]"
+                className="group flex h-full flex-col rounded-2xl border border-[#222] bg-[#111] p-4 transition-colors hover:border-[#2f2f2f] hover:bg-[#141414] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/40"
               >
                 <StockAvatar symbol={symbol} size={34} market={asset.market === "INDIA" ? "India" : asset.market === "US" ? "US" : undefined} />
 

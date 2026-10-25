@@ -65,7 +65,10 @@ export async function placeOrder(
     return { ok: false, status: 409, error: "The market is closed. Orders fill during market hours.", code: "MARKET_CLOSED" };
   }
 
-  const value = reference.price * quantity;
+  // A converted quote (BTC in rupees from the dollar pair) arrives as a float
+  // like 7600305.873199999; the ledger stores what a contract note would show.
+  const price = fillPrice(reference.price);
+  const value = price * quantity;
   if (value > MAX_ORDER_VALUE[currency]) {
     return { ok: false, status: 422, error: `One order can be worth at most ${currency === "INR" ? "₹10,00,000" : "$10,000"}.`, code: "RULES" };
   }
@@ -77,7 +80,7 @@ export async function placeOrder(
     symbol: snapshot.symbol,
     side,
     quantity,
-    price: reference.price,
+    price,
     currency,
     priceSource: reference.source,
     priceTime: new Date(reference.quoteTime).toISOString(),
@@ -91,11 +94,16 @@ export async function placeOrder(
     ok: true,
     status: fill.outcome === "replayed" ? 200 : 201,
     tradeId: fill.tradeId,
-    price: reference.price,
+    price,
     currency,
     cashAfter: Number(fill.cashAfter),
     replayed: fill.outcome === "replayed",
   };
+}
+
+/** Two decimals, or six significant digits for a sub-unit price (a 0.12 coin keeps its precision). */
+export function fillPrice(price: number): number {
+  return price >= 1 ? Math.round(price * 100) / 100 : Number(price.toPrecision(6));
 }
 
 export function getPaperStore(): PaperStore | null {

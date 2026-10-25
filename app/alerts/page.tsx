@@ -17,12 +17,22 @@ import {
   markAllRead,
   savePreferences,
   setAlertStatus,
+  smartAlertsAvailable,
   type AppNotification,
   type Preferences,
   type PriceAlert,
 } from "@/lib/alerts/client";
-import { ALERT_CONDITIONS, MAX_ACTIVE_ALERTS, checkAlertInput, describeAlert, type AlertAssetType, type AlertCondition } from "@/lib/alerts/rules";
+import {
+  ALERT_CONDITIONS,
+  MAX_ACTIVE_ALERTS,
+  checkAlertInput,
+  conditionInfo,
+  describeAlert,
+  type AlertAssetType,
+  type AlertCondition,
+} from "@/lib/alerts/rules";
 import { canonicalStockSymbol } from "@/lib/search/canonical";
+import { isValidSymbol } from "@/lib/validation/symbol";
 import type { SearchResult } from "@/lib/search/instruments";
 
 /**
@@ -34,6 +44,21 @@ import type { SearchResult } from "@/lib/search/instruments";
  */
 
 type Picked = { assetType: AlertAssetType; symbol: string; name: string; price: number | null };
+
+/** An IPO that can still be alerted on, from the IPO board. */
+type IpoChoice = { symbol: string; name: string; section: "open" | "upcoming" | "closed"; openDate: string };
+
+async function loadIpoChoices(): Promise<IpoChoice[] | null> {
+  try {
+    const data = await (await fetch("/api/ipo")).json();
+    if (!data?.success || !Array.isArray(data.ipos)) return null;
+    return (data.ipos as { symbol: string | null; name: string; section: IpoChoice["section"]; listingState: string | null; openDate: string }[])
+      .filter((row) => row.symbol && row.listingState !== "listed")
+      .map((row) => ({ symbol: row.symbol!.toUpperCase(), name: row.name, section: row.section, openDate: row.openDate }));
+  } catch {
+    return null;
+  }
+}
 
 function assetTypeOf(result: SearchResult): AlertAssetType | null {
   return result.type === "stock" || result.type === "etf" || result.type === "index" || result.type === "crypto" ? result.type : null;
@@ -65,10 +90,59 @@ function NewAlertForm({ activeCount, onCreated }: { activeCount: number; onCreat
   const [condition, setCondition] = useState<AlertCondition>("above");
   const [threshold, setThreshold] = useState("");
   const [note, setNote] = useState("");
+  const [repeat, setRepeat] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [smart, setSmart] = useState(false);
+  const [mode, setMode] = useState<"market" | "ipo">("market");
+  const [ipos, setIpos] = useState<IpoChoice[] | "error" | null>(null);
 
-  const unit = ALERT_CONDITIONS.find((c) => c.id === condition)?.unit;
+  const info = conditionInfo(condition);
+  const unit = info.unit;
+  const offered = ALERT_CONDITIONS.filter((c) => (smart || !c.smart) && (mode === "ipo" ? c.assets.includes("ipo") : !c.assets.includes("ipo")));
+  // "IPO opens" makes sense only for an issue that hasn't opened yet.
+  const ipoOptions = Array.isArray(ipos) ? ipos.filter((ipo) => condition !== "ipo_open" || ipo.section === "upcoming") : [];
+
+  useEffect(() => {
+    let cancelled = false;
+    smartAlertsAvailable().then((available) => {
+      if (!cancelled) setSmart(available);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function switchMode(next: "market" | "ipo") {
+    setMode(next);
+    setPicked(null);
+    setError(null);
+    setCondition(next === "ipo" ? "ipo_open" : "above");
+    if (next === "ipo" && ipos === null) {
+      loadIpoChoices().then((list) => setIpos(list ?? "error"));
+    }
+  }
+
+  // Arriving from a stock page (/alerts?type=stock&symbol=TCS) starts the form
+  // on that instrument. The symbol is validated here and again on save.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const symbol = (params.get("symbol") ?? "").trim().toUpperCase();
+    const type = params.get("type") ?? "stock";
+    if (!isValidSymbol(symbol) || !["stock", "etf", "index", "crypto"].includes(type)) return;
+    const assetType = type as AlertAssetType;
+    let cancelled = false;
+    const start = setTimeout(() => {
+      setPicked({ assetType, symbol, name: symbol, price: null });
+      currentPrice(assetType, symbol).then((price) => {
+        if (!cancelled) setPicked((current) => (current && current.symbol === symbol ? { ...current, price } : current));
+      });
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(start);
+    };
+  }, []);
 
   async function pick(result: SearchResult) {
     const assetType = assetTypeOf(result);
@@ -85,14 +159,22 @@ function NewAlertForm({ activeCount, onCreated }: { activeCount: number; onCreat
 
   async function submit() {
     if (!picked) {
-      setError("Pick a stock, index or coin first.");
+      setError(mode === "ipo" ? "Pick an IPO first." : "Pick a stock, index or coin first.");
       return;
     }
     if (activeCount >= MAX_ACTIVE_ALERTS) {
       setError(`You can have up to ${MAX_ACTIVE_ALERTS} active alerts.`);
       return;
     }
-    const check = checkAlertInput({ assetType: picked.assetType, symbol: picked.symbol, condition, threshold, note, currentPrice: picked.price });
+    const check = checkAlertInput({
+      assetType: picked.assetType,
+      symbol: picked.symbol,
+      condition,
+      threshold,
+      note,
+      repeatMode: repeat ? "every_session" : "once",
+      currentPrice: picked.price,
+    });
     if (!check.ok) {
       setError(check.reason);
       return;
@@ -120,11 +202,57 @@ function NewAlertForm({ activeCount, onCreated }: { activeCount: number; onCreat
     >
       <p className="font-semibold">New alert</p>
 
-      <div className="mt-3">
-        <SearchBox variant="compact" inputId="alert-search" placeholder="Search a stock, index or coin…" filterTypes={["stock", "etf", "index", "crypto"]} onSelect={pick} />
-      </div>
+      {smart && (
+        <div role="tablist" aria-label="What to watch" className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-[#222] bg-[#0d0d0d] p-1 text-sm">
+          {(["market", "ipo"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => switchMode(m)}
+              className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-[#1d1d1d] font-semibold text-white" : "text-[#888] hover:text-white"}`}
+            >
+              {m === "market" ? "Stock, index or coin" : "IPO"}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {picked && (
+      {mode === "market" ? (
+        <div className="mt-3">
+          <SearchBox variant="compact" inputId="alert-search" placeholder="Search a stock, index or coin…" filterTypes={["stock", "etf", "index", "crypto"]} onSelect={pick} />
+        </div>
+      ) : (
+        <label className="mt-3 block">
+          <span className="mb-1.5 block text-xs font-medium text-[#888]">IPO</span>
+          {ipos === null ? (
+            <div className="h-10 animate-pulse rounded-lg bg-[#151515]" />
+          ) : ipos === "error" ? (
+            <p className="text-sm text-[#888]">The IPO list couldn&apos;t be loaded right now.</p>
+          ) : ipoOptions.length === 0 ? (
+            <p className="text-sm text-[#888]">{condition === "ipo_open" ? "No upcoming IPOs to watch right now." : "No IPOs waiting to list right now."}</p>
+          ) : (
+            <select
+              value={picked?.symbol ?? ""}
+              onChange={(e) => {
+                const ipo = ipoOptions.find((i) => i.symbol === e.target.value);
+                setPicked(ipo ? { assetType: "ipo", symbol: ipo.symbol, name: ipo.name, price: null } : null);
+              }}
+              className={inputClass}
+            >
+              <option value="">Choose an IPO…</option>
+              {ipoOptions.map((ipo) => (
+                <option key={ipo.symbol} value={ipo.symbol}>
+                  {ipo.name} · {ipo.section === "upcoming" ? `opens ${ipo.openDate}` : ipo.section === "open" ? "open now" : "closed, awaiting listing"}
+                </option>
+              ))}
+            </select>
+          )}
+        </label>
+      )}
+
+      {picked && mode === "market" && (
         <div className="mt-3 flex items-center gap-3 rounded-xl border border-[#222] bg-[#0d0d0d] px-3 py-2.5">
           <StockAvatar symbol={picked.symbol} size={30} />
           <div className="min-w-0 flex-1">
@@ -141,19 +269,41 @@ function NewAlertForm({ activeCount, onCreated }: { activeCount: number; onCreat
 
       <label className="mt-3 block">
         <span className="mb-1.5 block text-xs font-medium text-[#888]">Alert me when</span>
-        <select value={condition} onChange={(e) => setCondition(e.target.value as AlertCondition)} className={inputClass}>
-          {ALERT_CONDITIONS.map((c) => (
+        <select
+          value={condition}
+          onChange={(e) => {
+            setCondition(e.target.value as AlertCondition);
+            if (mode === "ipo") setPicked(null);
+          }}
+          className={inputClass}
+        >
+          {offered.map((c) => (
             <option key={c.id} value={c.id}>
               {c.label}
             </option>
           ))}
         </select>
+        {condition === "fo_ban" && <span className="mt-1.5 block text-[11px] text-[#777]">NSE F&amp;O stocks only. Checked against NSE&apos;s daily ban file.</span>}
+        {(condition === "high_52w" || condition === "low_52w") && (
+          <span className="mt-1.5 block text-[11px] text-[#777]">Compared with the highest high or lowest low of the past year, before today.</span>
+        )}
       </label>
 
-      <label className="mt-3 block">
-        <span className="mb-1.5 block text-xs font-medium text-[#888]">{unit === "percent" ? "Percent" : "Price"}</span>
-        <input value={threshold} onChange={(e) => setThreshold(e.target.value)} inputMode="decimal" placeholder={unit === "percent" ? "e.g. 3" : "e.g. 2600"} className={inputClass} />
-      </label>
+      {unit !== "none" && (
+        <label className="mt-3 block">
+          <span className="mb-1.5 block text-xs font-medium text-[#888]">
+            {unit === "percent" ? (condition === "move_pct" && picked?.price ? `Percent (from ${picked.price.toLocaleString("en-IN", { maximumFractionDigits: 2 })})` : "Percent") : "Price"}
+          </span>
+          <input value={threshold} onChange={(e) => setThreshold(e.target.value)} inputMode="decimal" placeholder={unit === "percent" ? "e.g. 3" : "e.g. 2600"} className={inputClass} />
+        </label>
+      )}
+
+      {smart && info.repeatable && (
+        <label className="mt-3 flex items-center gap-2 text-sm text-[#ccc]">
+          <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="h-4 w-4 accent-[#22c55e]" />
+          Repeat every session (at most once a day)
+        </label>
+      )}
 
       <label className="mt-3 block">
         <span className="mb-1.5 block text-xs font-medium text-[#888]">Note (optional)</span>
@@ -169,7 +319,11 @@ function NewAlertForm({ activeCount, onCreated }: { activeCount: number; onCreat
       <button type="submit" disabled={saving} className={`${primaryButtonClass} mt-4 w-full`}>
         {saving ? "Saving…" : "Create alert"}
       </button>
-      <p className="mt-2 text-[11px] text-[#666]">Checked every few minutes against prices that may be delayed. In-app notifications only for now.</p>
+      <p className="mt-2 text-[11px] text-[#666]">
+        Checked during market hours against timestamped prices (Upstox for India, Yahoo for the rest); a price over 15 minutes old is never acted on. In-app
+        notifications only for now.
+      </p>
+      {!smart && <p className="mt-1 text-[11px] text-[#666]">52-week highs, F&amp;O ban and IPO alerts switch on after the next database update.</p>}
     </form>
   );
 }
@@ -253,6 +407,8 @@ function PreferencesCard() {
     </section>
   );
 }
+
+const shortTime = (iso: string) => new Date(iso).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 function timeAgo(iso: string, now: number): string {
   const minutes = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000));
@@ -355,8 +511,9 @@ export default function AlertsPage() {
                           <p className="text-sm font-semibold">{describeAlert(alert)}</p>
                           <p className="text-xs text-[#888]">
                             {alert.status === "triggered" && alert.triggeredAt
-                              ? `Triggered ${new Date(alert.triggeredAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} at ${alert.triggeredValue?.toFixed(2)}`
+                              ? `Triggered ${shortTime(alert.triggeredAt)}${alert.triggeredValue !== null ? ` at ${alert.triggeredValue.toFixed(2)}` : ""}`
                               : alert.note ?? `Created ${new Date(alert.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
+                            {alert.repeatMode === "every_session" && ` · Repeats every session${alert.lastFiredAt ? `, last ${shortTime(alert.lastFiredAt)}` : ""}`}
                           </p>
                         </div>
                         <span

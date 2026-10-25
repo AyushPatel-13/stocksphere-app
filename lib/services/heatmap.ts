@@ -2,6 +2,7 @@ import { getFinnhubIndustry } from "../apis/finnhubIndustry";
 import { NSE_INDEX_UNIVERSES, getNseConstituents, type ConstituentList, type NseIndexId } from "../apis/niftyIndices";
 import { getUpstoxQuotes } from "../apis/upstox";
 import { getYahooFundamentals, type YahooFundamentals } from "../apis/yahooFundamentals";
+import { getSpark } from "../apis/yahooSpark";
 import { fromUpstox } from "../adapters/quote.adapter";
 import { US_LARGE_CAPS } from "../analytics/screener";
 import { priceGap } from "../analytics/heatmapMetrics";
@@ -58,6 +59,8 @@ export type HeatmapTile = {
   sharesAsOf: string | null;
   /** When the price was printed (ISO) when the source says; else null. */
   quoteTime: string | null;
+  /** This tile's own price source, when a map mixes sources (Upstox with Yahoo filling gaps). */
+  priceSource?: string;
 };
 
 export type Classification = { available: true; source: string } | { available: false; reason: string };
@@ -82,6 +85,11 @@ export interface HeatmapDeps {
   constituents: (id: NseIndexId) => Promise<ConstituentList | null>;
   /** Upstox quotes for NSE instrument keys ("NSE_EQ|<ISIN>"), keyed by instrument key. */
   upstoxQuotes: (instrumentKeys: string[]) => Promise<Map<string, AssetQuote>>;
+  /**
+   * Yahoo prices for the NSE stocks Upstox didn't price (rate limit, expired
+   * token), keyed by Yahoo symbol ("TCS.NS"). Omitted: no fallback.
+   */
+  yahooFill?: (yahooSymbols: string[]) => Promise<Map<string, YahooFillQuote>>;
   usHistory: (symbol: string) => Promise<History | null>;
   usIndustry: (symbol: string) => Promise<string | null>;
   fundamentals: (yahooSymbol: string) => Promise<YahooFundamentals | null>;
@@ -109,9 +117,25 @@ async function defaultUpstoxQuotes(keys: string[]): Promise<Map<string, AssetQuo
   return out;
 }
 
+export type YahooFillQuote = { price: number; previousClose: number | null; time: string | null };
+
+/** One spark call per 20 stocks (NIFTY 500 = 25 calls), today's 1-minute range. */
+async function defaultYahooFill(yahooSymbols: string[]): Promise<Map<string, YahooFillQuote>> {
+  const out = new Map<string, YahooFillQuote>();
+  if (yahooSymbols.length === 0) return out;
+  const series = await getSpark(yahooSymbols, { range: "1d", interval: "1m" });
+  for (const [symbol, s] of series) {
+    const price = s.regularMarketPrice ?? s.closes.at(-1) ?? null;
+    if (price === null || !(price > 0)) continue;
+    out.set(symbol, { price, previousClose: s.previousClose, time: s.regularMarketTime ? new Date(s.regularMarketTime).toISOString() : null });
+  }
+  return out;
+}
+
 const DEFAULT_DEPS: HeatmapDeps = {
   constituents: (id) => getNseConstituents(id),
   upstoxQuotes: defaultUpstoxQuotes,
+  yahooFill: defaultYahooFill,
   usHistory: (symbol) => {
     const asset = resolveAsset("stock", symbol);
     return asset ? getHistory(asset, "1d").catch(() => null) : Promise.resolve(null);
@@ -219,20 +243,29 @@ export async function buildHeatmap(universe: HeatmapUniverse, deps: HeatmapDeps 
     const list = await deps.constituents(universe);
     if (!list) return null;
     const keys = list.constituents.map((c) => `NSE_EQ|${c.isin}`);
-    const quotes = await deps.upstoxQuotes(keys);
-    if (quotes.size === 0) return null;
+    const quotes = await deps.upstoxQuotes(keys).catch(() => new Map<string, AssetQuote>());
+
+    // Stocks Upstox didn't price (rate-limited, token expired) come from Yahoo
+    // for the same NSE listing, marked on the tile so the tooltip says so.
+    const unpriced = list.constituents.filter((c, i) => finitePositive(quotes.get(keys[i])?.price) === null);
+    const filled = deps.yahooFill && unpriced.length ? await deps.yahooFill(unpriced.map((c) => `${c.symbol}.NS`)).catch(() => new Map<string, YahooFillQuote>()) : new Map<string, YahooFillQuote>();
+    if (quotes.size === 0 && filled.size === 0) return null;
 
     const priced = list.constituents.map((c, i) => {
-      const q = quotes.get(keys[i]);
-      const price = finitePositive(q?.price);
-      const previousClose = price !== null ? finitePositive(q?.previousClose) : null;
+      const upstox = quotes.get(keys[i]);
+      const yahoo = finitePositive(upstox?.price) === null ? filled.get(`${c.symbol}.NS`) : undefined;
+      const q = yahoo ? undefined : upstox;
+      const price = finitePositive(yahoo ? yahoo.price : q?.price);
+      const previousClose = price !== null ? finitePositive(yahoo ? yahoo.previousClose : q?.previousClose) : null;
       const change = price !== null && previousClose !== null ? price - previousClose : null;
-      return { c, q, price, previousClose, change };
+      return { c, q, yahoo, price, previousClose, change };
     });
+    const fromYahoo = priced.filter((p) => p.yahoo && p.price !== null).length;
+    const fromUpstoxCount = priced.filter((p) => !p.yahoo && p.price !== null).length;
     const caps = await resolveCaps(priced.filter((p) => p.price !== null).map((p) => `${p.c.symbol}.NS`), deps);
 
     let capsPending = 0;
-    const tiles = priced.map(({ c, q, price, previousClose, change }): HeatmapTile => {
+    const tiles = priced.map(({ c, q, yahoo, price, previousClose, change }): HeatmapTile => {
       const cap = price !== null ? caps.get(`${c.symbol}.NS`) : null;
       if (cap === "pending") capsPending++;
       const open = price !== null ? finitePositive(q?.open) : null;
@@ -252,7 +285,8 @@ export async function buildHeatmap(universe: HeatmapUniverse, deps: HeatmapDeps 
         gap: priceGap(open, previousClose),
         volume: price !== null && typeof q?.volume === "number" && Number.isFinite(q.volume) && q.volume >= 0 ? q.volume : null,
         ...marketCapOf(price, cap === "pending" || cap === undefined ? null : cap),
-        quoteTime: null,
+        quoteTime: yahoo && price !== null ? yahoo.time : null,
+        ...(price !== null ? { priceSource: yahoo ? "Yahoo (Upstox unavailable, may be delayed)" : "Upstox" } : {}),
       };
     });
 
@@ -261,7 +295,7 @@ export async function buildHeatmap(universe: HeatmapUniverse, deps: HeatmapDeps 
       universe,
       label: NSE_INDEX_UNIVERSES[universe].label,
       market: "India",
-      priceSource: "Upstox",
+      priceSource: fromYahoo === 0 ? "Upstox" : fromUpstoxCount === 0 ? "Yahoo (Upstox unavailable, may be delayed)" : `Upstox; Yahoo for ${fromYahoo} stock${fromYahoo === 1 ? "" : "s"} Upstox didn't price`,
       capSource: "Price × shares outstanding (Yahoo)",
       constituentSource: `${list.source}, fetched ${list.fetchedAt.slice(0, 10)}`,
       fetchedAt,

@@ -1,3 +1,4 @@
+import { upstoxFetch } from "./upstoxGate";
 const ACCESS_TOKEN = process.env.UPSTOX_ACCESS_TOKEN;
 
 /** One daily candle, as Upstox returns it: an array of slots, not an object. */
@@ -64,7 +65,7 @@ export async function getUpstoxHistoricalCandles(
   if (fromDate > toDate) return null;
 
   try {
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v3/historical-candle/${encodeURIComponent(
         trimmedKey
       )}/days/1/${toDate}/${fromDate}`,

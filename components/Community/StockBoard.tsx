@@ -1,9 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import Feed from "@/components/Community/Feed";
-import { fetchSentiment, useCommunityUser } from "@/lib/community/client";
+import { fetchSentiment, fetchStockCommunity, useCommunityUser } from "@/lib/community/client";
+import { ipoCommunityPath } from "@/lib/community/paths";
+import type { PublicCommunity } from "@/lib/community/ipoCommunity";
 import type { SentimentSummary } from "@/lib/community/types";
 
 /**
@@ -14,18 +17,19 @@ import type { SentimentSummary } from "@/lib/community/types";
  * and comments were stored per device and seen by nobody else.
  */
 
-function SentimentMeter({ symbol, refresh }: { symbol: string; refresh: number }) {
+/** `symbol` for a stock board, `ipoId` for an IPO's community. */
+export function SentimentMeter({ symbol, ipoId, refresh }: { symbol?: string; ipoId?: string; refresh: number }) {
   const [summary, setSummary] = useState<SentimentSummary | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
-    fetchSentiment(symbol).then((result) => {
+    fetchSentiment(ipoId ? { ipo: ipoId } : (symbol ?? "")).then((result) => {
       if (!cancelled) setSummary(result);
     });
     return () => {
       cancelled = true;
     };
-  }, [symbol, refresh]);
+  }, [symbol, ipoId, refresh]);
 
   if (summary === undefined) {
     return <div className="h-[74px] animate-pulse rounded-2xl bg-[#111]" />;
@@ -73,15 +77,37 @@ export default function StockBoard({ symbol, label }: { symbol: string; label?: 
   const name = label || clean;
   const user = useCommunityUser();
   const [refresh, setRefresh] = useState(0);
+  const [community, setCommunity] = useState<PublicCommunity | null>(null);
+
+  // A stock that listed from an IPO community keeps that community: its
+  // posts are already in this board, and the IPO page stays reachable.
+  useEffect(() => {
+    let cancelled = false;
+    fetchStockCommunity(clean).then((result) => {
+      if (!cancelled) setCommunity(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [clean]);
 
   return (
-    <section aria-labelledby="board-title" className="mt-6">
+    <section id="community" aria-labelledby="board-title" className="mt-6">
       <div className="mb-3 flex items-baseline justify-between">
         <h2 id="board-title" className="text-xl font-semibold tracking-tight">
           {name} discussion
         </h2>
         <span className="text-xs text-[#777]">Community views · not investment advice</span>
       </div>
+
+      {community?.ipoId && (
+        <p className="mb-3 text-[13px] text-[#999]">
+          This board includes the discussion from {community.name}&apos;s IPO.{" "}
+          <Link href={ipoCommunityPath(community.ipoId)} className="font-semibold text-[#22c55e] hover:text-[#4ade80]">
+            Open community
+          </Link>
+        </p>
+      )}
 
       <div className="mb-4">
         <SentimentMeter symbol={clean} refresh={refresh} />

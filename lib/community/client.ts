@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { getMyProfile, type Profile } from "../profiles";
 import { supabase } from "../supabase";
+import type { IpoCommunityPage, PublicCommunity } from "./ipoCommunity";
 import type { Sentiment } from "./rules";
 import type { PostView, SentimentSummary, TrendingSymbol } from "./types";
 
@@ -24,6 +25,8 @@ async function accessToken(): Promise<string | null> {
 
 export async function fetchPosts(params: {
   symbol?: string;
+  /** An Upstox IPO id: that IPO's community. */
+  ipo?: string;
   parent?: string;
   sentiment?: Sentiment;
   before?: string;
@@ -49,6 +52,7 @@ export async function publishPost(input: {
   body: string;
   sentiment?: Sentiment | null;
   symbol?: string;
+  ipoId?: string;
   parentId?: string;
 }): Promise<{ post: PostView } | ApiError> {
   const token = await accessToken();
@@ -69,10 +73,36 @@ export async function publishPost(input: {
   }
 }
 
-export async function fetchSentiment(symbol: string): Promise<SentimentSummary | null> {
+/** A stock's sentiment, or an IPO community's with `{ ipo }`. */
+export async function fetchSentiment(target: string | { ipo: string }): Promise<SentimentSummary | null> {
+  const query = typeof target === "string" ? `symbol=${encodeURIComponent(target)}` : `ipo=${encodeURIComponent(target.ipo)}`;
   try {
-    const data = await (await fetch(`/api/community/sentiment?symbol=${encodeURIComponent(symbol)}`)).json();
+    const data = await (await fetch(`/api/community/sentiment?${query}`)).json();
     return data?.success ? (data as SentimentSummary) : null;
+  } catch {
+    return null;
+  }
+}
+
+export type IpoCommunityData = IpoCommunityPage;
+
+export async function fetchIpoCommunity(ipoId: string): Promise<IpoCommunityData | ApiError> {
+  try {
+    const response = await fetch(`/api/community/ipo?id=${encodeURIComponent(ipoId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => null);
+    return data?.success
+      ? (data as IpoCommunityData)
+      : { error: data?.error ?? "Couldn't load this community.", code: data?.code };
+  } catch {
+    return { error: "Couldn't reach the server. Check your connection and try again." };
+  }
+}
+
+/** The IPO community a stock was linked from, if any. */
+export async function fetchStockCommunity(symbol: string): Promise<PublicCommunity | null> {
+  try {
+    const data = await (await fetch(`/api/community/resolve?symbol=${encodeURIComponent(symbol)}`)).json();
+    return data?.success ? ((data.community as PublicCommunity | null) ?? null) : null;
   } catch {
     return null;
   }

@@ -381,12 +381,13 @@ const MARKETS = [
   { href: "/etfs", icon: "📦", label: "ETFs" },
   { href: "/crypto", icon: "₿", label: "Crypto" },
   { href: "/bonds", icon: "🏛️", label: "Bonds" },
+  { href: "/commodities", icon: "🛢️", label: "Commodities" },
 ];
 
 /** Every asset class StockSphere covers, one tap away. */
 function BrowseMarkets() {
   return (
-    <nav aria-label="Browse markets" className="mb-10 grid grid-cols-5 gap-2">
+    <nav aria-label="Browse markets" className="mb-10 grid grid-cols-3 gap-2 sm:grid-cols-6">
       {MARKETS.map((market) => (
         <Link
           key={market.href}

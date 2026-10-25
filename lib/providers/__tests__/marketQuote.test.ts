@@ -137,8 +137,10 @@ function withProviders(
 
   return {
     calls,
+    // Yahoo's chart (the US primary) answers nothing here, so these tests
+    // exercise the backup chain behind it without touching the network.
     run: (symbol: string) =>
-      getMarketQuote(symbol, twelve, alpha, yahoo),
+      getMarketQuote(symbol, twelve, alpha, yahoo, async () => null),
   };
 }
 
@@ -346,4 +348,31 @@ test("getMarketQuote: an Indian symbol still never reaches a global provider", a
     console.log = originalLog;
     console.error = originalError;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Yahoo's chart is the US primary
+// ---------------------------------------------------------------------------
+
+test("a US quote comes from Yahoo's chart first, and spends no Twelve Data or Alpha Vantage credit", async () => {
+  const calls: string[] = [];
+  const { twelve, alpha, yahoo } = recorders({ twelve: twelveQuoteFixture(), alpha: alphaQuoteFixture(), yahoo: yahooQuoteFixture() }, calls);
+  const asked: string[] = [];
+  const chart = async (ticker: string) => {
+    asked.push(ticker);
+    return { price: 231.5, change: 1.5, changePercent: 0.65, open: 230, high: 232, low: 229, previousClose: 230, currency: "USD", marketTime: "2026-10-23T20:00:00.000Z" };
+  };
+  const quote = await getMarketQuote("AAPL", twelve, alpha, yahoo, chart);
+  assert.equal(quote?.source, "Yahoo");
+  assert.equal(quote?.price, 231.5);
+  assert.deepEqual(asked, ["AAPL"]);
+  assert.deepEqual(calls, [], "no backup provider was consulted");
+});
+
+test("when Yahoo's chart can't price a US symbol, Twelve Data is next", async () => {
+  const calls: string[] = [];
+  const { twelve, alpha, yahoo } = recorders({ twelve: twelveQuoteFixture(), alpha: alphaQuoteFixture(), yahoo: yahooQuoteFixture() }, calls);
+  const quote = await getMarketQuote("AAPL", twelve, alpha, yahoo, async () => null);
+  assert.equal(quote?.source, "Twelve Data");
+  assert.equal(calls[0], "twelve:AAPL");
 });

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { checkOrder, computePositions, valuePosition, type PaperTrade } from "../ledger";
-import { placeOrder, type FillRequest, type PaperStore } from "../service";
+import { fillPrice, placeOrder, type FillRequest, type PaperStore } from "../service";
 import type { MarketSnapshot, PredictionMarketData } from "../../predictions/v2/sources";
 import { POST } from "@/app/api/paper/orders/route";
 
@@ -132,6 +132,21 @@ test("crypto fills around the clock", async () => {
     sunday
   );
   assert.equal(result.ok, true);
+});
+
+test("a converted fill price is stored rounded", async () => {
+  const { s, fills } = store();
+  const sunday = Date.parse("2026-10-18T08:00:00.000Z");
+  const result = await placeOrder(
+    { ...order, assetType: "crypto", symbol: "BTC", quantity: 0.01 },
+    s,
+    market({ session: null, live: [{ price: 7_600_305.873199999, quoteTime: sunday - 10_000, source: "yahoo" }] }),
+    sunday
+  );
+  assert.equal(fills[0].price, 7_600_305.87);
+  assert.equal(result.ok && result.price, 7_600_305.87);
+  assert.equal(fillPrice(0.123456789), 0.123457);
+  assert.equal(fillPrice(100), 100);
 });
 
 test("POST /api/paper/orders takes the token from the header, not the body", async () => {

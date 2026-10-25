@@ -137,7 +137,12 @@ export async function getEnrichedFinancials(symbol: string, deps: EnrichDeps = d
 
   const base = raw ? mapFinancialMetrics(raw) : mapFinancialMetrics({});
   const providerName = quote?.currency === "INR" || symbol.toUpperCase().endsWith(".NS") ? "Upstox" : "Finnhub";
-  const stats = buildKeyStats({ price: quote?.price ?? null, provider: base, providerName, yahoo: fundamentals, dividends });
+  // Some companies report in another currency than they trade in (Yahoo gives
+  // Infosys's EPS in USD against an INR price). That EPS can't be quoted in
+  // the stock's currency or divided into its price, so it is left out.
+  const currencyMismatch = !!(quote?.currency && fundamentals?.currency && quote.currency !== fundamentals.currency);
+  const yahoo = fundamentals && currencyMismatch ? { ...fundamentals, epsTtm: null } : fundamentals;
+  const stats = buildKeyStats({ price: quote?.price ?? null, provider: base, providerName, yahoo, dividends });
 
   const sources: EnrichedFinancials["sources"] = {};
   for (const key of Object.keys(base) as (keyof FinancialMetrics)[]) {

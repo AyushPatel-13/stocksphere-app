@@ -2,7 +2,12 @@
  * NSE index constituents, from the official lists NSE Indices publishes:
  *
  *   https://www.niftyindices.com/IndexConstituent/<file>.csv
+ *   https://nsearchives.nseindia.com/content/indices/<file>.csv   (NSE's copy)
  *   "Company Name,Industry,Symbol,Series,ISIN Code"
+ *
+ * Both publish the same files. niftyindices.com is tried first; when it fails
+ * (on 24 Oct 2026 it redirected every CSV to a "/sitefinity/status" HTML page)
+ * NSE's archive copy is used, and the list says which one it came from.
  *
  * The "Industry" column carries NSE's sector-level classification (e.g.
  * "Financial Services", "Capital Goods"), so it is surfaced as the sector.
@@ -83,6 +88,31 @@ export function parseConstituentCsv(text: string): Constituent[] | null {
   return out.length > 0 ? out : null;
 }
 
+const CONSTITUENT_SOURCES = [
+  { label: "NSE Indices constituent list", url: (file: string) => `https://www.niftyindices.com/IndexConstituent/${file}.csv` },
+  { label: "NSE Indices constituent list (NSE archive copy)", url: (file: string) => `https://nsearchives.nseindia.com/content/indices/${file}.csv` },
+] as const;
+
+/** One source's list, or null when it fails or answers with something that isn't the CSV. */
+async function fetchList(url: string, id: NseIndexId, fetcher: typeof fetch): Promise<Constituent[] | null> {
+  const host = new URL(url).host;
+  try {
+    const response = await fetcher(url, {
+      headers: { "User-Agent": USER_AGENT, Accept: "text/csv,*/*" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      console.error(`NSE constituents ${id}: HTTP ${response.status} from ${host}`);
+      return null;
+    }
+    return parseConstituentCsv(await response.text());
+  } catch (error) {
+    console.error(`NSE constituents ${id} from ${host}:`, error instanceof Error ? error.message : "unknown");
+    return null;
+  }
+}
+
 const cache = new Map<NseIndexId, { at: number; value: ConstituentList }>();
 const inFlight = new Map<NseIndexId, Promise<ConstituentList | null>>();
 
@@ -96,25 +126,16 @@ export async function getNseConstituents(
 
   let pending = inFlight.get(id);
   if (!pending) {
-    const url = `https://www.niftyindices.com/IndexConstituent/${NSE_INDEX_UNIVERSES[id].file}.csv`;
+    const file = NSE_INDEX_UNIVERSES[id].file;
     pending = (async () => {
       try {
-        const response = await fetcher(url, {
-          headers: { "User-Agent": USER_AGENT, Accept: "text/csv,*/*" },
-          cache: "no-store",
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-        if (!response.ok) {
-          console.error(`NSE constituents ${id}: HTTP ${response.status}`);
-          return hit?.value ?? null;
+        for (const source of CONSTITUENT_SOURCES) {
+          const constituents = await fetchList(source.url(file), id, fetcher);
+          if (!constituents) continue;
+          const value = { constituents, fetchedAt: new Date(now).toISOString(), source: source.label };
+          cache.set(id, { at: now, value });
+          return value;
         }
-        const constituents = parseConstituentCsv(await response.text());
-        if (!constituents) return hit?.value ?? null;
-        const value = { constituents, fetchedAt: new Date(now).toISOString(), source: "NSE Indices constituent list" };
-        cache.set(id, { at: now, value });
-        return value;
-      } catch (error) {
-        console.error(`NSE constituents ${id}:`, error instanceof Error ? error.message : "unknown");
         return hit?.value ?? null;
       } finally {
         inFlight.delete(id);
