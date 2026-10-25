@@ -36,7 +36,7 @@ Scope: audit only. Nothing was edited apart from this file. Nothing was committe
 > - `3f9637b` commodities board (the commodities session's work, committed with the user's go-ahead).
 > - PR #2 merged into `main` as `d2b1809`; Vercel started the production build.
 > - Still open:
->   - **P2-6**: the objects from `20261019000100_profiles` and `20261019000200_owner_columns` are verified present. Inserting their history rows was blocked by the session's permission check, so it needs the user's approval.
+>   - ~~P2-6~~ done with approval: history rows for `profiles` and `owner_columns` recorded (objects verified present first), and `ai_usage` renamed to its file name. History now lists all 14 files. Remote versions for the later 10 are apply timestamps, not file prefixes, so a `supabase db push` from the CLI would still need `migration repair` first.
 >   - Vercel: team access for the connector isn't approved, so Deployment Protection and env vars are unchecked. `CRON_SECRET` and the Vault secrets have to be set by the user.
 >   - A production sign-in test.
 > - `380a393`:
