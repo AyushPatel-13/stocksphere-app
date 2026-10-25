@@ -197,11 +197,14 @@ export default function PriceChart({
   symbol,
   vs = "INR",
   initialRange = "1d",
+  expiry,
 }: {
-  type: AssetType;
+  type: AssetType | "commodity";
   symbol: string;
   vs?: "INR" | "USD";
   initialRange?: RangeId;
+  /** Commodity futures only: which contract (YYYY-MM-DD). */
+  expiry?: string;
 }) {
   const [range, setRange] = useState<RangeId>(initialRange);
   const [mode, setMode] = useState<"line" | "candles">("line");
@@ -229,6 +232,7 @@ export default function PriceChart({
   useEffect(() => {
     let cancelled = false;
     const params = new URLSearchParams({ type, symbol, range, vs });
+    if (expiry) params.set("expiry", expiry);
 
     fetch(`/api/history?${params.toString()}`)
       .then((response) => response.json())
@@ -247,7 +251,7 @@ export default function PriceChart({
     return () => {
       cancelled = true;
     };
-  }, [type, symbol, range, vs, attempt]);
+  }, [type, symbol, range, vs, expiry, attempt]);
 
   const rows = useMemo(() => (state.status === "ready" ? toRows(state.data.candles) : []), [state]);
   const data = state.status === "ready" ? state.data : null;

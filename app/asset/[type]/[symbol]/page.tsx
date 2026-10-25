@@ -99,8 +99,26 @@ function AssetView() {
   const valid = type in TYPE_LABEL;
   const stats = useDayStats(type, symbol, vs);
 
+  // Commodities have their own pages (MCX futures, with contract and unit), so
+  // an /asset/commodity/GOLD link goes there instead of dead-ending here.
+  const isCommodity = String(params.type ?? "").toLowerCase() === "commodity";
+  useEffect(() => {
+    if (isCommodity) router.replace(`/commodities/${encodeURIComponent(symbol)}`);
+  }, [isCommodity, router, symbol]);
+
+  if (isCommodity) {
+    return <p className="text-sm text-[#888]">Opening the commodity page…</p>;
+  }
+
   if (!valid) {
-    return <p className="text-sm text-[#888]">Unknown asset type.</p>;
+    return (
+      <p className="text-sm text-[#888]">
+        Unknown asset type.{" "}
+        <Link href="/explore" className="text-[#4ade80] hover:underline">
+          Browse markets
+        </Link>
+      </p>
+    );
   }
 
   return (

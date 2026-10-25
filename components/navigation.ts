@@ -1,0 +1,22 @@
+/** The navbar's links, in order. Each href is a real route under app/. */
+export const navigation = [
+  { label: "Markets", href: "/explore", icon: "📊" },
+  { label: "Indices", href: "/indices", icon: "🌐" },
+  { label: "ETFs", href: "/etfs", icon: "📦" },
+  { label: "Crypto", href: "/crypto", icon: "₿" },
+  { label: "Bonds", href: "/bonds", icon: "🏛️" },
+  { label: "Commodities", href: "/commodities", icon: "🛢️" },
+  { label: "Watchlist", href: "/watchlist", icon: "⭐" },
+  { label: "Portfolio", href: "/portfolio", icon: "💼" },
+  { label: "Paper trade", href: "/paper", icon: "🧪" },
+  { label: "Community", href: "/community", icon: "🌍" },
+  { label: "Predictions", href: "/predictions", icon: "🎯" },
+  { label: "Trending", href: "/trending", icon: "🔥" },
+  { label: "News", href: "/news", icon: "📰" },
+  { label: "Screener", href: "/screener", icon: "📈" },
+  { label: "Backtest", href: "/backtest", icon: "🧮" },
+  { label: "Events", href: "/events", icon: "📅" },
+  { label: "IPOs", href: "/ipo", icon: "🚀" },
+  { label: "Heatmap", href: "/heatmap", icon: "🗺️" },
+  { label: "Alerts", href: "/alerts", icon: "🔔" },
+];
