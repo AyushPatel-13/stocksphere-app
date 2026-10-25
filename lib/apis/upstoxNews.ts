@@ -1,3 +1,4 @@
+import { upstoxFetch } from "./upstoxGate";
 const ACCESS_TOKEN = process.env.UPSTOX_ACCESS_TOKEN;
 
 /**
@@ -52,7 +53,7 @@ export async function getUpstoxNews(
       instrument_keys: trimmedKey,
     });
 
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v2/news?${params.toString()}`,
       {
         method: "GET",
@@ -155,7 +156,7 @@ export async function getUpstoxNewsForKeys(
       page_size: "100",
     });
 
-    const response = await fetch(`https://api.upstox.com/v2/news?${params.toString()}`, {
+    const response = await upstoxFetch(`https://api.upstox.com/v2/news?${params.toString()}`, {
       method: "GET",
       headers: {
         Accept: "application/json",

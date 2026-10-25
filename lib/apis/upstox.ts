@@ -1,3 +1,4 @@
+import { upstoxFetch } from "./upstoxGate";
 const ACCESS_TOKEN = process.env.UPSTOX_ACCESS_TOKEN;
 
 export async function getUpstoxQuotes(
@@ -12,7 +13,7 @@ export async function getUpstoxQuotes(
   const instruments = instrumentKeys.join(",");
 
   try {
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v3/market-quote/quotes?instrument_key=${encodeURIComponent(
         instruments
       )}`,
@@ -118,7 +119,7 @@ async function searchUpstoxEquityUncached(
       records: "30",
     });
 
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v2/instruments/search?${params.toString()}`,
       {
         method: "GET",
@@ -229,7 +230,7 @@ export async function searchUpstoxEquityCandidates(
       records: String(records),
     });
 
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v2/instruments/search?${params.toString()}`,
       {
         method: "GET",
@@ -325,7 +326,7 @@ export async function searchUpstoxIndex(
       records: "30",
     });
 
-    const response = await fetch(
+    const response = await upstoxFetch(
       `https://api.upstox.com/v2/instruments/search?${params.toString()}`,
       {
         method: "GET",
@@ -399,7 +400,7 @@ async function upstoxIpoRequest(path: string): Promise<UpstoxResult> {
   if (!ACCESS_TOKEN) return { ok: false, code: "not_configured", status: null };
 
   try {
-    const response = await fetch(`https://api.upstox.com${path}`, {
+    const response = await upstoxFetch(`https://api.upstox.com${path}`, {
       headers: { Accept: "application/json", Authorization: `Bearer ${ACCESS_TOKEN}` },
       cache: "no-store",
       signal: AbortSignal.timeout(IPO_TIMEOUT_MS),

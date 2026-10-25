@@ -190,7 +190,7 @@ export default function HeatmapPage() {
     (tile: HeatmapTile) => {
       if (!data) return "";
       const parts = [
-        `Price: ${data.priceSource}${tile.quoteTime ? `, as of ${formatExchangeTime(tile.quoteTime, tile.market)}` : `, fetched ${formatExchangeTime(data.fetchedAt, tile.market)}`}`,
+        `Price: ${tile.priceSource ?? data.priceSource}${tile.quoteTime ? `, as of ${formatExchangeTime(tile.quoteTime, tile.market)}` : `, fetched ${formatExchangeTime(data.fetchedAt, tile.market)}`}`,
         `Cap: ${data.capSource}${tile.sharesAsOf ? ` (shares as of ${tile.sharesAsOf})` : ""}`,
       ];
       if (def.source !== "base" && metrics?.status === "ready") parts.push(`${def.label}: ${metrics.data.source}, fetched ${formatExchangeTime(metrics.data.fetchedAt, tile.market)}`);

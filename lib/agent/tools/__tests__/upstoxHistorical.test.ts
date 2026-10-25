@@ -187,6 +187,8 @@ test("a refused request is null, whatever the status", async () => {
       }
     );
   }
+  // The 429 started the shared Upstox cooldown; later tests need real requests.
+  (await import("@/lib/apis/upstoxGate")).resetUpstoxCooldown();
 });
 
 test("a response we cannot read is null, not an empty window", async () => {

@@ -181,6 +181,42 @@ test("buildHeatmap NSE: ISIN instrument keys, NSE sector, real caps only, missin
   clearHeatmapCache();
 });
 
+test("buildHeatmap NSE: stocks Upstox didn't price are filled from Yahoo and labelled per tile", async () => {
+  clearHeatmapCache();
+  const asked: string[][] = [];
+  const yahooFill = async (symbols: string[]) => {
+    asked.push(symbols);
+    return new Map([["M&M.NS", { price: 3200, previousClose: 3100, time: "2026-10-20T09:59:00.000Z" }]]);
+  };
+  const data = await buildHeatmap("nifty50", deps({ yahooFill }));
+  assert.ok(data);
+  assert.deepEqual(asked, [["M&M.NS"]], "only the stock Upstox missed goes to Yahoo");
+  assert.equal(data.priceSource, "Upstox; Yahoo for 1 stock Upstox didn't price");
+  const [tcs, , mm] = data.tiles;
+  assert.equal(tcs.priceSource, "Upstox");
+  assert.equal(mm.price, 3200);
+  assert.ok(Math.abs(mm.changePercent! - (100 / 31)) < 1e-9);
+  assert.equal(mm.priceSource, "Yahoo (Upstox unavailable, may be delayed)");
+  assert.equal(mm.quoteTime, "2026-10-20T09:59:00.000Z");
+  clearHeatmapCache();
+});
+
+test("buildHeatmap NSE: Upstox rate-limited or down → the whole map from Yahoo; both down → unavailable", async () => {
+  clearHeatmapCache();
+  const all = new Map([
+    ["TCS.NS", { price: 4040, previousClose: 4000, time: null }],
+    ["INFY.NS", { price: 1500, previousClose: 1490, time: null }],
+  ]);
+  const data = await buildHeatmap("nifty50", deps({ upstoxQuotes: async () => new Map(), yahooFill: async () => all }));
+  assert.ok(data);
+  assert.equal(data.priceSource, "Yahoo (Upstox unavailable, may be delayed)");
+  assert.equal(data.tiles.filter((t) => t.price !== null).length, 2);
+  clearHeatmapCache();
+  const failing = await buildHeatmap("nifty50", deps({ upstoxQuotes: async () => Promise.reject(new Error("429")), yahooFill: async () => new Map() }));
+  assert.equal(failing, null);
+  clearHeatmapCache();
+});
+
 test("buildHeatmap: unavailable when constituents or every quote is missing", async () => {
   clearHeatmapCache();
   assert.equal(await buildHeatmap("nifty500", deps({ constituents: async () => null })), null);

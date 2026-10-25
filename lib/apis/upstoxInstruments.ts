@@ -1,3 +1,4 @@
+import { upstoxFetch } from "./upstoxGate";
 import type { UpstoxErrorCode } from "./upstox";
 
 /**
@@ -60,7 +61,7 @@ export async function searchInstrumentsByIsin(isin: string, exchange: "NSE" | "B
   const params = new URLSearchParams({ query: isin, exchanges: exchange, segments: "EQ", page_number: "1", records: "30" });
 
   try {
-    const response = await fetch(`https://api.upstox.com/v2/instruments/search?${params.toString()}`, {
+    const response = await upstoxFetch(`https://api.upstox.com/v2/instruments/search?${params.toString()}`, {
       headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
