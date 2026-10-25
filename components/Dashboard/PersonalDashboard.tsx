@@ -156,6 +156,8 @@ export default function PersonalDashboard() {
   const [ipos, setIpos] = useState<Load<Ipo[]>>({ status: "loading" });
   const [earnings, setEarnings] = useState<Load<Earnings[]>>({ status: "loading" });
   const [news, setNews] = useState<Load<NewsItem[]>>({ status: "loading" });
+  // NSE's latest F&O ban list. Optional: an unreachable NSE just leaves it out.
+  const [foBan, setFoBan] = useState<{ tradeDate: string; securities: string[] } | null>(null);
   const [now, setNow] = useState<number | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -197,6 +199,9 @@ export default function PersonalDashboard() {
     getJson("/api/market/movers", (j) => j as unknown as MoversData).then(setMovers);
     getJson("/api/ipo", (j) => (j.ipos as Ipo[]) ?? []).then(setIpos);
     getJson("/api/events/earnings?days=7", (j) => (j.events as Earnings[]) ?? []).then(setEarnings);
+    getJson("/api/fo-ban", (j) => ({ tradeDate: String(j.tradeDate), securities: (j.securities as string[]) ?? [] })).then((result) => {
+      if (result.status === "ready") setFoBan(result.data);
+    });
     Promise.all([
       getJson("/api/news?region=india", (j) => (j.items as NewsItem[]) ?? []),
       getJson("/api/news?region=us", (j) => (j.items as NewsItem[]) ?? []),
@@ -235,6 +240,8 @@ export default function PersonalDashboard() {
           .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
       : [];
   const liveIpos = ipos.status === "ready" ? ipos.data.filter((i) => i.section === "open" || i.section === "upcoming") : [];
+  const bannedSet = new Set((foBan?.securities ?? []).map((s) => s.toUpperCase()));
+  const myBanned = foBan ? { tradeDate: foBan.tradeDate, symbols: Array.from(followedSet).filter((s) => bannedSet.has(s)) } : null;
 
   const moversData = movers.status === "ready" ? movers.data : null;
   const latestQuote = moversData
@@ -254,6 +261,7 @@ export default function PersonalDashboard() {
             unpricedHoldings: summary.unpriced,
             openIpos: liveIpos.filter((i) => i.section === "open").length,
             earningsThisWeek: myEarnings.map((e) => e.symbol),
+            foBan: myBanned,
           },
           (amount, currency) => formatMoney(amount, currency)
         )
@@ -295,6 +303,7 @@ export default function PersonalDashboard() {
           earnings: myEarnings,
           ipos: liveIpos,
           news: myNews,
+          foBan: myBanned,
         },
         (amount, currency) => formatMoney(amount, currency)
       )

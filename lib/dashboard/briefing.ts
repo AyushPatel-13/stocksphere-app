@@ -29,6 +29,8 @@ export type BriefingInput = {
   unpricedHoldings: number;
   openIpos: number;
   earningsThisWeek: string[];
+  /** The member's stocks on NSE's latest F&O ban list, and the trade date it's for. */
+  foBan?: { tradeDate: string; symbols: string[] } | null;
 };
 
 const pct = (value: number) => `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(2)}%`;
@@ -80,6 +82,11 @@ export function buildBriefing(input: BriefingInput, formatMoney: (amount: number
 
   if (input.openIpos > 0) {
     lines.push(`${input.openIpos} IPO${input.openIpos === 1 ? " is" : "s are"} open for subscription.`);
+  }
+
+  if (input.foBan && input.foBan.symbols.length) {
+    const { symbols, tradeDate } = input.foBan;
+    lines.push(`In NSE's F&O ban for ${tradeDate}: ${symbols.join(", ")} (no new F&O positions until ${symbols.length === 1 ? "it exits" : "they exit"}).`);
   }
 
   return lines;

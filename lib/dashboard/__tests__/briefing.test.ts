@@ -57,3 +57,11 @@ test("events lines appear only when there are events", () => {
   const lines = buildBriefing({ ...empty, openIpos: 1, earningsThisWeek: ["AAPL", "MSFT"] }, money);
   assert.deepEqual(lines, ["Earnings coming up for AAPL, MSFT.", "1 IPO is open for subscription."]);
 });
+
+test("the F&O ban line names the member's banned stocks and the trade date, and only when there are some", () => {
+  assert.deepEqual(buildBriefing({ ...empty, foBan: { tradeDate: "2026-10-26", symbols: ["SAIL"] } }, money), [
+    "In NSE's F&O ban for 2026-10-26: SAIL (no new F&O positions until it exits).",
+  ]);
+  assert.deepEqual(buildBriefing({ ...empty, foBan: { tradeDate: "2026-10-26", symbols: [] } }, money), []);
+  assert.deepEqual(buildBriefing({ ...empty, foBan: null }, money), []);
+});

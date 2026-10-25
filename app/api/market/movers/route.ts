@@ -3,7 +3,14 @@ import { NextResponse } from "next/server";
 import { getNifty50Quotes } from "@/lib/providers/market.provider";
 import { loadMarketMovers } from "@/lib/services/marketMovers";
 
-export const revalidate = 60;
+// Always run on request. `revalidate = 60` used to sit here, but this route's
+// Upstox fetches are uncached, so Next could never prerender it: every build
+// logged ~100 "Dynamic server usage" errors and the route stayed dynamic
+// anyway. The 60-second sharing it meant to give now comes from the CDN
+// header on successful answers below.
+export const dynamic = "force-dynamic";
+
+const CDN_CACHE = "public, s-maxage=60, stale-while-revalidate=60";
 
 /**
  * Nifty 50 breadth and the top three movers each way.
@@ -52,7 +59,8 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ success: true, ...summary });
+    // Only a real answer is shared; a 503/500 must not be cached for a minute.
+    return NextResponse.json({ success: true, ...summary }, { headers: { "Cache-Control": CDN_CACHE } });
   } catch (error) {
     console.error("Nifty 50 market movers error:", error);
 

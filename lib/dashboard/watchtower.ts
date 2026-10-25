@@ -65,6 +65,8 @@ export type WatchtowerInput = {
   earnings: { symbol: string; date: string; hour?: string | null }[];
   ipos: { id: string; name: string; section: string; openDate: string | null; closeDate: string | null }[];
   news: { id: string; title: string; url: string; sourceName: string; publishedAt: string; symbols: string[] }[];
+  /** The member's stocks on NSE's latest F&O ban list, and the trade date it's for. */
+  foBan?: { tradeDate: string; symbols: string[] } | null;
 };
 
 const KIND_ORDER: Record<WatchtowerKind, number> = { alert: 0, move: 1, event: 2, news: 3 };
@@ -127,6 +129,17 @@ export function buildWatchtower(input: WatchtowerInput, formatMoney: (amount: nu
       title: `${e.symbol} reports earnings on ${e.date}${when}`,
       detail: "Date from Finnhub's earnings calendar",
       href: `/stock/${encodeURIComponent(e.symbol)}`,
+      isNew: false,
+    });
+  }
+
+  for (const symbol of input.foBan?.symbols ?? []) {
+    items.push({
+      id: `foban:${symbol}:${input.foBan!.tradeDate}`,
+      kind: "event",
+      title: `${symbol} is in the F&O ban for ${input.foBan!.tradeDate}`,
+      detail: "NSE fo_secban.csv · no new F&O positions until it exits",
+      href: `/stock/${encodeURIComponent(symbol)}`,
       isNew: false,
     });
   }

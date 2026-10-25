@@ -104,3 +104,14 @@ test("events come only from verified dates", () => {
     ["AAPL reports earnings on 2026-10-29 after the close", "Core4 IPO is open until 2026-10-27"]
   );
 });
+
+test("a followed stock on NSE's F&O ban list shows as an event with the trade date", () => {
+  const items = buildWatchtower({ ...empty, foBan: { tradeDate: "2026-10-26", symbols: ["SAIL", "KAYNES"] } }, money);
+  assert.deepEqual(
+    items.map((i) => [i.kind, i.title, i.href]),
+    [
+      ["event", "SAIL is in the F&O ban for 2026-10-26", "/stock/SAIL"],
+      ["event", "KAYNES is in the F&O ban for 2026-10-26", "/stock/KAYNES"],
+    ]
+  );
+});
