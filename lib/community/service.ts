@@ -56,7 +56,29 @@ export type EditablePost = {
   symbols: string[];
   mentions: StoredMention[];
   hidden: boolean;
+  /** A deleted comment kept as a placeholder (threaded_comments migration). */
+  deleted?: boolean;
 };
+
+/**
+ * The post or comment a reply answers. Everything but `symbols` is optional
+ * so stores written before threading still type-check; a missing `parentId`
+ * means a top-level post.
+ */
+export type ParentRecord = {
+  symbols: string[];
+  authorId?: string;
+  /** Its own parent: null for a top-level post. */
+  parentId?: string | null;
+  /** Its thread's top-level post (null for a top-level post). */
+  rootId?: string | null;
+  deleted?: boolean;
+  /** Whether the database knows threads (threaded_comments migration). */
+  threads?: boolean;
+};
+
+/** An in-app notification (the notifications table from the alerts migration). */
+export type ReplyNotification = { user_id: string; title: string; body: string; link: string };
 
 /** A community's feed: its own posts, plus (once listed) posts tagged with its ticker. */
 export type CommunityScope = { communityId: string; anySymbols: string[] };
@@ -79,6 +101,12 @@ export type ListQuery = {
   /** Only on the floor (no symbol, community or parent). */
   asset?: AssetFilter;
   parentId?: string;
+  /** Every comment in a top-level post's thread, at any depth, oldest first. */
+  thread?: string;
+  /** With `thread`: comments created at or after this time (the next page). */
+  after?: string;
+  /** One post or comment by id. */
+  id?: string;
   sentiment?: Sentiment;
   before?: string;
   limit: number;
@@ -90,8 +118,8 @@ export interface CommunityStore {
   getAuthor(userId: string): Promise<AuthorRecord | null>;
   countPostsSince(authorId: string, sinceIso: string): Promise<number>;
   recentBodies(authorId: string, sinceIso: string): Promise<string[]>;
-  /** A visible top-level post's symbols, or null when it doesn't exist. */
-  getParent(postId: string): Promise<{ symbols: string[] } | null>;
+  /** A visible post or comment, or null when it doesn't exist (or is hidden). */
+  getParent(postId: string): Promise<ParentRecord | null>;
   insertPost(row: NewPostRow): Promise<PostView>;
   listPosts(query: ListQuery): Promise<PostView[]>;
   sentiment(scope: string | CommunityScope, sinceIso: string): Promise<Omit<SentimentSummary, "symbol" | "windowDays">>;
@@ -99,6 +127,8 @@ export interface CommunityStore {
   /** Edits (post_mentions migration). Optional so older fakes and stores still type-check. */
   getPostForEdit?(postId: string): Promise<EditablePost | null>;
   updatePost?(postId: string, authorId: string, edit: PostEdit): Promise<PostView | null>;
+  /** Tell someone their post or comment was answered. Optional; a failure never fails the reply. */
+  notify?(row: ReplyNotification): Promise<void>;
 }
 
 export type CreatePostInput = {
@@ -107,6 +137,8 @@ export type CreatePostInput = {
   sentiment?: unknown;
   symbol?: unknown;
   parentId?: unknown;
+  /** With parentId: the top-level post the reply is written under (checked against the parent). */
+  postId?: unknown;
   /** An Upstox IPO id: post in that IPO's community. */
   ipoId?: unknown;
   /** Picks from the @ autocomplete: [{ kind, id | ipoId, text }]. */
@@ -167,13 +199,28 @@ export async function createPost(
 
   let parentId: string | null = null;
   let parentSymbols: string[] = [];
+  let parent: ParentRecord | null = null;
+  let rootId: string | null = null;
 
   if (input.parentId !== undefined && input.parentId !== null) {
     if (typeof input.parentId !== "string" || !UUID.test(input.parentId)) {
       return { ok: false, status: 400, error: "Invalid reply." };
     }
-    const parent = await store.getParent(input.parentId);
+    if (input.postId !== undefined && input.postId !== null && (typeof input.postId !== "string" || !UUID.test(input.postId))) {
+      return { ok: false, status: 400, error: "Invalid reply." };
+    }
+    parent = await store.getParent(input.parentId);
     if (!parent) return { ok: false, status: 404, error: "That post no longer exists." };
+    if (parent.deleted) return { ok: false, status: 404, error: "That comment was deleted." };
+    const nested = parent.parentId != null;
+    if (nested && !parent.threads) {
+      return { ok: false, status: 503, error: "Replies to replies aren't switched on yet.", code: "NOT_CONFIGURED" };
+    }
+    rootId = nested ? (parent.rootId ?? null) : input.parentId;
+    // A reply is written under one post; its parent must be in that post's thread.
+    if (!rootId || (typeof input.postId === "string" && input.postId.toLowerCase() !== rootId.toLowerCase())) {
+      return { ok: false, status: 400, error: "That comment belongs to another post.", code: "WRONG_THREAD" };
+    }
     parentId = input.parentId;
     parentSymbols = parent.symbols;
   }
@@ -234,7 +281,31 @@ export async function createPost(
     ...(mentioned.mentions.length ? { mentions: mentioned.mentions, mention_community_ids: mentioned.communityIds } : {}),
   });
 
+  if (parent?.authorId && rootId && parent.authorId !== author.id && store.notify) {
+    try {
+      await store.notify(replyNotification({ ...parent, authorId: parent.authorId }, post, rootId));
+    } catch (error) {
+      console.error("Reply notification error:", error);
+    }
+  }
+
   return { ok: true, post };
+}
+
+/** Where a comment lives: its post's page, opened at that comment. */
+export function commentPath(rootId: string, commentId: string): string {
+  return `/community/post/${rootId}?comment=${commentId}`;
+}
+
+/** "@ayush replied to your comment", with the reply's text and a link to it. */
+export function replyNotification(parent: ParentRecord & { authorId: string }, reply: PostView, rootId: string): ReplyNotification {
+  const text = reply.body.replace(/\s+/g, " ").trim();
+  return {
+    user_id: parent.authorId,
+    title: `@${reply.author.username} replied to your ${parent.parentId != null ? "comment" : "post"}`.slice(0, 140),
+    body: text.length > 200 ? `${text.slice(0, 199)}…` : text,
+    link: commentPath(rootId, reply.id),
+  };
 }
 
 export type EditPostInput = { token: string | null; postId: unknown; body: unknown; mentions?: unknown };
@@ -267,7 +338,7 @@ export async function editPost(
 
   const existing = await store.getPostForEdit(input.postId);
   // Someone else's post looks the same as a missing one.
-  if (!existing || existing.hidden || existing.authorId !== userId) {
+  if (!existing || existing.hidden || existing.deleted || existing.authorId !== userId) {
     return { ok: false, status: 404, error: "That post no longer exists." };
   }
 
@@ -313,11 +384,12 @@ const AUTHOR_BASIC = "author:profiles!posts_author_id_fkey(username, display_nam
  * (undefined column) and the next set is tried, so boards keep working while
  * a migration waits for approval.
  */
-const COLUMN_SETS: { columns: string; mentions: boolean; community: boolean }[] = [
-  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true },
-  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false, community: true },
-  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false, community: false },
-  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false, community: false },
+const COLUMN_SETS: { columns: string; mentions: boolean; community: boolean; threads: boolean }[] = [
+  { columns: `${BASE_COLUMNS}, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true },
+  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: false },
+  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false, community: true, threads: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false, community: false, threads: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false, community: false, threads: false },
 ];
 
 /** Matches no row: a filter the schema can't answer yet has no posts. */
@@ -336,6 +408,16 @@ export function assetFilter(asset: AssetFilter, set: { mentions: boolean; commun
 }
 
 const UNDEFINED_COLUMN = "42703";
+
+type EditRow = {
+  author_id: string;
+  parent_id: string | null;
+  body: string;
+  symbols: string[] | null;
+  mentions: unknown;
+  hidden: boolean;
+  deleted_at?: string | null;
+};
 
 type AuthorJoin = {
   username: string;
@@ -359,11 +441,45 @@ type PostRow = {
   community_id?: string | null;
   mentions?: unknown;
   edited_at?: string | null;
+  root_id?: string | null;
+  comment_count?: number;
+  deleted_at?: string | null;
   author: AuthorJoin | AuthorJoin[] | null;
+};
+
+const DELETED_AUTHOR: PostView["author"] = {
+  username: "deleted",
+  displayName: "Deleted",
+  avatarUrl: null,
+  role: "user",
+  stats: { resolved: 0, wins: 0, points: 0 },
 };
 
 export function toPostView(row: PostRow): PostView {
   const author = Array.isArray(row.author) ? row.author[0] : row.author;
+  // Before the threaded_comments migration every reply hangs off its post.
+  const rootId = row.root_id !== undefined ? row.root_id : row.parent_id;
+  const thread = row.parent_id === null ? { commentCount: row.comment_count ?? row.reply_count } : {};
+
+  // A deleted comment kept for its replies: no text, no author, no tags.
+  if (row.deleted_at) {
+    return {
+      id: row.id,
+      body: "",
+      sentiment: null,
+      symbols: [],
+      communityId: row.community_id ?? null,
+      mentions: [],
+      editedAt: null,
+      parentId: row.parent_id,
+      rootId,
+      likeCount: row.like_count,
+      replyCount: row.reply_count,
+      createdAt: row.created_at,
+      deleted: true,
+      author: DELETED_AUTHOR,
+    };
+  }
 
   return {
     id: row.id,
@@ -374,6 +490,8 @@ export function toPostView(row: PostRow): PostView {
     mentions: readMentions(row.mentions, row.body),
     editedAt: row.edited_at ?? null,
     parentId: row.parent_id,
+    rootId,
+    ...thread,
     likeCount: row.like_count,
     replyCount: row.reply_count,
     createdAt: row.created_at,
@@ -415,9 +533,20 @@ export function getSupabaseStore(): CommunityStore | null {
   const reader = getPublicClient();
   if (!admin || !reader) return null;
 
-  function listWith(set: (typeof COLUMN_SETS)[number], { symbol, community, asset, parentId, sentiment, before, limit }: ListQuery) {
+  function listWith(set: (typeof COLUMN_SETS)[number], { symbol, community, asset, parentId, thread, after, id, sentiment, before, limit }: ListQuery) {
     const { columns, mentions } = set;
     let query = reader!.from("posts").select(columns);
+
+    if (id) return query.eq("id", id).limit(1);
+    if (thread) {
+      // Before the migration a thread is one level: the post's direct replies.
+      query = (set.threads ? query.eq("root_id", thread) : query.eq("parent_id", thread))
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
+      // Inclusive, so comments sharing the page boundary's timestamp are never skipped (the client drops repeats).
+      if (after) query = query.gte("created_at", after);
+      return query.limit(limit);
+    }
 
     query = parentId
       ? query.eq("parent_id", parentId).order("created_at", { ascending: true })
@@ -478,13 +607,19 @@ export function getSupabaseStore(): CommunityStore | null {
     },
 
     async getParent(postId) {
-      const { data } = await reader
-        .from("posts")
-        .select("symbols, parent_id")
-        .eq("id", postId)
-        .maybeSingle();
-      // Replies are one level deep: replying to a reply is refused.
-      return data && data.parent_id === null ? { symbols: data.symbols ?? [] } : null;
+      // Through the public client, so a hidden post or comment can't be answered.
+      const threaded = await reader.from("posts").select("symbols, parent_id, author_id, root_id, deleted_at").eq("id", postId).maybeSingle();
+      if (threaded.error?.code !== UNDEFINED_COLUMN) {
+        if (threaded.error) throw threaded.error;
+        const row = threaded.data;
+        return row
+          ? { symbols: row.symbols ?? [], authorId: row.author_id, parentId: row.parent_id, rootId: row.root_id, deleted: Boolean(row.deleted_at), threads: true }
+          : null;
+      }
+      // Before the threaded_comments migration: one level only (createPost refuses deeper).
+      const { data, error } = await reader.from("posts").select("symbols, parent_id, author_id").eq("id", postId).maybeSingle();
+      if (error) throw error;
+      return data ? { symbols: data.symbols ?? [], authorId: data.author_id, parentId: data.parent_id, rootId: null, threads: false } : null;
     },
 
     async insertPost(row) {
@@ -501,11 +636,11 @@ export function getSupabaseStore(): CommunityStore | null {
     },
 
     async getPostForEdit(postId) {
-      const { data, error } = await admin
-        .from("posts")
-        .select("author_id, parent_id, body, symbols, mentions, hidden")
-        .eq("id", postId)
-        .maybeSingle();
+      let result = await admin.from("posts").select("author_id, parent_id, body, symbols, mentions, hidden, deleted_at").eq("id", postId).maybeSingle();
+      if (result.error?.code === UNDEFINED_COLUMN) {
+        result = await admin.from("posts").select("author_id, parent_id, body, symbols, mentions, hidden").eq("id", postId).maybeSingle();
+      }
+      const { data, error } = result as { data: EditRow | null; error: { code?: string } | null };
       if (error) throw error;
       return data
         ? {
@@ -515,6 +650,7 @@ export function getSupabaseStore(): CommunityStore | null {
             symbols: data.symbols ?? [],
             mentions: readMentions(data.mentions, data.body),
             hidden: data.hidden,
+            deleted: Boolean(data.deleted_at),
           }
         : null;
     },
@@ -527,6 +663,12 @@ export function getSupabaseStore(): CommunityStore | null {
       const full = await withFallback(({ columns }) => admin.from("posts").select(columns).eq("id", postId).single());
       if (full.error) throw full.error;
       return toPostView(full.data as unknown as PostRow);
+    },
+
+    async notify(row) {
+      // The alerts migration's in-app notifications (the navbar bell); without that table there is nowhere to put one.
+      const { error } = await admin.from("notifications").insert({ ...row, kind: "community" });
+      if (error && error.code !== "42P01" && error.code !== "PGRST205") throw error;
     },
 
     async sentiment(scope, sinceIso) {

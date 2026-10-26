@@ -14,14 +14,20 @@ import { isValidSymbol } from "@/lib/validation/symbol";
  *       GET …?ipo=<Upstox IPO id> for an IPO's community.
  *       GET …?bond=<ISIN> for the posts that @mention that bond.
  *       GET …?asset=stock|ipo|bond filters the community floor by what posts are about.
- *       GET …?parent=<post id> for a post's replies (oldest first).
+ *       GET …?parent=<post id> for a post's or comment's direct replies (oldest first).
+ *       GET …?thread=<post id>&after=<iso> for every comment under a top-level
+ *       post, at any depth, flat and oldest first (pages of THREAD_PAGE; the
+ *       next page starts at the last one's created_at, inclusive).
+ *       GET …?id=<post id> for one post or comment → { success, post }.
  *       Public. Hidden posts never appear (RLS). A stock whose IPO community
  *       has been linked also shows that community's posts; an IPO community
  *       also shows posts that @mention it, and once linked, posts tagged with
  *       its ticker — the same records, never copies. Each post carries
  *       `context`: the IPO/stocks it is about, from stored relations only.
  *
- * POST  /api/community/posts  { body, sentiment?, symbol?, ipoId?, parentId?, mentions? }
+ * POST  /api/community/posts  { body, sentiment?, symbol?, ipoId?, parentId?, postId?, mentions? }
+ *       parentId: the post or comment answered; postId: the top-level post
+ *       the reply is written under (refused when the parent isn't in it).
  * PATCH /api/community/posts  { id, body, mentions? }   (author only)
  *       Authorization: Bearer <Supabase access token>
  *       `mentions`: [{ kind: "instrument", id, type, text } | { kind: "ipo", ipoId, text } | { kind: "bond", isin, text }]
@@ -30,6 +36,9 @@ import { isValidSymbol } from "@/lib/validation/symbol";
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Comments per thread page. */
+const THREAD_PAGE = 200;
 
 function bearer(request: Request): string | null {
   const header = request.headers.get("authorization") ?? "";
@@ -90,7 +99,30 @@ export async function GET(
 
   const limit = Math.min(Math.max(Number(params.get("limit")) || 20, 1), 50);
 
+  const thread = params.get("thread") || undefined;
+  const id = params.get("id") || undefined;
+  if ((thread && !UUID.test(thread)) || (id && !UUID.test(id))) {
+    return NextResponse.json({ success: false, error: "Invalid post id" }, { status: 400 });
+  }
+
   try {
+    if (id) {
+      const [post] = await store.listPosts({ id, limit: 1 });
+      if (!post) return NextResponse.json({ success: false, error: "That post no longer exists." }, { status: 404 });
+      const [withContext] = post.parentId ? [post] : await attachContext([post], contextDeps);
+      return NextResponse.json({ success: true, post: withContext });
+    }
+
+    if (thread) {
+      // A whole thread, flat and oldest first; the client nests it by parentId.
+      // Comments carry no context chips, so no lookups are made for them.
+      const afterParam = params.get("after");
+      const after = afterParam && !Number.isNaN(Date.parse(afterParam)) ? new Date(afterParam).toISOString() : undefined;
+      const pageSize = Math.min(Math.max(Number(params.get("limit")) || THREAD_PAGE, 1), THREAD_PAGE);
+      const posts = await store.listPosts({ thread, after, limit: pageSize });
+      return NextResponse.json({ success: true, posts, hasMore: posts.length === pageSize });
+    }
+
     let community: ListQuery["community"];
     if (!parentId && ipoId) {
       const found = communities ? await communities.findIpo(ipoId) : null;
@@ -139,6 +171,7 @@ export async function POST(
         sentiment: json.sentiment,
         symbol: json.symbol,
         parentId: json.parentId,
+        postId: json.postId,
         ipoId: json.ipoId,
         mentions: json.mentions,
       },

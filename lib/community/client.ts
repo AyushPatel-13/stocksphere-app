@@ -54,12 +54,55 @@ export async function fetchPosts(params: {
   }
 }
 
+/** Most comments a thread loads (THREAD_PAGE-sized pages on the server). */
+export const MAX_THREAD_COMMENTS = 1000;
+
+/**
+ * Every comment under a top-level post, flat and oldest first, page by page
+ * (each page starts at the last one's timestamp, so repeats are dropped
+ * here). `truncated` when the thread is longer than MAX_THREAD_COMMENTS.
+ */
+export async function fetchThread(postId: string): Promise<{ comments: PostView[]; truncated: boolean } | ApiError> {
+  const byId = new Map<string, PostView>();
+  let after: string | undefined;
+  for (;;) {
+    const query = new URLSearchParams({ thread: postId, ...(after ? { after } : {}) });
+    let data: { success?: boolean; posts?: PostView[]; hasMore?: boolean; error?: string; code?: string } | null;
+    try {
+      data = await (await fetch(`/api/community/posts?${query.toString()}`, { cache: "no-store" })).json();
+    } catch {
+      return { error: "Couldn't load the comments." };
+    }
+    if (!data?.success) return { error: data?.error ?? "Couldn't load the comments.", code: data?.code };
+    const page = data.posts ?? [];
+    const before = byId.size;
+    for (const post of page) byId.set(post.id, post);
+    if (!data.hasMore || byId.size === before) return { comments: [...byId.values()], truncated: false };
+    if (byId.size >= MAX_THREAD_COMMENTS) return { comments: [...byId.values()], truncated: true };
+    after = page[page.length - 1].createdAt;
+  }
+}
+
+/** One post or comment, for its own page. */
+export async function fetchPost(id: string): Promise<{ post: PostView } | ApiError> {
+  try {
+    const response = await fetch(`/api/community/posts?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+    const data = await response.json();
+    return data?.success ? { post: data.post as PostView } : { error: data?.error ?? "Couldn't load this post.", code: data?.code };
+  } catch {
+    return { error: "Couldn't load this post. Check your connection." };
+  }
+}
+
 export async function publishPost(input: {
   body: string;
   sentiment?: Sentiment | null;
   symbol?: string;
   ipoId?: string;
+  /** The post or comment answered. */
   parentId?: string;
+  /** With parentId: the top-level post the reply is written under. */
+  postId?: string;
   mentions?: MentionPick[];
 }): Promise<{ post: PostView } | ApiError> {
   const token = await accessToken();
@@ -184,12 +227,20 @@ export async function reportPost(
   return !error || error.code === "23505";
 }
 
-export async function deleteMyPost(postId: string): Promise<boolean> {
+/**
+ * Delete your own post or comment. "removed" when it is gone; "kept" when it
+ * was a comment others had answered, which the database keeps as a
+ * "[deleted]" placeholder so their replies stay in place; false on failure.
+ */
+export async function deleteMyPost(postId: string): Promise<"removed" | "kept" | false> {
   const { error, count } = await supabase
     .from("posts")
     .delete({ count: "exact" })
     .eq("id", postId);
-  return !error && (count ?? 0) > 0;
+  if (error) return false;
+  if ((count ?? 0) > 0) return "removed";
+  const { data } = await supabase.from("posts").select("deleted_at").eq("id", postId).maybeSingle();
+  return data?.deleted_at ? "kept" : false;
 }
 
 /* ------------------------------------------------------------------ */

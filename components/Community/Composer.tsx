@@ -45,6 +45,9 @@ export default function Composer({
   seed,
   label,
   parentId,
+  postId,
+  replyingTo,
+  autoFocus = false,
   placeholder,
   compact = false,
   editing,
@@ -59,7 +62,13 @@ export default function Composer({
   seed?: MentionPick;
   /** Display name for the board's instrument, used in the prompt. */
   label?: string;
+  /** Reply to this post or comment. */
   parentId?: string;
+  /** With parentId: the top-level post the reply goes under (the server checks they match). */
+  postId?: string;
+  /** "Replying to @handle" above the box. */
+  replyingTo?: string;
+  autoFocus?: boolean;
   placeholder?: string;
   compact?: boolean;
   /** Edit this post (yours) instead of writing a new one. */
@@ -113,7 +122,7 @@ export default function Composer({
 
     const result = editing
       ? await editMyPost({ id: editing.id, body, mentions: live })
-      : await publishPost({ body, sentiment: parentId ? null : sentiment, symbol, ipoId, parentId, mentions: live });
+      : await publishPost({ body, sentiment: parentId ? null : sentiment, symbol, ipoId, parentId, postId, mentions: live });
 
     setPosting(false);
     if ("error" in result) {
@@ -140,6 +149,11 @@ export default function Composer({
       }}
       className={`rounded-2xl border border-[#222] bg-[#111] ${compact ? "p-3" : "p-4"}`}
     >
+      {replyingTo && !isEdit && (
+        <p className="mb-1.5 text-xs text-[#888]">
+          Replying to <span className="font-medium text-[#60a5fa]">@{replyingTo}</span>
+        </p>
+      )}
       <div className="flex gap-3">
         {!compact && (
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#262626] bg-[#151515] text-sm font-semibold text-[#22c55e]">
@@ -157,8 +171,10 @@ export default function Composer({
           onPicksChange={setPicks}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
-            if (e.key === "Escape" && editing) onCancel?.();
+            // Escape leaves an edit, or a reply box nothing was typed in yet.
+            if (e.key === "Escape" && (editing || !body.trim())) onCancel?.();
           }}
+          autoFocus={autoFocus}
           maxLength={POST_MAX_LENGTH}
           rows={compact ? 1 : 3}
           placeholder={
@@ -236,7 +252,7 @@ export default function Composer({
         <span className={`ml-auto text-xs tabular-nums ${remaining < 50 ? "text-[#f59e0b]" : "text-[#666]"}`}>
           {remaining}
         </span>
-        {isEdit && (
+        {(isEdit || onCancel) && (
           <button type="button" onClick={onCancel} className={`${secondaryButtonClass} !py-1.5`}>
             Cancel
           </button>

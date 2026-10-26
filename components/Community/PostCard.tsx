@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 
 import Composer from "@/components/Community/Composer";
+import Thread from "@/components/Community/Thread";
 import PredictionBadge from "@/components/Predictions/Badge";
 import {
   deleteMyPost,
-  fetchPosts,
   reportPost,
   setLiked,
   timeAgo,
@@ -195,6 +195,11 @@ export default function PostCard({
   boardIpoId,
   boardBondIsin,
   isReply = false,
+  onReply,
+  replyToHandle,
+  highlighted = false,
+  openThread = false,
+  highlightComment,
   onDeleted,
 }: {
   post: PostView;
@@ -205,17 +210,30 @@ export default function PostCard({
   boardIpoId?: string;
   /** Likewise on a bond's page (its ISIN). */
   boardBondIsin?: string;
+  /** A comment in a thread (compact, no context chips). */
   isReply?: boolean;
-  onDeleted: (id: string) => void;
+  /** Comments: open the reply box under this one. */
+  onReply?: () => void;
+  /** Comments past the indentation cap: whom this one answers. */
+  replyToHandle?: string;
+  /** Comments: the one a link pointed at. */
+  highlighted?: boolean;
+  /** Top-level posts: start with the comments open (the post's own page). */
+  openThread?: boolean;
+  /** With openThread: the comment to scroll to. */
+  highlightComment?: string;
+  /** `kept`: a comment others answered, now a "[deleted]" placeholder. */
+  onDeleted: (id: string, kept?: boolean) => void;
 }) {
   // Local copy: an edit replaces it in place.
   const [post, setPost] = useState(initial);
   const [editing, setEditing] = useState(false);
   const [isLiked, setIsLiked] = useState(liked);
   const [likes, setLikes] = useState(post.likeCount);
-  const [replyCount, setReplyCount] = useState(post.replyCount);
-  const [showReplies, setShowReplies] = useState(false);
-  const [replies, setReplies] = useState<PostView[] | null>(null);
+  // A post's count is its whole thread (every depth); before the threaded
+  // comments migration that is its direct replies.
+  const [commentCount, setCommentCount] = useState(post.commentCount ?? post.replyCount);
+  const [showReplies, setShowReplies] = useState(openThread);
   const [menu, setMenu] = useState<"closed" | "open" | "report">("closed");
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -244,20 +262,30 @@ export default function PostCard({
     }
   }
 
-  async function openReplies() {
-    const next = !showReplies;
-    setShowReplies(next);
-    if (next && replies === null) {
-      const result = await fetchPosts({ parent: post.id, limit: 50 });
-      setReplies("posts" in result ? result.posts : []);
-    }
-  }
-
   async function remove() {
     setMenu("closed");
-    if (!window.confirm("Delete this post?")) return;
-    if (await deleteMyPost(post.id)) onDeleted(post.id);
+    if (!window.confirm(isReply ? "Delete this comment?" : "Delete this post and its comments?")) return;
+    const result = await deleteMyPost(post.id);
+    if (result) onDeleted(post.id, result === "kept");
     else setNotice("Couldn't delete it. Please try again.");
+  }
+
+  if (post.deleted) {
+    // Kept only so the replies under it keep their place.
+    return (
+      <article className="py-2.5">
+        <div className="flex items-center gap-3 text-sm text-[#666]">
+          <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-[#2a2a2a] text-xs">
+            ×
+          </span>
+          <span className="italic">Comment deleted</span>
+          <span className="text-[#444]">·</span>
+          <time dateTime={post.createdAt} className="text-[#555]">
+            {timeAgo(post.createdAt)}
+          </time>
+        </div>
+      </article>
+    );
   }
 
   async function report(reason: (typeof REPORT_REASONS)[number]["id"]) {
@@ -270,7 +298,11 @@ export default function PostCard({
   const otherSymbols = post.symbols.filter((s) => s !== boardSymbol && !covered.has(s) && !post.body.toUpperCase().includes(`$${s}`));
 
   return (
-    <article className={isReply ? "py-3" : "px-4 py-4 sm:px-5"}>
+    <article
+      className={`${isReply ? "py-2.5" : "px-4 py-4 sm:px-5"} ${
+        highlighted ? "-mx-2 rounded-xl bg-[#22c55e]/[0.06] px-2 ring-1 ring-[#22c55e]/40" : ""
+      }`}
+    >
       <div className="flex gap-3">
         <Link href={`/profile/${post.author.username}`} aria-label={`@${post.author.username}`}>
           <Avatar post={post} size={isReply ? 32 : 40} />
@@ -297,6 +329,11 @@ export default function PostCard({
                 · edited
               </span>
             )}
+            {replyToHandle && (
+              <span className="basis-full text-xs text-[#777] sm:basis-auto">
+                ↳ replying to <span className="text-[#60a5fa]">@{replyToHandle}</span>
+              </span>
+            )}
             {post.sentiment && (
               <span
                 className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-semibold ${
@@ -317,7 +354,7 @@ export default function PostCard({
                 editing={post}
                 compact={isReply}
                 onPosted={(updated) => {
-                  setPost({ ...updated, likeCount: likes, replyCount });
+                  setPost({ ...updated, likeCount: likes, replyCount: post.replyCount, commentCount });
                   setEditing(false);
                 }}
                 onCancel={() => setEditing(false)}
@@ -363,12 +400,22 @@ export default function PostCard({
             {!isReply && (
               <button
                 type="button"
-                onClick={openReplies}
+                onClick={() => setShowReplies(!showReplies)}
                 aria-expanded={showReplies}
                 className="flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] hover:text-white"
               >
-                💬 <span className="tabular-nums">{replyCount}</span>
-                <span className="sr-only">replies</span>
+                💬 <span className="tabular-nums">{commentCount}</span>
+                <span className="sr-only">comments</span>
+              </button>
+            )}
+
+            {isReply && onReply && (
+              <button
+                type="button"
+                onClick={onReply}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold transition-colors hover:bg-[#1a1a1a] hover:text-white"
+              >
+                ↩ Reply
               </button>
             )}
 
@@ -395,17 +442,17 @@ export default function PostCard({
                         }}
                         className="block w-full px-3 py-2 text-left hover:bg-[#1f1f1f]"
                       >
-                        Edit post
+                        Edit {isReply ? "comment" : "post"}
                       </button>
                     )}
                     {mine && (
                       <button type="button" onClick={remove} className="block w-full px-3 py-2 text-left text-[#f87171] hover:bg-[#1f1f1f]">
-                        Delete post
+                        Delete {isReply ? "comment" : "post"}
                       </button>
                     )}
                     {signedIn && !mine && (
                       <button type="button" onClick={() => setMenu("report")} className="block w-full px-3 py-2 text-left hover:bg-[#1f1f1f]">
-                        Report post…
+                        Report {isReply ? "comment" : "post"}…
                       </button>
                     )}
                     {!signedIn && <p className="px-3 py-2 text-[#888]">Sign in to report posts.</p>}
@@ -424,37 +471,7 @@ export default function PostCard({
           {notice && <p className="mt-1 text-xs text-[#888]">{notice}</p>}
 
           {showReplies && !isReply && (
-            <div className="mt-2 border-l border-[#262626] pl-3">
-              {replies === null ? (
-                <div className="h-10 animate-pulse rounded-lg bg-[#151515]" />
-              ) : (
-                replies.map((reply) => (
-                  <PostCard
-                    key={reply.id}
-                    post={reply}
-                    user={user}
-                    liked={false}
-                    isReply
-                    onDeleted={(id) => {
-                      setReplies((list) => (list ?? []).filter((r) => r.id !== id));
-                      setReplyCount((n) => Math.max(0, n - 1));
-                    }}
-                  />
-                ))
-              )}
-              <div className="mt-2">
-                <Composer
-                  user={user}
-                  parentId={post.id}
-                  compact
-                  placeholder={`Reply to @${post.author.username}`}
-                  onPosted={(reply) => {
-                    setReplies((list) => [...(list ?? []), reply]);
-                    setReplyCount((n) => n + 1);
-                  }}
-                />
-              </div>
-            </div>
+            <Thread post={post} user={user} highlight={highlightComment} onCountChange={(delta) => setCommentCount((n) => Math.max(0, n + delta))} />
           )}
         </div>
       </div>
