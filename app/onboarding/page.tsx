@@ -7,6 +7,7 @@ import type { User } from "@supabase/supabase-js";
 import AuthGuard from "@/components/AuthGuard";
 import { inputClass, primaryButtonClass } from "@/components/ui/Page";
 import { createMyProfile, getMyProfile, isHandleAvailable } from "@/lib/profiles";
+import { safeReturnPath } from "@/lib/auth/redirects";
 import { supabase } from "@/lib/supabase";
 import { HANDLE_MAX, handleProblem, normaliseHandle, suggestHandle } from "@/lib/validation/handle";
 
@@ -19,11 +20,13 @@ import { HANDLE_MAX, handleProblem, normaliseHandle, suggestHandle } from "@/lib
  * user agrees to the community rules before posting anything.
  */
 
-/** Only same-site paths, so ?next= can't bounce the user to another site. */
+/**
+ * Only same-site paths, so ?next= can't bounce the user to another site.
+ * The shared check also refuses "/\evil.com", which the old prefix test let
+ * through and browsers read as a link to evil.com.
+ */
 function safeNext(value: string | null): string {
-  return value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/onboarding")
-    ? value
-    : "/explore";
+  return safeReturnPath(value, "/explore");
 }
 
 type Availability = "idle" | "checking" | "available" | "taken" | "unknown";

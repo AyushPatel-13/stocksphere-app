@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
+import { authFailureMessage, safeReturnPath } from "@/lib/auth/redirects";
+import { rememberReturn } from "@/lib/auth/session";
 import { supabase } from "@/lib/supabase";
 
 /**
@@ -152,33 +156,43 @@ function GoogleMark() {
 }
 
 /**
- * Where Supabase sends the user back to after Google sign-in.
+ * Where Supabase sends the user back to after Google sign-in: always the
+ * origin this page is on.
  *
- * This used to be the literal "http://localhost:3000". That worked on a dev
- * server and broke every production sign-in, because Google returned the user
- * to their own machine instead of the deployed site.
- *
- * NEXT_PUBLIC_SITE_URL is the explicit setting: a deployment sets it to its own
- * origin (https://example.com). It is a NEXT_PUBLIC_ variable because this runs
- * in the browser — it carries a public origin, never anything secret.
- *
- * With nothing configured the browser's own origin is used, which is correct by
- * construction rather than by guessing: on a dev server it is
- * http://localhost:3000, and on a deployed site it is that site's origin. That
- * is why there is no hardcoded fallback — a fallback to a domain we picked
- * would be a guess, and a wrong one would send sign-ins somewhere nobody
- * intended. Read when the button is pressed, so it is the origin the user is
- * actually on.
+ * It used to prefer NEXT_PUBLIC_SITE_URL. With PKCE that breaks sign-in
+ * whenever the two differ: the one-time verifier is stored in this origin's
+ * storage, so a code delivered to another address can't be exchanged. The
+ * Supabase logs showed exactly that on 26 Oct (sign-in on one vercel.app
+ * address, return requested to another). Supabase still checks the origin
+ * against its Redirect URLs list, so this can't send anyone somewhere
+ * unlisted.
  */
 function getOAuthRedirectUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
-    window.location.origin
-  );
+  return window.location.origin;
 }
 
 export default function LoginPage() {
+  const router = useRouter();
   const [redirecting, setRedirecting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [next, setNext] = useState("/");
+
+  // Read from the URL after mount rather than with useSearchParams, which
+  // would need a Suspense boundary around the whole card. Someone already
+  // signed in is sent on rather than shown a sign-in button.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const target = safeReturnPath(params.get("next"), "/");
+    const failure = authFailureMessage(params.get("auth_error"));
+    supabase.auth.getSession().then(({ data }) => {
+      if (!failure && data.session) {
+        router.replace(target);
+        return;
+      }
+      setNext(target);
+      setNotice(failure);
+    });
+  }, [router]);
 
   /**
    * The pending state has to survive the hand-off to be worth having.
@@ -206,6 +220,8 @@ export default function LoginPage() {
 
   const signInWithGoogle = async () => {
     setRedirecting(true);
+    setNotice(null);
+    rememberReturn(next);
 
     try {
       // Unchanged: same provider, same flow. Only the redirect target is now
@@ -217,7 +233,10 @@ export default function LoginPage() {
         },
       });
 
-      if (error) setRedirecting(false);
+      if (error) {
+        setRedirecting(false);
+        setNotice("Google sign-in couldn't start. Check your connection and try again.");
+      }
     } catch (err) {
       // Re-thrown, so a rejection still surfaces exactly as it did before the
       // button had a pending state to manage.
@@ -256,6 +275,12 @@ export default function LoginPage() {
           Continue with your Google account to reach your portfolio,
           watchlist and predictions.
         </p>
+
+        {notice && (
+          <p role="alert" style={{ marginTop: "20px", padding: "12px 14px", borderRadius: "12px", border: "1px solid rgba(248,113,113,0.35)", background: "rgba(248,113,113,0.08)", color: "#fca5a5", fontSize: "13px", lineHeight: 1.5, textAlign: "left" }}>
+            {notice}
+          </p>
+        )}
 
         <button
           type="button"

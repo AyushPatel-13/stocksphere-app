@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { signOutAndLeave } from "@/lib/auth/session";
 import SearchModal from "@/components/Search/SearchModal";
 import NotificationBell from "@/components/NotificationBell";
 import { navigation } from "@/components/navigation";
@@ -57,10 +58,7 @@ export default function Navbar() {
     });
   }, []);
 
-  const logout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
-  };
+  const logout = signOutAndLeave;
 
   const fullName =
     user?.user_metadata?.full_name ||
