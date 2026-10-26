@@ -26,11 +26,12 @@ function deps(overrides: Partial<SearchDeps> = {}): SearchDeps {
   };
 }
 
-test("queries are trimmed and validated", () => {
+test("queries are trimmed and validated; stray punctuation is dropped, not refused", () => {
   assert.equal(normaliseQuery("  tata   motors "), "tata motors");
   assert.equal(normaliseQuery("M&M"), "M&M");
   assert.equal(normaliseQuery(""), null);
-  assert.equal(normaliseQuery("<script>"), null);
+  assert.equal(normaliseQuery("<script>"), "script");
+  assert.equal(normaliseQuery("<>"), null);
   assert.equal(normaliseQuery("x".repeat(41)), null);
 });
 
@@ -139,7 +140,7 @@ test("full answers are cached; results are capped", async () => {
 });
 
 test("/api/search validates input and passes the query through", async () => {
-  assert.equal((await GET(new Request("http://x/api/search?q=%3Cscript%3E"))).status, 400);
+  assert.equal((await GET(new Request("http://x/api/search?q=%3C%3E"))).status, 400);
   assert.equal((await GET(new Request("http://x/api/search"))).status, 400);
 
   const response = await GET(

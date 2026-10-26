@@ -13,12 +13,12 @@ import { bareIndianSymbol, isIndianEquitySymbol } from "./data/instruments/india
  */
 
 export type LogoMarket = "India" | "US" | "Global";
-export type LogoType = "stock" | "etf" | "index" | "crypto" | "bond";
+export type LogoType = "stock" | "etf" | "index" | "crypto" | "bond" | "commodity";
 
 /** The FMP image symbol for an instrument, or null when none applies. */
 export function logoSourceSymbol(symbol: string, market?: LogoMarket, type: LogoType = "stock"): string | null {
   const upper = symbol.trim().toUpperCase();
-  if (!upper || type === "index" || type === "bond") return null;
+  if (!upper || type === "index" || type === "bond" || type === "commodity") return null;
 
   if (type === "crypto") {
     return CRYPTO.some((coin) => coin.symbol === upper) ? `${upper}USD` : null;

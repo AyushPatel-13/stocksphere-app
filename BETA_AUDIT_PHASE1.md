@@ -30,6 +30,15 @@ Scope: audit only. Nothing was edited apart from this file. Nothing was committe
 >   - **P2-12** CSP.
 >   - Everything in Stage 0 (deploy, Vercel protection, Supabase URLs, env vars).
 > - Tests 945/945, tsc and eslint clean.
+>
+> **25 Oct, later (pushed and merged):**
+> - `22cf52b` P2-4 rounding: fills keep two decimals, six significant digits below one. P2-12: CSP added as Report-Only; no violations on /, /heatmap, /login or /stock/RELIANCE in dev.
+> - `3f9637b` commodities board (the commodities session's work, committed with the user's go-ahead).
+> - PR #2 merged into `main` as `d2b1809`; Vercel started the production build.
+> - Still open:
+>   - ~~P2-6~~ done with approval: history rows for `profiles` and `owner_columns` recorded (objects verified present first), and `ai_usage` renamed to its file name. History now lists all 14 files. Remote versions for the later 10 are apply timestamps, not file prefixes, so a `supabase db push` from the CLI would still need `migration repair` first.
+>   - Vercel: team access for the connector isn't approved, so Deployment Protection and env vars are unchecked. `CRON_SECRET` and the Vault secrets have to be set by the user.
+>   - A production sign-in test.
 > - `380a393`:
 >   - The dashboard briefing and Watchtower name a member's stocks in NSE's F&O ban, via a new `GET /api/fo-ban`.
 >   - `/api/market/movers` is now force-dynamic with a 60 s CDN cache header. Its old `revalidate = 60` never took effect.

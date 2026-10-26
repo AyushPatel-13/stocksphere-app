@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
 
-import { normaliseQuery, searchInstruments } from "@/lib/search/instruments";
+import { searchInstruments } from "@/lib/search/instruments";
+import { parseFilters, parseQuery } from "@/lib/search/types";
 
 /**
- * GET /api/search?q=reliance&limit=8
+ * GET /api/search?q=reliance&limit=8[&types=stock,etf][&market=India][&exchange=NSE]
  *
- * Instrument autocomplete across Indian and US stocks, ETFs, indices, crypto
- * and bonds (see lib/search/instruments.ts). Provider keys stay on the server.
+ * Instrument autocomplete across Indian and US stocks, ETFs, indices, crypto,
+ * bonds and MCX commodities (see lib/search/instruments.ts). Every instrument
+ * field in the app asks this route. Provider keys stay on the server.
+ *
+ * An exchange typed into the query ("NSE:SBIN", "SBIN.NS") becomes the
+ * exchange filter unless the caller set one.
  *
  *   200 { success, query, results, partial }
- *   400 invalid query · 429 too many searches
- *
- * This route used to answer from a hardcoded list of five stocks and was not
- * called by any page.
+ *   400 invalid query or filter · 429 too many searches
  */
 
 // Per-client limiter. In memory, per server instance — enough to stop a
@@ -50,17 +52,22 @@ export async function GET(
   }
 
   const params = new URL(request.url).searchParams;
-  const query = normaliseQuery(params.get("q"));
+  const parsed = parseQuery(params.get("q"));
 
-  if (!query) {
+  if (!parsed) {
     return NextResponse.json(
-      { success: false, error: "Use 1–40 letters, numbers, spaces or & . - '" },
+      { success: false, error: "Type 1–40 letters or numbers to search." },
       { status: 400 }
     );
   }
 
+  const filters = parseFilters(params, parsed.filters);
+  if (!filters) {
+    return NextResponse.json({ success: false, error: "Unknown search filter." }, { status: 400 });
+  }
+
   try {
-    const result = await search(query, Number(params.get("limit")) || undefined);
+    const result = await search(parsed.text, Number(params.get("limit")) || undefined, filters);
     return NextResponse.json(
       { success: true, ...result },
       { headers: { "Cache-Control": "private, max-age=60" } }

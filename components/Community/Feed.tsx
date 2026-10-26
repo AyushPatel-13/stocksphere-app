@@ -197,6 +197,7 @@ export default function Feed({
                   user={user}
                   liked={liked.has(post.id)}
                   boardSymbol={symbol}
+                  boardIpoId={ipoId}
                   onDeleted={(id) =>
                     setState({ ...state, posts: state.posts.filter((p) => p.id !== id) })
                   }

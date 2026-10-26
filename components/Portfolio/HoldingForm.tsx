@@ -2,14 +2,20 @@
 
 import { useState } from "react";
 
+import InstrumentField, { pickedFromResult, type PickedInstrument } from "@/components/Search/InstrumentField";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/ui/Page";
 import { addHolding, updateHolding } from "@/lib/portfolio";
-import { isValidSymbol } from "@/lib/validation/symbol";
+import { HOLDING_TYPES, holdingInstrumentError, storedSymbolFor } from "@/lib/search/pick";
 
 /**
  * Record a holding the user already owns, or correct one. Shared by Portfolio
  * and the stock page. This only writes the user's own portfolio record: it
  * never places an order, real or simulated, and says so.
+ *
+ * A new holding's instrument comes from the shared instrument search (typing
+ * "SBI" suggests State Bank of India, SBI Life, SBI Cards…); only a picked
+ * suggestion can be saved, stored by its canonical symbol. The portfolio table
+ * keeps the symbol alone, so exchange and asset class aren't saved.
  */
 export default function HoldingForm({
   editing,
@@ -26,22 +32,27 @@ export default function HoldingForm({
   onCancel?: () => void;
   compact?: boolean;
 }) {
-  const [symbol, setSymbol] = useState(editing?.symbol ?? fixedSymbol ?? "");
+  const lockedSymbol = editing?.symbol ?? fixedSymbol ?? null;
+  const [picked, setPicked] = useState<PickedInstrument | null>(null);
   const [quantity, setQuantity] = useState(editing ? String(editing.quantity) : "");
   const [price, setPrice] = useState(editing ? String(editing.avgPrice) : "");
   const [error, setError] = useState<string | null>(null);
+  const [symbolError, setSymbolError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const symbolLocked = Boolean(editing || fixedSymbol);
+  const symbolLocked = lockedSymbol !== null;
 
   async function save() {
-    const cleanSymbol = symbol.trim().toUpperCase();
     const qty = Number(quantity);
     const avg = Number(price);
 
     // The form refuses a holding that could never be valued correctly.
-    if (!cleanSymbol || !isValidSymbol(cleanSymbol)) {
-      setError("Enter a valid stock symbol, e.g. TCS or AAPL.");
-      return;
+    if (!symbolLocked) {
+      const problem = holdingInstrumentError(picked);
+      setSymbolError(problem);
+      if (problem) {
+        setError(null);
+        return;
+      }
     }
     if (quantity.trim() === "" || !Number.isFinite(qty) || qty <= 0) {
       setError("Quantity must be a number greater than 0.");
@@ -52,11 +63,13 @@ export default function HoldingForm({
       return;
     }
 
+    const symbol = (lockedSymbol ?? picked?.symbol ?? "").trim().toUpperCase();
+
     setSaving(true);
     setError(null);
 
     try {
-      const result = editing ? await updateHolding(editing.id, qty, avg) : await addHolding(cleanSymbol, qty, avg);
+      const result = editing ? await updateHolding(editing.id, qty, avg) : await addHolding(symbol, qty, avg);
 
       if (!result || result.error) {
         setError("Couldn't save this holding. Please check you're signed in and try again.");
@@ -82,21 +95,33 @@ export default function HoldingForm({
       }}
       aria-label={editing ? `Edit ${editing.symbol} holding` : "Record a holding"}
     >
-      <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-3"}`}>
-        {!(compact && symbolLocked) && (
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-[#888]">Symbol</span>
-            <input
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              placeholder="TCS"
-              autoCapitalize="characters"
-              autoFocus={!symbolLocked}
-              readOnly={symbolLocked}
-              className={`${inputClass} ${symbolLocked ? "cursor-not-allowed text-[#999]" : ""}`}
-            />
-          </label>
-        )}
+      <div className={`grid gap-3 ${compact ? "" : symbolLocked ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+        {symbolLocked
+          ? !compact && (
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-[#888]">Symbol</span>
+                <input value={lockedSymbol} readOnly className={`${inputClass} cursor-not-allowed text-[#999]`} />
+              </label>
+            )
+          : (
+              <InstrumentField
+                label="Symbol"
+                className={compact ? undefined : "sm:col-span-2"}
+                inputId={`${id}-symbol`}
+                value={picked}
+                filterTypes={HOLDING_TYPES}
+                placeholder="Search e.g. SBI, TCS, AAPL"
+                autoFocus
+                error={symbolError}
+                onPick={(result) => {
+                  setPicked(pickedFromResult(result, storedSymbolFor(result)));
+                  setSymbolError(null);
+                  // Straight on to the quantity once an instrument is chosen.
+                  window.setTimeout(() => document.getElementById(`${id}-qty`)?.focus(), 0);
+                }}
+                onClear={() => setPicked(null)}
+              />
+            )}
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-[#888]">Quantity</span>
           <input

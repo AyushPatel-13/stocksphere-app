@@ -4,43 +4,49 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { StockAvatar } from "@/components/Markets/StockBits";
-import type { InstrumentType, SearchResult } from "@/lib/search/instruments";
+import {
+  assetLabel,
+  filterKeyOf,
+  filtersFromKey,
+  nextActiveIndex,
+  searchUrl,
+  type InstrumentType,
+  type Market,
+  type SearchResult,
+} from "@/lib/search/types";
 import { getRecentlyViewed, type RecentlyViewedAsset } from "@/lib/utils/recentlyViewed";
 
 /**
- * Instrument autocomplete (Groww-style): suggestions appear as you type, from
- * /api/search — Indian and US stocks, ETFs, indices, crypto and bonds.
+ * The instrument search box every instrument field in StockSphere uses: the
+ * header and homepage search, and every "pick a stock" field in a form (see
+ * InstrumentField). Suggestions come from /api/search — Indian and US stocks,
+ * ETFs, indices, crypto, bonds and MCX commodities (lib/search/instruments.ts).
  *
  * - Debounced; one character searches StockSphere's own lists, two or more
  *   also ask the providers (the server decides).
  * - A newer query always wins: older requests are aborted and their answers
  *   ignored.
  * - Answers are cached per query for the session.
- * - ↑/↓ move, Enter opens (the first result if none is highlighted), Esc
- *   closes, clicking outside closes.
+ * - Filters (asset class, market, exchange) are applied by the server, so
+ *   the result limit is spent on instruments the field accepts.
+ * - ↑/↓ (and Home/End while open) move, Enter opens (the first result if none
+ *   is highlighted), Esc closes, clicking outside closes.
  */
 
 const DEBOUNCE_MS = 200;
 const CACHE_MAX = 100;
 const cache = new Map<string, SearchResult[]>();
 
-const TYPE_LABEL: Record<InstrumentType, string> = {
-  stock: "Stock",
-  etf: "ETF",
-  index: "Index",
-  crypto: "Crypto",
-  bond: "Bond",
-};
-
 const TYPE_STYLE: Record<InstrumentType, string> = {
-  stock: "border-[#2a2a2a] text-[#aaa]",
-  etf: "border-[#a855f7]/40 text-[#c4b5fd]",
-  index: "border-[#3b82f6]/40 text-[#93c5fd]",
-  crypto: "border-[#f59e0b]/40 text-[#fcd34d]",
-  bond: "border-[#14b8a6]/40 text-[#5eead4]",
+  stock: "text-[#999]",
+  etf: "text-[#c4b5fd]",
+  index: "text-[#93c5fd]",
+  crypto: "text-[#fcd34d]",
+  bond: "text-[#5eead4]",
+  commodity: "text-[#fdba74]",
 };
 
-type Status = "idle" | "loading" | "ready" | "error";
+type Status = "idle" | "loading" | "ready" | "error" | "invalid";
 
 /** Bold the first place the query appears, without building any HTML. */
 function Highlight({ text, query }: { text: string; query: string }): ReactNode {
@@ -66,6 +72,7 @@ function recentAsResults(assets: RecentlyViewedAsset[]): SearchResult[] {
       type: "stock",
       exchange: indian ? "NSE" : "US",
       market: indian ? "India" : "US",
+      currency: indian ? "INR" : "USD",
       href: `/stock/${encodeURIComponent(symbol)}`,
     };
   });
@@ -79,8 +86,13 @@ export default function SearchBox({
   isAdded,
   onQueryChange,
   filterTypes,
+  market,
+  exchange,
   placeholder = "Search stocks, ETFs, indices, crypto…",
   inputId,
+  ariaLabel = "Search stocks, ETFs, indices, crypto and bonds",
+  invalid = false,
+  describedBy,
 }: {
   variant?: "hero" | "compact";
   autoFocus?: boolean;
@@ -96,8 +108,17 @@ export default function SearchBox({
   onQueryChange?: (query: string) => void;
   /** Only suggest these instrument types. */
   filterTypes?: InstrumentType[];
+  /** Only suggest instruments in this market. */
+  market?: Market;
+  /** Only suggest instruments on this exchange (NSE, MCX, US…). */
+  exchange?: string;
   placeholder?: string;
   inputId?: string;
+  ariaLabel?: string;
+  /** Marks the field invalid (a form couldn't accept what's there). */
+  invalid?: boolean;
+  /** id of the element explaining the field, e.g. a validation message. */
+  describedBy?: string;
 }) {
   const router = useRouter();
   const listId = useId();
@@ -112,27 +133,33 @@ export default function SearchBox({
   const [recent, setRecent] = useState<SearchResult[]>([]);
   const [active, setActive] = useState(-1);
   const [attempt, setAttempt] = useState(0);
+  const [partial, setPartial] = useState(false);
 
   const trimmed = query.trim();
   const showingRecent = !trimmed;
-  const pickMode = Boolean(onSelect);
-  const allowed = (result: SearchResult) => !filterTypes || filterTypes.includes(result.type);
+  // "+ Add / ✓ Added" only where the caller tracks what's added (watchlist);
+  // a form field's pick is shown by the field itself.
+  const pickMode = Boolean(onSelect && isAdded);
+  // The server applies the filters; recently viewed items are filtered here.
+  const allowed = (result: SearchResult) =>
+    (!filterTypes || filterTypes.includes(result.type)) && (!market || result.market === market);
   const list = (showingRecent ? recent : results).filter(allowed);
-  // Ask for a few more results when some will be filtered out.
-  const requestLimit = filterTypes ? 12 : 8;
+  const requestLimit = 8;
+  const filterKey = filterKeyOf(filterTypes, market, exchange);
 
   // Debounced search. State changes happen in the timer/fetch callbacks, never
   // synchronously in the effect body.
   useEffect(() => {
     if (!trimmed) return;
 
-    const key = `${trimmed.toLowerCase()}|${requestLimit}`;
+    const key = `${trimmed.toLowerCase()}|${requestLimit}|${filterKey}`;
     const cached = cache.get(key);
 
     const timer = window.setTimeout(
       async () => {
         if (cached) {
           setResults(cached);
+          setPartial(false);
           setStatus("ready");
           setActive(cached.length ? 0 : -1);
           return;
@@ -144,14 +171,16 @@ export default function SearchBox({
         setStatus("loading");
 
         try {
-          const response = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}&limit=${requestLimit}`, {
+          const filters = filtersFromKey(filterKey);
+          const response = await fetch(searchUrl(trimmed, requestLimit, filters), {
             signal: controller.signal,
           });
           const data = await response.json();
           if (controller.signal.aborted) return;
 
           if (!data?.success) {
-            setStatus("error");
+            // 400: nothing searchable was typed (only punctuation, or too long).
+            setStatus(response.status === 400 ? "invalid" : "error");
             return;
           }
 
@@ -162,6 +191,7 @@ export default function SearchBox({
             cache.set(key, found);
           }
           setResults(found);
+          setPartial(Boolean(data.partial));
           setStatus("ready");
           setActive(found.length ? 0 : -1);
         } catch (error) {
@@ -173,7 +203,7 @@ export default function SearchBox({
     );
 
     return () => window.clearTimeout(timer);
-  }, [trimmed, attempt, requestLimit]);
+  }, [trimmed, attempt, requestLimit, filterKey]);
 
   // Abort anything in flight when the box goes away.
   useEffect(() => () => controllerRef.current?.abort(), []);
@@ -212,13 +242,15 @@ export default function SearchBox({
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown") {
+    // Home/End move the caret in the text until the list is open.
+    const listKey = event.key === "ArrowDown" || event.key === "ArrowUp" || (open && (event.key === "Home" || event.key === "End"));
+    // Reopening a closed list starts from the top (or bottom), not from where
+    // the highlight was before Esc.
+    const moved = listKey ? nextActiveIndex(event.key, open ? active : -1, list.length) : undefined;
+    if (moved !== undefined) {
       event.preventDefault();
       setOpen(true);
-      if (list.length) setActive((i) => (i + 1) % list.length);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      if (list.length) setActive((i) => (i <= 0 ? list.length - 1 : i - 1));
+      setActive(moved);
     } else if (event.key === "Enter") {
       event.preventDefault();
       go(list[active >= 0 ? active : 0]);
@@ -253,7 +285,9 @@ export default function SearchBox({
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={activeId}
-          aria-label="Search stocks, ETFs, indices, crypto and bonds"
+          aria-label={ariaLabel}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
           autoComplete="off"
           spellCheck={false}
           autoFocus={autoFocus}
@@ -277,7 +311,7 @@ export default function SearchBox({
             setOpen(true);
           }}
           onKeyDown={onKeyDown}
-          className={`w-full border border-[#222] bg-[#111] text-white outline-none transition-colors placeholder:text-[#666] focus:border-green-500 focus:ring-1 focus:ring-green-500 ${
+          className={`w-full border ${invalid ? "border-[#f87171]/70" : "border-[#222]"} bg-[#111] text-white outline-none transition-colors placeholder:text-[#666] focus:border-green-500 focus:ring-1 focus:ring-green-500 ${
             hero ? "rounded-2xl py-4 pl-11 pr-5 text-base" : "rounded-xl py-2.5 pl-9 pr-3 text-sm"
           }`}
         />
@@ -308,6 +342,12 @@ export default function SearchBox({
             </div>
           )}
 
+          {!showingRecent && status === "invalid" && (
+            <p role="status" className="px-4 py-4 text-sm text-[#888]">
+              Type a company name or ticker, e.g. SBI or AAPL.
+            </p>
+          )}
+
           {!showingRecent && status === "loading" && results.length === 0 && (
             <div role="status" aria-label="Searching" className="space-y-2 p-3">
               {Array.from({ length: 3 }).map((_, i) => (
@@ -322,7 +362,7 @@ export default function SearchBox({
             </p>
           )}
 
-          {list.length > 0 && status !== "error" && (
+          {list.length > 0 && status !== "error" && status !== "invalid" && (
             <ul id={listId} role="listbox" aria-label={showingRecent ? "Recently viewed" : "Search results"} className="max-h-[60vh] overflow-y-auto py-1">
               {list.map((result, index) => (
                 <li
@@ -341,11 +381,11 @@ export default function SearchBox({
                       <Highlight text={result.name} query={trimmed} />
                     </span>
                     <span className="block truncate text-xs text-[#777]">
-                      <Highlight text={result.symbol} query={trimmed} /> · {result.exchange}
+                      <span className="font-mono text-[#bbb]">
+                        <Highlight text={result.symbol} query={trimmed} />
+                      </span>{" "}
+                      · {result.exchange} · <span className={TYPE_STYLE[result.type]}>{assetLabel(result)}</span>
                     </span>
-                  </span>
-                  <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TYPE_STYLE[result.type]}`}>
-                    {TYPE_LABEL[result.type]}
                   </span>
                   {pickMode &&
                     (isAdded?.(result) ? (
@@ -358,6 +398,12 @@ export default function SearchBox({
                 </li>
               ))}
             </ul>
+          )}
+
+          {!showingRecent && status === "ready" && partial && (
+            <p className="border-t border-[#1d1d1d] px-4 py-2 text-[11px] text-[#666]">
+              Some sources didn&apos;t answer, so results may be incomplete.
+            </p>
           )}
         </div>
       )}

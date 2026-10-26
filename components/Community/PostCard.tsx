@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import Composer from "@/components/Community/Composer";
 import PredictionBadge from "@/components/Predictions/Badge";
@@ -13,14 +13,49 @@ import {
   timeAgo,
   type CommunityUser,
 } from "@/lib/community/client";
+import type { StoredMention } from "@/lib/community/mentions";
+import { ipoCommunityPath } from "@/lib/community/paths";
 import { tokenize } from "@/lib/community/tokens";
-import type { PostView } from "@/lib/community/types";
+import type { IpoStatus, PostContext, PostView } from "@/lib/community/types";
 
-/** A post's text with $CASHTAGS, @mentions and links as real links — never HTML. */
-export function PostBody({ body }: { body: string }) {
+/** Where a stored mention links: the instrument's page, or the IPO's community. */
+function mentionHref(mention: StoredMention): string {
+  return mention.kind === "instrument" ? mention.href : ipoCommunityPath(mention.ipoId);
+}
+
+/**
+ * A post's text with verified stock/IPO mentions, $CASHTAGS, @handles and
+ * links as real links — never HTML. Mention spans come from stored positions
+ * (checked by readMentions on the server); the rest is tokenized as before,
+ * so old posts render exactly as they did.
+ */
+export function PostBody({ body, mentions = [] }: { body: string; mentions?: StoredMention[] }) {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  mentions.forEach((mention, m) => {
+    if (mention.start < last) return;
+    if (mention.start > last) parts.push(<TextPart key={`t${m}`} text={body.slice(last, mention.start)} />);
+    parts.push(
+      <Link
+        key={`m${m}`}
+        href={mentionHref(mention)}
+        title={mention.kind === "ipo" ? `${mention.name} (IPO)` : `${mention.name} · ${mention.symbol}`}
+        className={`font-semibold hover:underline ${mention.kind === "ipo" ? "text-[#fbbf24]" : "text-[#4ade80]"}`}
+      >
+        {body.slice(mention.start, mention.end)}
+      </Link>
+    );
+    last = mention.end;
+  });
+  if (last < body.length) parts.push(<TextPart key="tail" text={body.slice(last)} />);
+
+  return <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-[#e5e5e5]">{parts}</p>;
+}
+
+function TextPart({ text }: { text: string }) {
   return (
-    <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-[#e5e5e5]">
-      {tokenize(body).map((token, i) => {
+    <>
+      {tokenize(text).map((token, i) => {
         if (token.type === "cashtag") {
           return (
             <Link key={i} href={`/stock/${encodeURIComponent(token.symbol)}`} className="font-semibold text-[#4ade80] hover:underline">
@@ -44,7 +79,60 @@ export function PostBody({ body }: { body: string }) {
         }
         return <span key={i}>{token.value}</span>;
       })}
-    </p>
+    </>
+  );
+}
+
+const IPO_STATUS_LABEL: Record<IpoStatus, string> = { upcoming: "Upcoming", open: "Open", closed: "Closed", listed: "Listed" };
+
+const VISIBLE_CONTEXT = 3;
+
+/**
+ * What the post is about, from stored relations only: "Discussing IPO: X ·
+ * Open", the stocks it tagged. A post with none shows nothing — the text is
+ * never read for it.
+ */
+export function PostContextChips({ context }: { context: PostContext[] }) {
+  const [all, setAll] = useState(false);
+  if (context.length === 0) return null;
+  const shown = all ? context : context.slice(0, VISIBLE_CONTEXT);
+
+  return (
+    <ul aria-label="Discussing" className="mt-2 flex flex-wrap items-center gap-1.5">
+      {shown.map((item) =>
+        item.kind === "ipo" ? (
+          <li key={`ipo:${item.communityId}`} className="flex max-w-full items-center gap-1 text-xs">
+            <Link
+              href={item.href}
+              className="flex min-w-0 items-center gap-1.5 rounded-md border border-[#f59e0b]/30 bg-[#f59e0b]/10 px-2 py-0.5 text-[#fcd34d] hover:border-[#f59e0b]/60"
+            >
+              <span className="font-semibold">{item.via === "community" ? "Discussing IPO" : "IPO"}</span>
+              <span className="truncate text-[#fde68a]">{item.name}</span>
+              {item.status && <span className="shrink-0 text-[#d4a72c]">· {IPO_STATUS_LABEL[item.status]}</span>}
+            </Link>
+            {item.listed && (
+              <Link href={item.listed.href} className="shrink-0 rounded-md border border-[#2a2a2a] bg-[#161616] px-2 py-0.5 font-medium text-[#cfcfcf] hover:text-[#4ade80]">
+                {item.listed.exchange}: {item.listed.symbol}
+              </Link>
+            )}
+          </li>
+        ) : (
+          <li key={`instrument:${item.id}`} className="max-w-full text-xs">
+            <Link href={item.href} className="flex min-w-0 items-center gap-1.5 rounded-md border border-[#2a2a2a] bg-[#161616] px-2 py-0.5 text-[#cfcfcf] hover:text-[#4ade80]">
+              <span className="font-semibold text-white">{item.symbol}</span>
+              <span className="truncate text-[#999]">{item.name}</span>
+            </Link>
+          </li>
+        )
+      )}
+      {context.length > VISIBLE_CONTEXT && (
+        <li>
+          <button type="button" onClick={() => setAll(!all)} className="rounded-md px-1.5 py-0.5 text-xs text-[#888] hover:text-white">
+            {all ? "Show less" : `+${context.length - VISIBLE_CONTEXT} more`}
+          </button>
+        </li>
+      )}
+    </ul>
   );
 }
 
@@ -78,10 +166,11 @@ const REPORT_REASONS = [
 ] as const;
 
 export default function PostCard({
-  post,
+  post: initial,
   user,
   liked,
   boardSymbol,
+  boardIpoId,
   isReply = false,
   onDeleted,
 }: {
@@ -89,9 +178,14 @@ export default function PostCard({
   user: CommunityUser;
   liked: boolean;
   boardSymbol?: string;
+  /** On an IPO's own page its chip would only repeat the page. */
+  boardIpoId?: string;
   isReply?: boolean;
   onDeleted: (id: string) => void;
 }) {
+  // Local copy: an edit replaces it in place.
+  const [post, setPost] = useState(initial);
+  const [editing, setEditing] = useState(false);
   const [isLiked, setIsLiked] = useState(liked);
   const [likes, setLikes] = useState(post.likeCount);
   const [replyCount, setReplyCount] = useState(post.replyCount);
@@ -146,7 +240,9 @@ export default function PostCard({
     setNotice((await reportPost(post.id, reason)) ? "Thanks — our moderators will review it." : "Couldn't send the report.");
   }
 
-  const otherSymbols = post.symbols.filter((s) => s !== boardSymbol && !post.body.toUpperCase().includes(`$${s}`));
+  // Symbols already shown by a mention or a context chip aren't repeated.
+  const covered = new Set((post.mentions ?? []).flatMap((m) => (m.kind === "instrument" ? [m.symbol] : [])));
+  const otherSymbols = post.symbols.filter((s) => s !== boardSymbol && !covered.has(s) && !post.body.toUpperCase().includes(`$${s}`));
 
   return (
     <article className={isReply ? "py-3" : "px-4 py-4 sm:px-5"}>
@@ -171,6 +267,11 @@ export default function PostCard({
             <time dateTime={post.createdAt} title={new Date(post.createdAt).toLocaleString()} className="text-[#777]">
               {timeAgo(post.createdAt)}
             </time>
+            {post.editedAt && (
+              <span className="text-[#666]" title={`Edited ${new Date(post.editedAt).toLocaleString()}`}>
+                · edited
+              </span>
+            )}
             {post.sentiment && (
               <span
                 className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-semibold ${
@@ -185,8 +286,29 @@ export default function PostCard({
           </header>
 
           <div className="mt-1">
-            <PostBody body={post.body} />
+            {editing ? (
+              <Composer
+                user={user}
+                editing={post}
+                compact={isReply}
+                onPosted={(updated) => {
+                  setPost({ ...updated, likeCount: likes, replyCount });
+                  setEditing(false);
+                }}
+                onCancel={() => setEditing(false)}
+              />
+            ) : (
+              <PostBody body={post.body} mentions={post.mentions} />
+            )}
           </div>
+
+          {!isReply && !editing && (
+            <PostContextChips
+              context={(post.context ?? []).filter((item) =>
+                item.kind === "ipo" ? !boardIpoId || item.ipoId !== boardIpoId : !boardSymbol || item.symbol !== boardSymbol
+              )}
+            />
+          )}
 
           {otherSymbols.length > 0 && !isReply && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -235,6 +357,18 @@ export default function PostCard({
               <div className="absolute right-0 top-8 z-10 w-56 overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#151515] py-1 text-sm shadow-xl">
                 {menu === "open" && (
                   <>
+                    {mine && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenu("closed");
+                          setEditing(true);
+                        }}
+                        className="block w-full px-3 py-2 text-left hover:bg-[#1f1f1f]"
+                      >
+                        Edit post
+                      </button>
+                    )}
                     {mine && (
                       <button type="button" onClick={remove} className="block w-full px-3 py-2 text-left text-[#f87171] hover:bg-[#1f1f1f]">
                         Delete post

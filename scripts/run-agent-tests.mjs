@@ -39,6 +39,7 @@ const TEST_ROOTS = [
   "lib/analytics",
   "lib/markets",
   "lib/dashboard",
+  "lib/auth",
   "app/api/agent",
   "app/api/market",
   "components",

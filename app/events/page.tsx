@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import InstrumentField, { pickedFromResult, type PickedInstrument } from "@/components/Search/InstrumentField";
 import { PageHeader, PageShell, inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/ui/Page";
+import { storedSymbolFor } from "@/lib/search/pick";
 import type { EarningsEvent } from "@/lib/services/earningsCalendar";
 
 /**
@@ -160,7 +162,8 @@ function EarningsCalendar() {
 
 function Reminders() {
   const [reminders, setReminders] = useState<Reminder[] | null | undefined>(undefined);
-  const [symbol, setSymbol] = useState("");
+  // Only an instrument picked from the shared search; an edited reminder shows its saved symbol.
+  const [picked, setPicked] = useState<PickedInstrument | null>(null);
   const [eventType, setEventType] = useState("Dividend");
   const [eventDate, setEventDate] = useState("");
   const [editing, setEditing] = useState<number | null>(null);
@@ -177,13 +180,13 @@ function Reminders() {
   }
 
   function submit() {
-    const clean = symbol.trim().toUpperCase();
+    const clean = picked?.symbol.trim().toUpperCase() ?? "";
     if (!clean || !eventDate) return;
     const entry = { symbol: clean, eventType, eventDate };
     const list = reminders ?? [];
     persist(editing === null ? [entry, ...list] : list.map((r, i) => (i === editing ? entry : r)));
     setEditing(null);
-    setSymbol("");
+    setPicked(null);
     setEventDate("");
     setEventType("Dividend");
   }
@@ -202,7 +205,15 @@ function Reminders() {
         }}
         className="mt-3 space-y-2"
       >
-        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="Symbol, e.g. TCS" aria-label="Symbol" className={inputClass} />
+        <InstrumentField
+          label="Symbol"
+          inputId="reminder-symbol"
+          value={picked}
+          filterTypes={["stock", "etf"]}
+          placeholder="Search e.g. TCS, SBI, AAPL"
+          onPick={(result) => setPicked(pickedFromResult(result, storedSymbolFor(result)))}
+          onClear={() => setPicked(null)}
+        />
         <div className="grid grid-cols-2 gap-2">
           <select value={eventType} onChange={(e) => setEventType(e.target.value)} aria-label="Event type" className={inputClass}>
             {REMINDER_TYPES.map((t) => (
@@ -211,7 +222,7 @@ function Reminders() {
           </select>
           <input type="date" value={eventDate} onChange={(e) => setEventDate(e.target.value)} aria-label="Date" className={inputClass} />
         </div>
-        <button type="submit" disabled={!symbol.trim() || !eventDate} className={`${primaryButtonClass} w-full`}>
+        <button type="submit" disabled={!picked || !eventDate} className={`${primaryButtonClass} w-full`}>
           {editing === null ? "Add reminder" : "Save reminder"}
         </button>
       </form>
@@ -232,7 +243,7 @@ function Reminders() {
                 type="button"
                 onClick={() => {
                   setEditing(r.i);
-                  setSymbol(r.symbol);
+                  setPicked({ symbol: r.symbol, name: r.symbol });
                   setEventType(r.eventType);
                   setEventDate(r.eventDate);
                 }}

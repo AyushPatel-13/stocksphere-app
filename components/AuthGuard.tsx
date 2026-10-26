@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { loginHref } from "@/lib/auth/redirects";
 import { useRouter } from "next/navigation";
 
 /**
@@ -56,13 +58,31 @@ export default function AuthGuard({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) {
-        router.push("/login");
-      } else {
-        setLoading(false);
-      }
-    });
+    let cancelled = false;
+    const toLogin = () => router.replace(loginHref(`${window.location.pathname}${window.location.search}`));
+
+    async function check() {
+      // No stored session: signed out, nothing to ask the server.
+      const { data: local } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (!local.session) return toLogin();
+
+      // A stored session is confirmed with Supabase. Only a refusal (revoked
+      // or expired beyond refresh) signs out; a network failure must not
+      // throw a signed-in person back to /login. Every private API checks the
+      // token itself, so rendering the page here exposes nothing.
+      const { data, error } = await supabase.auth.getUser();
+      if (cancelled) return;
+      if (data.user) return setLoading(false);
+      if (error && isAuthRetryableFetchError(error)) return setLoading(false);
+      await supabase.auth.signOut({ scope: "local" });
+      if (!cancelled) toLogin();
+    }
+
+    check();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   if (loading) {

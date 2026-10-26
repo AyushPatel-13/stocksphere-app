@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import ProfileGate from "@/components/ProfileGate";
+import AuthReturn from "@/components/AuthReturn";
 import BetaFooter from "@/components/BetaFooter";
 
 const geistSans = Geist({
@@ -41,6 +42,7 @@ export default function RootLayout({
     >
       <body className="min-h-full bg-black text-white">
         <Navbar />
+        <AuthReturn />
         <ProfileGate />
 
         {children}

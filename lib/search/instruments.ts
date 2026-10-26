@@ -1,58 +1,56 @@
 import { searchFinnhubSymbols, type FinnhubSymbolMatch } from "../apis/finnhub";
 import { searchUpstoxEquityCandidates, type UpstoxEquityCandidate } from "../apis/upstox";
 import { BONDS, CRYPTO, ETFS } from "../data/assets";
+import { COMMODITIES } from "../data/commodities";
 import { GLOBAL_INDICES, INDIAN_INDICES } from "../data/instruments/indices";
 import { isIndianEquitySymbol } from "../data/instruments/india";
 import { stocks } from "../stocks";
 import { indianStockHref } from "./canonical";
 import { companyNameTokens, matchTier } from "./rank";
+import {
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+  MAX_QUERY_LENGTH,
+  matchesFilters,
+  parseQuery,
+  type InstrumentType,
+  type SearchFilters,
+  type SearchResponse,
+  type SearchResult,
+} from "./types";
 
 /**
- * Instrument search for the search box: one ranked list across
+ * The one instrument search every search field in StockSphere uses (through
+ * /api/search and components/Search/SearchBox.tsx). One ranked list across
  *
  *   - StockSphere's own instrument lists (instant, no network): indices, ETFs,
- *     crypto, bonds and the known-stocks list;
+ *     crypto, bonds, MCX commodities and the known-stocks list;
  *   - Upstox's NSE instrument search (Indian stocks and ETFs);
  *   - Finnhub's symbol search (US stocks and ETFs).
  *
- * Every result links to a page that exists for it, by its canonical id.
- * Each remote source fails on its own: a search with Upstox down still returns
- * the local and US matches.
+ * Nothing is invented: every result is a row from one of those lists or
+ * providers, and links to a page that exists for it, by its canonical id.
+ * Discovery is separate from quotes: a result can be found while its price is
+ * unavailable. Each remote source fails (or times out) on its own: a search
+ * with Upstox down still returns the local and US matches, marked partial.
+ *
+ * Not covered: BSE-only listings (Upstox is asked for NSE), non-US foreign
+ * listings, F&O and commodity contracts by expiry, and mutual funds.
  */
 
-export type InstrumentType = "stock" | "etf" | "index" | "crypto" | "bond";
-
-export type SearchResult = {
-  /** Stable key: market + symbol. */
-  id: string;
-  symbol: string;
-  name: string;
-  type: InstrumentType;
-  /** Exchange or venue shown to the user: NSE, BSE, US, Crypto… */
-  exchange: string;
-  market: "India" | "US" | "Global";
-  href: string;
-};
-
-export type SearchResponse = {
-  query: string;
-  results: SearchResult[];
-  /** True when a remote source failed, so results may be incomplete. */
-  partial: boolean;
-};
+export type { InstrumentType, SearchFilters, SearchResponse, SearchResult } from "./types";
+export { DEFAULT_LIMIT, MAX_LIMIT, MAX_QUERY_LENGTH } from "./types";
 
 export const MIN_REMOTE_QUERY = 2;
-export const MAX_QUERY_LENGTH = 40;
-export const DEFAULT_LIMIT = 8;
-export const MAX_LIMIT = 15;
+export const PROVIDER_TIMEOUT_MS = 5_000;
 
-const QUERY_PATTERN = /^[A-Za-z0-9 &.\-']+$/;
-
-/** Trimmed, single-spaced query, or null when it can't be a search term. */
+/**
+ * Trimmed, single-spaced search text, or null when nothing searchable is left.
+ * Kept for callers that only want the text; parseQuery also returns the
+ * exchange a query names ("NSE:SBIN").
+ */
 export function normaliseQuery(raw: string | null | undefined): string | null {
-  const query = String(raw ?? "").trim().replace(/\s+/g, " ");
-  if (!query || query.length > MAX_QUERY_LENGTH || !QUERY_PATTERN.test(query)) return null;
-  return query;
+  return parseQuery(raw)?.text ?? null;
 }
 
 /* ------------------------------------------------------------ canonical links */
@@ -87,6 +85,7 @@ function localCatalog(): Candidate[] {
     type: "index",
     exchange: index.category === "indian" ? (index.symbol === "SENSEX" ? "BSE" : "NSE") : "Index",
     market: index.category === "indian" ? "India" : "Global",
+    currency: null,
     href: `/asset/index/${index.symbol}`,
     aliases: INDEX_ALIASES[index.symbol],
   }));
@@ -98,6 +97,7 @@ function localCatalog(): Candidate[] {
     type: "etf",
     exchange: etf.region === "india" ? "NSE" : "US",
     market: etf.region === "india" ? "India" : "US",
+    currency: etf.currency,
     href: `/asset/etf/${etf.symbol}`,
   }));
 
@@ -108,6 +108,7 @@ function localCatalog(): Candidate[] {
     type: "crypto",
     exchange: "Crypto",
     market: "Global",
+    currency: "USD",
     href: `/asset/crypto/${coin.symbol}`,
   }));
 
@@ -118,7 +119,21 @@ function localCatalog(): Candidate[] {
     type: "bond",
     exchange: bond.region === "india" ? "NSE" : "US Treasury",
     market: bond.region === "india" ? "India" : "US",
+    currency: null,
     href: `/asset/bond/${bond.symbol}`,
+  }));
+
+  // MCX futures by product; the page picks the live contract (expiry).
+  const commodities: Candidate[] = COMMODITIES.map((product) => ({
+    id: `commodity:${product.symbol}`,
+    symbol: product.symbol,
+    name: product.name,
+    type: "commodity",
+    exchange: product.exchange,
+    market: "India",
+    currency: "INR",
+    href: `/commodities/${encodeURIComponent(product.symbol)}`,
+    aliases: product.category !== product.name ? [product.category] : undefined,
   }));
 
   const known: Candidate[] = stocks.map((stock) => {
@@ -130,11 +145,12 @@ function localCatalog(): Candidate[] {
       type: "stock",
       exchange: indian ? "NSE" : "US",
       market: indian ? "India" : "US",
+      currency: indian ? "INR" : "USD",
       href: indian ? indianStockHref(stock.symbol) : `/stock/${stock.symbol}`,
     };
   });
 
-  return [...indices, ...etfs, ...crypto, ...bonds, ...known];
+  return [...indices, ...etfs, ...crypto, ...bonds, ...commodities, ...known];
 }
 
 const LOCAL = localCatalog();
@@ -157,6 +173,7 @@ export function fromUpstox(rows: UpstoxEquityCandidate[]): Candidate[] {
       type: looksLikeEtf ? "etf" : "stock",
       exchange: "NSE",
       market: "India",
+      currency: "INR",
       href: listed ? `/asset/etf/${symbol}` : indianStockHref(symbol),
     };
   });
@@ -172,6 +189,7 @@ export function fromFinnhub(rows: FinnhubSymbolMatch[]): Candidate[] {
       type: row.type === "ETP" || listed ? "etf" : "stock",
       exchange: "US",
       market: "US",
+      currency: "USD",
       href: listed ? `/asset/etf/${row.symbol}` : `/stock/${encodeURIComponent(row.symbol)}`,
     };
   });
@@ -179,9 +197,37 @@ export function fromFinnhub(rows: FinnhubSymbolMatch[]): Candidate[] {
 
 /* ------------------------------------------------------------ ranking */
 
+// Words initials skip: "State Bank of India" is SBI, not SBOI.
+const INITIALS_SKIP = new Set(["of", "and", "the", "for"]);
+const LEGAL_FORMS = new Set(["ltd", "limited", "inc", "corp", "co", "plc"]);
+
+/**
+ * The initials a name is known by, with and without its legal form:
+ * "State Bank of India" → ["sbi"], "Hindustan Unilever Ltd" → ["hu", "hul"].
+ * Only names of two or more words have initials; a one-word name's first
+ * letter would match anything.
+ */
+export function nameInitials(name: string): string[] {
+  const all = name.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word && !INITIALS_SKIP.has(word));
+  const core = companyNameTokens(all.join(" "));
+  const variants = new Set<string>();
+  if (core.length >= 2) variants.add(core.map((word) => word[0]).join(""));
+  if (all.length >= 2 && all.some((word) => LEGAL_FORMS.has(word))) variants.add(all.map((word) => word[0]).join(""));
+  return [...variants];
+}
+
+/** A single word of three to six letters can be initials ("sbi", "hul"); shorter ones are too ambiguous. */
+function initialsQuery(lowerQuery: string): string | null {
+  return /^[a-z]{3,6}$/.test(lowerQuery) ? lowerQuery : null;
+}
+
 function bestTier(candidate: Candidate, lowerQuery: string, queryTokens: string[]): number {
   const names = [candidate.name, ...(candidate.aliases ?? [])];
-  return Math.min(...names.map((name) => matchTier(candidate.symbol, name, lowerQuery, queryTokens)));
+  const tier = Math.min(...names.map((name) => matchTier(candidate.symbol, name, lowerQuery, queryTokens)));
+  // Initials rank with a name-prefix match: as strong as typing the first word.
+  const initials = initialsQuery(lowerQuery);
+  if (tier > 3 && initials && nameInitials(candidate.name).includes(initials)) return 3;
+  return tier;
 }
 
 function escapeRegExp(value: string): string {
@@ -189,20 +235,23 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * A candidate matches when the ticker contains what was typed, or a word of
- * its name (or an alias) starts with it. Mid-word hits don't count: "spy" in
- * "Krispy Kreme" or "apple" in "Pineapple" aren't what anyone meant.
+ * A candidate matches when the ticker contains what was typed, a word of its
+ * name (or an alias) starts with it, or it is the name's initials. Mid-word
+ * hits don't count: "spy" in "Krispy Kreme" or "apple" in "Pineapple" aren't
+ * what anyone meant.
  */
 function matches(candidate: Candidate, lowerQuery: string): boolean {
   if (candidate.symbol.toLowerCase().includes(lowerQuery)) return true;
   const atWordStart = new RegExp(`(^|[^a-z0-9])${escapeRegExp(lowerQuery)}`);
-  return [candidate.name, ...(candidate.aliases ?? [])].some((text) => atWordStart.test(text.toLowerCase()));
+  if ([candidate.name, ...(candidate.aliases ?? [])].some((text) => atWordStart.test(text.toLowerCase()))) return true;
+  const initials = initialsQuery(lowerQuery);
+  return Boolean(initials && nameInitials(candidate.name).includes(initials));
 }
 
 /**
  * Merge sources (earlier sources win a duplicate: our own pages before remote
  * listings), then order by match strength — exact ticker, ticker prefix, exact
- * name, name prefix, contains — keeping source order within a tier.
+ * name, name prefix or initials, contains — keeping source order within a tier.
  */
 export function rankResults(sources: Candidate[][], query: string, limit: number): SearchResult[] {
   const lowerQuery = query.toLowerCase().replace(/\.(ns|bse|bo)$/, "");
@@ -230,6 +279,8 @@ export interface SearchDeps {
   searchIndian: (query: string, limit?: number) => Promise<UpstoxEquityCandidate[] | null>;
   searchUs: (query: string, limit?: number) => Promise<FinnhubSymbolMatch[] | null>;
   now: () => number;
+  /** How long a provider gets before its answer is treated as missing. */
+  timeoutMs?: number;
 }
 
 const DEFAULT_DEPS: SearchDeps = {
@@ -241,40 +292,75 @@ const DEFAULT_DEPS: SearchDeps = {
 const CACHE_TTL_MS = 5 * 60_000;
 const CACHE_MAX = 500;
 
+/** The provider's answer, or null if it failed or took longer than `ms`. */
+function withTimeout<T>(run: () => Promise<T | null>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  const answer = Promise.resolve()
+    .then(run)
+    .catch(() => null);
+  return Promise.race([answer, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Whether a source holding only `types` in `market` on `exchanges` can satisfy the filters. */
+function sourceAllowed(filters: SearchFilters, types: InstrumentType[], market: SearchResult["market"], exchanges: string[]): boolean {
+  if (filters.types?.length && !filters.types.some((type) => types.includes(type))) return false;
+  if (filters.market && filters.market !== market) return false;
+  if (filters.exchange && !exchanges.includes(filters.exchange.toUpperCase())) return false;
+  return true;
+}
+
+function cacheKey(query: string, limit: number, filters: SearchFilters): string {
+  const types = [...(filters.types ?? [])].sort().join(",");
+  return [query.toLowerCase(), limit, types, filters.market ?? "", filters.exchange?.toUpperCase() ?? ""].join("|");
+}
+
 export function createInstrumentSearch(deps: SearchDeps = DEFAULT_DEPS) {
   const cache = new Map<string, { at: number; response: SearchResponse }>();
+  const timeoutMs = deps.timeoutMs ?? PROVIDER_TIMEOUT_MS;
 
-  return async function searchInstruments(query: string, limit: number = DEFAULT_LIMIT): Promise<SearchResponse> {
+  return async function searchInstruments(
+    query: string,
+    limit: number = DEFAULT_LIMIT,
+    filters: SearchFilters = {}
+  ): Promise<SearchResponse> {
     const capped = Math.min(Math.max(Math.trunc(limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
-    const key = `${query.toLowerCase()}|${capped}`;
+    const text = query.trim().slice(0, MAX_QUERY_LENGTH);
+    const key = cacheKey(text, capped, filters);
     const hit = cache.get(key);
     if (hit && deps.now() - hit.at < CACHE_TTL_MS) return hit.response;
 
-    const lowerQuery = query.toLowerCase().replace(/\.(ns|bse|bo)$/, "");
-    const local = LOCAL.filter((candidate) => matches(candidate, lowerQuery));
+    const lowerQuery = text.toLowerCase().replace(/\.(ns|bse|bo)$/, "");
+    const keep = (candidate: Candidate) => matches(candidate, lowerQuery) && matchesFilters(candidate, filters);
+    const local = LOCAL.filter(keep);
 
     let partial = false;
     let indian: Candidate[] = [];
     let us: Candidate[] = [];
 
     if (lowerQuery.length >= MIN_REMOTE_QUERY) {
-      const bare = query.replace(/\.(NS|BSE|BO)$/i, "");
+      const bare = text.replace(/\.(NS|BSE|BO)$/i, "");
+      // Sources that can't hold anything the filters allow aren't asked.
+      const askIndian = sourceAllowed(filters, ["stock", "etf"], "India", ["NSE", "BSE"]);
+      const askUs = sourceAllowed(filters, ["stock", "etf"], "US", ["US"]);
       const [indianRows, usRows] = await Promise.all([
-        deps.searchIndian(bare, 15).catch(() => null),
-        deps.searchUs(bare, 10).catch(() => null),
+        askIndian ? withTimeout(() => deps.searchIndian(bare, 15), timeoutMs) : Promise.resolve([]),
+        askUs ? withTimeout(() => deps.searchUs(bare, 10), timeoutMs) : Promise.resolve([]),
       ]);
 
       // Providers sometimes return loose matches (Finnhub answers "spy" with
       // unrelated tickers); a result must actually contain what was typed.
-      if (indianRows) indian = fromUpstox(indianRows).filter((c) => matches(c, lowerQuery));
+      if (indianRows) indian = fromUpstox(indianRows).filter(keep);
       else partial = true;
-      if (usRows) us = fromFinnhub(usRows).filter((c) => matches(c, lowerQuery));
+      if (usRows) us = fromFinnhub(usRows).filter(keep);
       else partial = true;
     }
 
     const response: SearchResponse = {
-      query,
-      results: rankResults([local, indian, us], query, capped),
+      query: text,
+      results: rankResults([local, indian, us], text, capped),
       partial,
     };
 

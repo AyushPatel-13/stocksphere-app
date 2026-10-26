@@ -6,6 +6,7 @@ import type { User } from "@supabase/supabase-js";
 
 import AuthGuard from "@/components/AuthGuard";
 import { PageShell, Panel, secondaryButtonClass } from "@/components/ui/Page";
+import { signOutAndLeave } from "@/lib/auth/session";
 import { supabase } from "@/lib/supabase";
 
 const LINKS = [
@@ -58,10 +59,7 @@ export default function ProfilePage() {
 
               <button
                 type="button"
-                onClick={async () => {
-                  await supabase.auth.signOut();
-                  window.location.href = "/login";
-                }}
+                onClick={signOutAndLeave}
                 className={`${secondaryButtonClass} hover:border-red-500/40 hover:text-red-400`}
               >
                 Sign out
