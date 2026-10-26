@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 
 import { getMyProfile, type Profile } from "../profiles";
 import { supabase } from "../supabase";
+import type { EntitySuggestion } from "./entities";
 import type { IpoCommunityPage, PublicCommunity } from "./ipoCommunity";
+import { toMentionInputs, type MentionPick } from "./mentionInput";
 import type { Sentiment } from "./rules";
 import type { PostView, SentimentSummary, TrendingSymbol } from "./types";
 
@@ -54,15 +56,17 @@ export async function publishPost(input: {
   symbol?: string;
   ipoId?: string;
   parentId?: string;
+  mentions?: MentionPick[];
 }): Promise<{ post: PostView } | ApiError> {
   const token = await accessToken();
   if (!token) return { error: "Sign in to post.", code: "SIGNED_OUT" };
 
+  const { mentions, ...rest } = input;
   try {
     const response = await fetch("/api/community/posts", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...rest, ...(mentions?.length ? { mentions: toMentionInputs(mentions) } : {}) }),
     });
     const data = await response.json();
     return data?.success
@@ -70,6 +74,38 @@ export async function publishPost(input: {
       : { error: data?.error ?? "Couldn't publish your post.", code: data?.code };
   } catch {
     return { error: "Couldn't publish your post. Check your connection." };
+  }
+}
+
+/** Edit your own post: its text and its mentions (sent as a whole). */
+export async function editMyPost(input: { id: string; body: string; mentions: MentionPick[] }): Promise<{ post: PostView } | ApiError> {
+  const token = await accessToken();
+  if (!token) return { error: "Sign in to edit.", code: "SIGNED_OUT" };
+
+  try {
+    const response = await fetch("/api/community/posts", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id: input.id, body: input.body, mentions: toMentionInputs(input.mentions) }),
+    });
+    const data = await response.json();
+    return data?.success ? { post: data.post as PostView } : { error: data?.error ?? "Couldn't save your edit.", code: data?.code };
+  } catch {
+    return { error: "Couldn't save your edit. Check your connection." };
+  }
+}
+
+/** The @ autocomplete's suggestions. */
+export async function fetchEntities(query: string, signal?: AbortSignal): Promise<{ results: EntitySuggestion[]; partial: boolean } | ApiError> {
+  try {
+    const response = await fetch(`/api/community/entities?q=${encodeURIComponent(query)}`, { signal });
+    const data = await response.json().catch(() => null);
+    return data?.success
+      ? { results: data.results as EntitySuggestion[], partial: Boolean(data.partial) }
+      : { error: data?.error ?? "Search is unavailable right now." };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    return { error: "Search is unavailable right now." };
   }
 }
 

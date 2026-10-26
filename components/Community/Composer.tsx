@@ -1,17 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import { primaryButtonClass } from "@/components/ui/Page";
-import { publishPost, type CommunityUser } from "@/lib/community/client";
+import MentionField, { type MentionFieldHandle } from "@/components/Community/MentionField";
+import { primaryButtonClass, secondaryButtonClass } from "@/components/ui/Page";
+import { editMyPost, publishPost, type CommunityUser } from "@/lib/community/client";
+import { MAX_PICKS, livePicks, removePick, type MentionPick } from "@/lib/community/mentionInput";
 import { POST_MAX_LENGTH, type Sentiment } from "@/lib/community/rules";
 import type { PostView } from "@/lib/community/types";
 
 /**
- * Write a post (or a reply). The server decides whether it is allowed; this
- * form just says why when it isn't.
+ * Write a post (or a reply), or edit one of yours. The server decides whether
+ * it is allowed; this form just says why when it isn't.
+ *
+ * Stocks and IPOs are tagged with @ (or the "Tag a stock or IPO" button,
+ * which starts an @ at the caret). Each pick is a verified reference the
+ * server checks again; plain "@word" text without a pick stays plain text.
  */
+
+/** A stored post's mentions as picks, for editing. */
+export function picksOf(post: PostView): MentionPick[] {
+  return (post.mentions ?? []).map((m) =>
+    m.kind === "instrument"
+      ? { kind: "instrument", id: m.id, type: m.type, text: post.body.slice(m.start, m.end), name: m.name, detail: `${m.symbol} · ${m.exchange}` }
+      : { kind: "ipo", ipoId: m.ipoId, text: post.body.slice(m.start, m.end), name: m.name, detail: "IPO" }
+  );
+}
+
 export default function Composer({
   user,
   symbol,
@@ -20,7 +36,9 @@ export default function Composer({
   parentId,
   placeholder,
   compact = false,
+  editing,
   onPosted,
+  onCancel,
 }: {
   user: CommunityUser;
   symbol?: string;
@@ -31,12 +49,17 @@ export default function Composer({
   parentId?: string;
   placeholder?: string;
   compact?: boolean;
+  /** Edit this post (yours) instead of writing a new one. */
+  editing?: PostView;
   onPosted: (post: PostView) => void;
+  onCancel?: () => void;
 }) {
-  const [body, setBody] = useState("");
+  const [body, setBody] = useState(editing?.body ?? "");
+  const [picks, setPicks] = useState<MentionPick[]>(() => (editing ? picksOf(editing) : []));
   const [sentiment, setSentiment] = useState<Sentiment | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
+  const field = useRef<MentionFieldHandle>(null);
 
   if (user.status === "loading") {
     return <div className={`animate-pulse rounded-2xl bg-[#111] ${compact ? "h-12" : "h-32"}`} />;
@@ -65,12 +88,18 @@ export default function Composer({
     );
   }
 
+  const live = livePicks(body, picks);
+  const isEdit = Boolean(editing);
+  const topLevel = !parentId && !(editing?.parentId);
+
   async function submit() {
     if (!body.trim() || posting) return;
     setPosting(true);
     setError(null);
 
-    const result = await publishPost({ body, sentiment: parentId ? null : sentiment, symbol, ipoId, parentId });
+    const result = editing
+      ? await editMyPost({ id: editing.id, body, mentions: live })
+      : await publishPost({ body, sentiment: parentId ? null : sentiment, symbol, ipoId, parentId, mentions: live });
 
     setPosting(false);
     if ("error" in result) {
@@ -78,8 +107,11 @@ export default function Composer({
       return;
     }
 
-    setBody("");
-    setSentiment(null);
+    if (!editing) {
+      setBody("");
+      setPicks([]);
+      setSentiment(null);
+    }
     onPosted(result.post);
   }
 
@@ -99,28 +131,57 @@ export default function Composer({
             {user.profile.display_name.charAt(0).toUpperCase()}
           </span>
         )}
-        <textarea
+        <MentionField
+          ref={field}
           value={body}
-          onChange={(e) => {
-            setBody(e.target.value);
+          onChange={(next) => {
+            setBody(next);
             setError(null);
           }}
+          picks={picks}
+          onPicksChange={setPicks}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+            if (e.key === "Escape" && editing) onCancel?.();
           }}
           maxLength={POST_MAX_LENGTH}
           rows={compact ? 1 : 3}
           placeholder={
             placeholder ??
-            (symbol || (ipoId && label) ? `What's your view on ${label ?? symbol}?` : "Share your view. Tag stocks with $ and the ticker, e.g. $TCS")
+            (symbol || (ipoId && label)
+              ? `What's your view on ${label ?? symbol}? Type @ to tag a stock or IPO`
+              : "Share your view. Type @ to tag a stock or IPO, e.g. @SBIN")
           }
-          aria-label={parentId ? "Write a reply" : "Write a post"}
+          aria-label={isEdit ? "Edit your post" : parentId ? "Write a reply" : "Write a post"}
           className="min-h-[2.5rem] w-full resize-y bg-transparent text-[15px] leading-relaxed text-white outline-none placeholder:text-[#666]"
         />
       </div>
 
+      {live.length > 0 && (
+        <ul aria-label="Tagged" className="mt-2 flex flex-wrap gap-1.5">
+          {live.map((pick, index) => (
+            <li key={`${pick.kind}:${pick.kind === "ipo" ? pick.ipoId : pick.id}:${index}`} className="flex max-w-full items-center gap-1 rounded-full border border-[#2a2a2a] bg-[#151515] py-0.5 pl-2.5 pr-1 text-xs">
+              <span className={pick.kind === "ipo" ? "text-[#fbbf24]" : "text-[#4ade80]"}>{pick.kind === "ipo" ? "IPO" : "Stock"}</span>
+              <span className="truncate text-[#ddd]">{pick.name}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${pick.name}`}
+                onClick={() => {
+                  const next = removePick(body, live, index);
+                  setBody(next.text);
+                  setPicks(next.picks);
+                }}
+                className="rounded-full px-1.5 text-[#888] hover:bg-[#222] hover:text-white"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
       <div className={`mt-3 flex flex-wrap items-center gap-2 ${compact ? "" : "border-t border-[#1d1d1d] pt-3"}`}>
-        {!parentId && (
+        {topLevel && !isEdit && (
           <div role="group" aria-label="Your stance" className="flex gap-1.5">
             {(["bullish", "bearish"] as const).map((value) => {
               const active = sentiment === value;
@@ -146,11 +207,27 @@ export default function Composer({
           </div>
         )}
 
+        {!compact && (
+          <button
+            type="button"
+            onClick={() => field.current?.startMention()}
+            disabled={live.length >= MAX_PICKS}
+            className="rounded-full border border-[#2a2a2a] px-3 py-1 text-xs font-semibold text-[#999] transition-colors hover:border-[#3a3a3a] hover:text-white disabled:opacity-40"
+          >
+            ＠ Tag a stock or IPO
+          </button>
+        )}
+
         <span className={`ml-auto text-xs tabular-nums ${remaining < 50 ? "text-[#f59e0b]" : "text-[#666]"}`}>
           {remaining}
         </span>
+        {isEdit && (
+          <button type="button" onClick={onCancel} className={`${secondaryButtonClass} !py-1.5`}>
+            Cancel
+          </button>
+        )}
         <button type="submit" disabled={!body.trim() || posting} className={`${primaryButtonClass} !py-1.5`}>
-          {posting ? "Posting…" : parentId ? "Reply" : "Post"}
+          {posting ? (isEdit ? "Saving…" : "Posting…") : isEdit ? "Save" : parentId ? "Reply" : "Post"}
         </button>
       </div>
 

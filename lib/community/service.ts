@@ -2,11 +2,14 @@ import { getAdminClient, getPublicClient } from "../supabase/server";
 import { isValidSymbol } from "../validation/symbol";
 import { stockBoardSymbol } from "./communities";
 import type { CommunityResolver } from "./ipoCommunity";
+import { parseMentionInputs, readMentions, resolveMentions, type MentionResolver, type StoredMention } from "./mentions";
 import {
   LINK_UNLOCK_DAYS,
+  MAX_SYMBOLS,
   accountAgeDays,
   checkContent,
   checkRate,
+  extractCashtags,
   normaliseForDuplicate,
   postSymbols,
   type Sentiment,
@@ -31,6 +34,28 @@ export type NewPostRow = {
   parent_id: string | null;
   /** Only set when the post belongs to a community (communities migration). */
   community_id?: string;
+  /** Only set when the post has verified @mentions (post_mentions migration). */
+  mentions?: StoredMention[];
+  mention_community_ids?: string[];
+};
+
+/** What an author's edit changes. Mentions are replaced as a whole. */
+export type PostEdit = {
+  body: string;
+  symbols: string[];
+  mentions: StoredMention[];
+  mention_community_ids: string[];
+  edited_at: string;
+};
+
+/** The fields an edit needs to check ownership and recompute symbols. */
+export type EditablePost = {
+  authorId: string;
+  parentId: string | null;
+  body: string;
+  symbols: string[];
+  mentions: StoredMention[];
+  hidden: boolean;
 };
 
 /** A community's feed: its own posts, plus (once listed) posts tagged with its ticker. */
@@ -58,6 +83,9 @@ export interface CommunityStore {
   listPosts(query: ListQuery): Promise<PostView[]>;
   sentiment(scope: string | CommunityScope, sinceIso: string): Promise<Omit<SentimentSummary, "symbol" | "windowDays">>;
   recentSymbols(sinceIso: string, limit: number): Promise<string[][]>;
+  /** Edits (post_mentions migration). Optional so older fakes and stores still type-check. */
+  getPostForEdit?(postId: string): Promise<EditablePost | null>;
+  updatePost?(postId: string, authorId: string, edit: PostEdit): Promise<PostView | null>;
 }
 
 export type CreatePostInput = {
@@ -68,6 +96,8 @@ export type CreatePostInput = {
   parentId?: unknown;
   /** An Upstox IPO id: post in that IPO's community. */
   ipoId?: unknown;
+  /** Picks from the @ autocomplete: [{ kind, id | ipoId, text }]. */
+  mentions?: unknown;
 };
 
 export type CreatePostResult =
@@ -80,7 +110,8 @@ export async function createPost(
   input: CreatePostInput,
   store: CommunityStore | null,
   now: number = Date.now(),
-  communities: CommunityResolver | null = null
+  communities: CommunityResolver | null = null,
+  mentionResolver: MentionResolver | null = null
 ): Promise<CreatePostResult> {
   if (!store) {
     return { ok: false, status: 503, error: "Posting isn't set up yet.", code: "NOT_CONFIGURED" };
@@ -117,6 +148,9 @@ export async function createPost(
   if (input.ipoId !== undefined && input.ipoId !== null && !ipoId) {
     return { ok: false, status: 400, error: "Unknown IPO." };
   }
+
+  const mentionInputs = parseMentionInputs(input.mentions);
+  if (!mentionInputs.ok) return mentionInputs;
 
   let parentId: string | null = null;
   let parentSymbols: string[] = [];
@@ -168,9 +202,13 @@ export async function createPost(
     communityId = (await communities.forBoard(board))?.id ?? null;
   }
 
-  const symbols = parentId
-    ? Array.from(new Set([...parentSymbols, ...postSymbols(content.body)])).slice(0, 5)
-    : postSymbols(content.body, board ?? communityBoard);
+  // Mentions are verified against real records (and an IPO's community is
+  // created, like a first post in it) only once the post is otherwise fine.
+  const mentioned = await resolveMentions(mentionInputs.inputs, content.body, mentionResolver);
+  if (!mentioned.ok) return mentioned;
+
+  const base = parentId ? parentSymbols : [board ?? communityBoard].filter((s): s is string => Boolean(s));
+  const symbols = Array.from(new Set([...base, ...mentioned.symbols, ...postSymbols(content.body)])).slice(0, MAX_SYMBOLS);
 
   const post = await store.insertPost({
     author_id: author.id,
@@ -180,22 +218,94 @@ export async function createPost(
     symbols,
     parent_id: parentId,
     ...(communityId ? { community_id: communityId } : {}),
+    ...(mentioned.mentions.length ? { mentions: mentioned.mentions, mention_community_ids: mentioned.communityIds } : {}),
   });
 
   return { ok: true, post };
+}
+
+export type EditPostInput = { token: string | null; postId: unknown; body: unknown; mentions?: unknown };
+
+/**
+ * An author edits their own post: the text, and the mentions (kept, removed
+ * or replaced — whatever the edited composer sends). The same content rules
+ * as a new post apply. The board the post was written on, its sentiment, its
+ * community and its replies are unchanged.
+ */
+export async function editPost(
+  input: EditPostInput,
+  store: CommunityStore | null,
+  now: number = Date.now(),
+  mentionResolver: MentionResolver | null = null
+): Promise<CreatePostResult> {
+  if (!store?.getPostForEdit || !store.updatePost) {
+    return { ok: false, status: 503, error: "Editing isn't switched on yet.", code: "NOT_CONFIGURED" };
+  }
+  if (!input.token) return { ok: false, status: 401, error: "Sign in to edit.", code: "SIGNED_OUT" };
+
+  const userId = await store.verifyToken(input.token);
+  if (!userId) return { ok: false, status: 401, error: "Your session expired. Please sign in again.", code: "SIGNED_OUT" };
+
+  if (typeof input.postId !== "string" || !UUID.test(input.postId)) return { ok: false, status: 400, error: "Invalid post." };
+  if (typeof input.body !== "string") return { ok: false, status: 400, error: "Write something first." };
+
+  const mentionInputs = parseMentionInputs(input.mentions);
+  if (!mentionInputs.ok) return mentionInputs;
+
+  const existing = await store.getPostForEdit(input.postId);
+  // Someone else's post looks the same as a missing one.
+  if (!existing || existing.hidden || existing.authorId !== userId) {
+    return { ok: false, status: 404, error: "That post no longer exists." };
+  }
+
+  const author = await store.getAuthor(userId);
+  if (!author) return { ok: false, status: 403, error: "Pick your @handle before posting.", code: "NO_PROFILE" };
+
+  const content = checkContent(input.body, accountAgeDays(author.createdAt, now) >= LINK_UNLOCK_DAYS);
+  if (!content.ok) return { ok: false, status: 422, error: content.reason, code: "RULES" };
+
+  const mentioned = await resolveMentions(mentionInputs.inputs, content.body, mentionResolver);
+  if (!mentioned.ok) return mentioned;
+
+  // What the old text added (cashtags, mentions) goes; the rest is the board
+  // (or the parent's symbols) and stays.
+  const derived = new Set([
+    ...extractCashtags(existing.body),
+    ...existing.mentions.flatMap((m) => (m.kind === "instrument" ? [m.symbol] : [])),
+  ]);
+  const kept = existing.symbols.filter((s) => !derived.has(s));
+  const symbols = Array.from(new Set([...kept, ...mentioned.symbols, ...extractCashtags(content.body)])).slice(0, MAX_SYMBOLS);
+
+  const post = await store.updatePost(input.postId, userId, {
+    body: content.body,
+    symbols,
+    mentions: mentioned.mentions,
+    mention_community_ids: mentioned.communityIds,
+    edited_at: new Date(now).toISOString(),
+  });
+  return post ? { ok: true, post } : { ok: false, status: 404, error: "That post no longer exists." };
 }
 
 /* ------------------------------------------------------------------ */
 /* Supabase-backed store                                               */
 /* ------------------------------------------------------------------ */
 
-const POST_COLUMNS =
-  "id, body, sentiment, symbols, parent_id, like_count, reply_count, created_at, author:profiles!posts_author_id_fkey(username, display_name, avatar_url, role, pred_resolved, pred_wins, pred_points)";
+const BASE_COLUMNS = "id, body, sentiment, symbols, parent_id, like_count, reply_count, created_at";
+const AUTHOR = "author:profiles!posts_author_id_fkey(username, display_name, avatar_url, role, pred_resolved, pred_wins, pred_points)";
+const AUTHOR_BASIC = "author:profiles!posts_author_id_fkey(username, display_name, avatar_url, role)";
 
-// The same without the prediction counters, for a database where the
-// predictions migration hasn't been applied yet (42703 = undefined column).
-const POST_COLUMNS_BASIC =
-  "id, body, sentiment, symbols, parent_id, like_count, reply_count, created_at, author:profiles!posts_author_id_fkey(username, display_name, avatar_url, role)";
+/**
+ * Column sets from newest schema to oldest, each with whether the mention
+ * filter can be used. A database missing a later migration answers 42703
+ * (undefined column) and the next set is tried, so boards keep working while
+ * a migration waits for approval.
+ */
+const COLUMN_SETS: { columns: string; mentions: boolean }[] = [
+  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true },
+  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false },
+];
 
 const UNDEFINED_COLUMN = "42703";
 
@@ -218,6 +328,9 @@ type PostRow = {
   like_count: number;
   reply_count: number;
   created_at: string;
+  community_id?: string | null;
+  mentions?: unknown;
+  edited_at?: string | null;
   author: AuthorJoin | AuthorJoin[] | null;
 };
 
@@ -229,6 +342,9 @@ export function toPostView(row: PostRow): PostView {
     body: row.body,
     sentiment: row.sentiment,
     symbols: row.symbols ?? [],
+    communityId: row.community_id ?? null,
+    mentions: readMentions(row.mentions, row.body),
+    editedAt: row.edited_at ?? null,
     parentId: row.parent_id,
     likeCount: row.like_count,
     replyCount: row.reply_count,
@@ -251,11 +367,19 @@ export function toPostView(row: PostRow): PostView {
  * PostgREST filter for a community's feed. Symbols have passed isValidSymbol
  * (letters, digits, ".", "&", "-") and are quoted, so none can break out.
  */
-export function scopeFilter({ communityId, anySymbols }: CommunityScope): string {
+export function scopeFilter({ communityId, anySymbols }: CommunityScope, withMentions = false): string {
   if (!UUID.test(communityId)) throw new Error("Invalid community id");
-  const own = `community_id.eq.${communityId}`;
+  // Posts written in the community, and (post_mentions migration) posts that @mention it.
+  const own = withMentions ? `community_id.eq.${communityId},mention_community_ids.cs.{${communityId}}` : `community_id.eq.${communityId}`;
   const tags = anySymbols.filter(isValidSymbol);
   return tags.length ? `${own},symbols.ov.{${tags.map((s) => `"${s}"`).join(",")}}` : own;
+}
+
+/** Try each column set until the database knows all its columns. */
+async function withFallback<T extends { error: { code?: string } | null }>(run: (set: (typeof COLUMN_SETS)[number]) => PromiseLike<T>): Promise<T> {
+  let result = await run(COLUMN_SETS[0]);
+  for (let i = 1; i < COLUMN_SETS.length && result.error?.code === UNDEFINED_COLUMN; i++) result = await run(COLUMN_SETS[i]);
+  return result;
 }
 
 export function getSupabaseStore(): CommunityStore | null {
@@ -263,14 +387,14 @@ export function getSupabaseStore(): CommunityStore | null {
   const reader = getPublicClient();
   if (!admin || !reader) return null;
 
-  function listWith(columns: string, { symbol, community, parentId, sentiment, before, limit }: ListQuery) {
+  function listWith({ columns, mentions }: (typeof COLUMN_SETS)[number], { symbol, community, parentId, sentiment, before, limit }: ListQuery) {
     let query = reader!.from("posts").select(columns);
 
     query = parentId
       ? query.eq("parent_id", parentId).order("created_at", { ascending: true })
       : query.is("parent_id", null).order("created_at", { ascending: false });
 
-    if (community) query = query.or(scopeFilter(community));
+    if (community) query = query.or(scopeFilter(community, mentions));
     else if (symbol) query = query.contains("symbols", [symbol]);
     if (sentiment) query = query.eq("sentiment", sentiment);
     if (before) query = query.lt("created_at", before);
@@ -334,37 +458,62 @@ export function getSupabaseStore(): CommunityStore | null {
       const { data, error } = await admin.from("posts").insert(row).select("id").single();
       if (error) throw error;
 
-      let full = await admin.from("posts").select(POST_COLUMNS).eq("id", data.id).single();
-      if (full.error?.code === UNDEFINED_COLUMN) {
-        full = await admin.from("posts").select(POST_COLUMNS_BASIC).eq("id", data.id).single();
-      }
+      const full = await withFallback(({ columns }) => admin.from("posts").select(columns).eq("id", data.id).single());
       if (full.error) throw full.error;
       return toPostView(full.data as unknown as PostRow);
     },
 
     async listPosts(query) {
-      const result = await listWith(POST_COLUMNS, query);
-      return result.error?.code === UNDEFINED_COLUMN ? unwrap(await listWith(POST_COLUMNS_BASIC, query)) : unwrap(result);
+      return unwrap(await withFallback((set) => listWith(set, query)));
+    },
+
+    async getPostForEdit(postId) {
+      const { data, error } = await admin
+        .from("posts")
+        .select("author_id, parent_id, body, symbols, mentions, hidden")
+        .eq("id", postId)
+        .maybeSingle();
+      if (error) throw error;
+      return data
+        ? {
+            authorId: data.author_id,
+            parentId: data.parent_id,
+            body: data.body,
+            symbols: data.symbols ?? [],
+            mentions: readMentions(data.mentions, data.body),
+            hidden: data.hidden,
+          }
+        : null;
+    },
+
+    async updatePost(postId, authorId, edit) {
+      // Ownership is in the filter too: a row that changed hands updates nothing.
+      const { data, error } = await admin.from("posts").update(edit).eq("id", postId).eq("author_id", authorId).eq("hidden", false).select("id");
+      if (error) throw error;
+      if (!data?.length) return null;
+      const full = await withFallback(({ columns }) => admin.from("posts").select(columns).eq("id", postId).single());
+      if (full.error) throw full.error;
+      return toPostView(full.data as unknown as PostRow);
     },
 
     async sentiment(scope, sinceIso) {
-      const base = () => {
-        const query = reader
-          .from("posts")
-          .select("id", { count: "exact", head: true })
-          .is("parent_id", null)
-          .gte("created_at", sinceIso);
-        return typeof scope === "string" ? query.contains("symbols", [scope]) : query.or(scopeFilter(scope));
+      const count = async (withMentions: boolean) => {
+        const base = () => {
+          const query = reader
+            .from("posts")
+            .select("id", { count: "exact", head: true })
+            .is("parent_id", null)
+            .gte("created_at", sinceIso);
+          return typeof scope === "string" ? query.contains("symbols", [scope]) : query.or(scopeFilter(scope, withMentions));
+        };
+        const [bull, bear, all] = await Promise.all([base().eq("sentiment", "bullish"), base().eq("sentiment", "bearish"), base()]);
+        return { bull, bear, all, error: bull.error ?? bear.error ?? all.error };
       };
 
-      const [bull, bear, all] = await Promise.all([
-        base().eq("sentiment", "bullish"),
-        base().eq("sentiment", "bearish"),
-        base(),
-      ]);
-      const error = bull.error ?? bear.error ?? all.error;
-      if (error) throw error;
-      return { bullish: bull.count ?? 0, bearish: bear.count ?? 0, total: all.count ?? 0 };
+      let result = await count(typeof scope !== "string");
+      if (result.error?.code === UNDEFINED_COLUMN && typeof scope !== "string") result = await count(false);
+      if (result.error) throw result.error;
+      return { bullish: result.bull.count ?? 0, bearish: result.bear.count ?? 0, total: result.all.count ?? 0 };
     },
 
     async recentSymbols(sinceIso, limit) {
