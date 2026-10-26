@@ -244,7 +244,9 @@ export default function SearchBox({
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     // Home/End move the caret in the text until the list is open.
     const listKey = event.key === "ArrowDown" || event.key === "ArrowUp" || (open && (event.key === "Home" || event.key === "End"));
-    const moved = listKey ? nextActiveIndex(event.key, active, list.length) : undefined;
+    // Reopening a closed list starts from the top (or bottom), not from where
+    // the highlight was before Esc.
+    const moved = listKey ? nextActiveIndex(event.key, open ? active : -1, list.length) : undefined;
     if (moved !== undefined) {
       event.preventDefault();
       setOpen(true);

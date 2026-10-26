@@ -82,6 +82,24 @@ test("SBI: State Bank of India first, then SBI Life, SBI Cards and SBI Funds, ea
   assert.equal(results.find((r) => r.symbol === "SBICARD")?.href, "/stock/SBICARD.NS");
 });
 
+test("two characters already search the providers: SB lists the SBI companies, stocks-only for a Stock field", async () => {
+  let asked = 0;
+  const search = createInstrumentSearch(
+    deps({
+      searchIndian: async () => {
+        asked++;
+        return UPSTOX_ROWS;
+      },
+    })
+  );
+  const symbols = symbolsOf((await search("SB", 10, { types: ["stock"] })).results);
+  assert.equal(asked, 1);
+  for (const symbol of ["SBIN", "SBILIFE", "SBICARD", "SBIFUNDS"]) assert.ok(symbols.includes(symbol), symbol);
+  assert.ok(!symbols.includes("SBISILVER"), "an ETF isn't offered to a Stock field");
+  // DSBX matches on its ticker containing SB, but ranks below every ticker starting with SB.
+  assert.ok(symbols.indexOf("DSBX") === -1 || symbols.indexOf("DSBX") > symbols.indexOf("SBIFUNDS"));
+});
+
 test("name, partial and case-insensitive matches: state bank, sbi life, sbin", async () => {
   const search = createInstrumentSearch(deps());
 
