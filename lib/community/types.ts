@@ -47,9 +47,17 @@ export type PostView = {
   body: string;
   sentiment: Sentiment | null;
   symbols: string[];
+  /** The post or comment this one directly answers; null for a top-level post. */
   parentId: string | null;
+  /** A comment's top-level post (null for a top-level post). */
+  rootId?: string | null;
   likeCount: number;
+  /** Direct replies. */
   replyCount: number;
+  /** On a top-level post: comments in its thread at any depth. */
+  commentCount?: number;
+  /** A deleted comment kept so its replies keep their place: no text or author. */
+  deleted?: boolean;
   createdAt: string;
   author: {
     username: string;
