@@ -61,10 +61,23 @@ export type EditablePost = {
 /** A community's feed: its own posts, plus (once listed) posts tagged with its ticker. */
 export type CommunityScope = { communityId: string; anySymbols: string[] };
 
+/**
+ * The community floor's asset filter, from stored relations only:
+ *   stock  posts tagged with a listed instrument (posts.symbols — stock
+ *          boards, $CASHTAGS, @mentions of stocks, ETFs, indices, crypto)
+ *   ipo    posts written in an IPO's community or that @mention an IPO
+ *   bond   posts that @mention a bond
+ */
+export type AssetFilter = "stock" | "ipo" | "bond";
+
+export const ASSET_FILTERS: readonly AssetFilter[] = ["stock", "ipo", "bond"];
+
 export type ListQuery = {
   symbol?: string;
   /** Overrides `symbol` when set. */
   community?: CommunityScope;
+  /** Only on the floor (no symbol, community or parent). */
+  asset?: AssetFilter;
   parentId?: string;
   sentiment?: Sentiment;
   before?: string;
@@ -300,12 +313,27 @@ const AUTHOR_BASIC = "author:profiles!posts_author_id_fkey(username, display_nam
  * (undefined column) and the next set is tried, so boards keep working while
  * a migration waits for approval.
  */
-const COLUMN_SETS: { columns: string; mentions: boolean }[] = [
-  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true },
-  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false },
-  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false },
-  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false },
+const COLUMN_SETS: { columns: string; mentions: boolean; community: boolean }[] = [
+  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true },
+  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false, community: true },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false, community: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false, community: false },
 ];
+
+/** Matches no row: a filter the schema can't answer yet has no posts. */
+const NONE = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * The asset filter as PostgREST filters. Fixed strings only — nothing from
+ * the request is interpolated. jsonb containment (mentions @> …) uses the
+ * GIN index from the bond_communities migration.
+ */
+export function assetFilter(asset: AssetFilter, set: { mentions: boolean; community: boolean }): { column: string; op: string; value: string } | { or: string } {
+  if (asset === "stock") return { column: "symbols", op: "not.eq", value: "{}" };
+  if (asset === "bond") return set.mentions ? { column: "mentions", op: "cs", value: '[{"kind":"bond"}]' } : { column: "id", op: "eq", value: NONE };
+  if (set.mentions) return { or: 'community_id.not.is.null,mentions.cs.[{"kind":"ipo"}]' };
+  return set.community ? { column: "community_id", op: "not.is", value: "null" } : { column: "id", op: "eq", value: NONE };
+}
 
 const UNDEFINED_COLUMN = "42703";
 
@@ -387,7 +415,8 @@ export function getSupabaseStore(): CommunityStore | null {
   const reader = getPublicClient();
   if (!admin || !reader) return null;
 
-  function listWith({ columns, mentions }: (typeof COLUMN_SETS)[number], { symbol, community, parentId, sentiment, before, limit }: ListQuery) {
+  function listWith(set: (typeof COLUMN_SETS)[number], { symbol, community, asset, parentId, sentiment, before, limit }: ListQuery) {
+    const { columns, mentions } = set;
     let query = reader!.from("posts").select(columns);
 
     query = parentId
@@ -396,6 +425,10 @@ export function getSupabaseStore(): CommunityStore | null {
 
     if (community) query = query.or(scopeFilter(community, mentions));
     else if (symbol) query = query.contains("symbols", [symbol]);
+    else if (asset && !parentId) {
+      const filter = assetFilter(asset, set);
+      query = "or" in filter ? query.or(filter.or) : query.filter(filter.column, filter.op, filter.value);
+    }
     if (sentiment) query = query.eq("sentiment", sentiment);
     if (before) query = query.lt("created_at", before);
 

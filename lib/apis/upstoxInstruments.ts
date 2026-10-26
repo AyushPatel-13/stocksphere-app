@@ -22,6 +22,8 @@ export type InstrumentRow = {
   instrumentKey: string;
   instrumentType: string | null;
   name: string | null;
+  /** Upstox's short name; for a corporate bond often the issuer ("REC"). */
+  shortName?: string | null;
 };
 
 export type InstrumentSearch = { ok: true; rows: InstrumentRow[] } | { ok: false; code: UpstoxErrorCode };
@@ -49,16 +51,28 @@ export function parseInstrumentSearch(body: unknown): InstrumentRow[] | null {
       instrumentKey,
       instrumentType: text(r.instrument_type),
       name: text(r.name),
+      shortName: text(r.short_name),
     });
   }
   return rows;
 }
 
-export async function searchInstrumentsByIsin(isin: string, exchange: "NSE" | "BSE"): Promise<InstrumentSearch> {
+export function searchInstrumentsByIsin(isin: string, exchange: "NSE" | "BSE"): Promise<InstrumentSearch> {
+  return searchCashSegment(isin, exchange);
+}
+
+/**
+ * Free-text search of the NSE/BSE cash segment (EQ), where Upstox also lists
+ * government securities, T-bills, gold bonds and corporate bonds — each row
+ * with its ISIN. Verified on 2026-10-26: "GOI 2034" → GOI LOAN … 2034 rows
+ * (instrument_type GS on NSE, G on BSE); "INE062A08" (an issuer's ISIN
+ * prefix) → that issuer's bonds. Fuzzy: callers filter the rows themselves.
+ */
+export async function searchCashSegment(query: string, exchanges: "NSE" | "BSE" | "NSE,BSE" = "NSE,BSE"): Promise<InstrumentSearch> {
   const token = process.env.UPSTOX_ACCESS_TOKEN;
   if (!token) return { ok: false, code: "not_configured" };
 
-  const params = new URLSearchParams({ query: isin, exchanges: exchange, segments: "EQ", page_number: "1", records: "30" });
+  const params = new URLSearchParams({ query, exchanges, segments: "EQ", page_number: "1", records: "30" });
 
   try {
     const response = await upstoxFetch(`https://api.upstox.com/v2/instruments/search?${params.toString()}`, {

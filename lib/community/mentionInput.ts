@@ -13,7 +13,8 @@ export const MAX_PICKS = 5;
 /** What the member picked, as sent to the server (which verifies it). */
 export type MentionPick =
   | { kind: "instrument"; id: string; type: InstrumentType; text: string; name: string; detail: string }
-  | { kind: "ipo"; ipoId: string; text: string; name: string; detail: string };
+  | { kind: "ipo"; ipoId: string; text: string; name: string; detail: string }
+  | { kind: "bond"; isin: string; text: string; name: string; detail: string };
 
 /** A query may hold the characters names and tickers use, and single spaces. */
 const QUERY_CHARS = /^[A-Za-z0-9&.'-]*(?: [A-Za-z0-9&.'-]+)*( )?$/;
@@ -34,9 +35,9 @@ export function activeMention(text: string, caret: number): { start: number; que
   return { start: at, query };
 }
 
-/** The readable text a pick inserts: "@SBIN", "@Tonbo Imaging India IPO". */
-export function mentionTextFor(pick: { kind: "instrument"; symbol: string } | { kind: "ipo"; name: string }): string {
-  const raw = pick.kind === "instrument" ? pick.symbol : pick.name;
+/** The readable text a pick inserts: "@SBIN", "@Tonbo Imaging India IPO", "@718GS2033" (a bond's exchange symbol). */
+export function mentionTextFor(pick: { kind: "instrument" | "bond"; symbol: string } | { kind: "ipo"; name: string }): string {
+  const raw = pick.kind === "ipo" ? pick.name : pick.symbol;
   return `@${raw.replace(/[\r\n@]+/g, " ").replace(/\s+/g, " ").trim()}`.slice(0, 80);
 }
 
@@ -92,6 +93,15 @@ export function removePick(text: string, picks: MentionPick[], index: number): {
 /** The request body's `mentions`. */
 export function toMentionInputs(picks: MentionPick[]) {
   return picks.map((pick) =>
-    pick.kind === "instrument" ? { kind: "instrument", id: pick.id, type: pick.type, text: pick.text } : { kind: "ipo", ipoId: pick.ipoId, text: pick.text }
+    pick.kind === "instrument"
+      ? { kind: "instrument", id: pick.id, type: pick.type, text: pick.text }
+      : pick.kind === "bond"
+        ? { kind: "bond", isin: pick.isin, text: pick.text }
+        : { kind: "ipo", ipoId: pick.ipoId, text: pick.text }
   );
+}
+
+/** A stable key for a pick (React lists, de-duplication). */
+export function pickKey(pick: MentionPick): string {
+  return pick.kind === "instrument" ? `instrument:${pick.id}` : pick.kind === "bond" ? `bond:${pick.isin}` : `ipo:${pick.ipoId}`;
 }

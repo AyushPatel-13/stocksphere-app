@@ -1,9 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { bondPath, parseBondQuery, type Bond, type BondCategory } from "../bonds/bonds";
+import { MAX_BOND_SUGGESTIONS, searchBonds, type BondSearch } from "../bonds/catalog";
 import { searchInstruments } from "../search/instruments";
 import { assetLabel, type InstrumentType, type SearchResponse, type SearchResult } from "../search/types";
 import { getIpoBoard, type IpoBoardResult } from "../services/ipo";
 import { getPublicClient } from "../supabase/server";
+import { getBondResolver, type BondResolver } from "./bondCommunity";
 import { COMMUNITY_COLUMNS, stockPath, toCommunity, type Community } from "./communities";
 import { getCommunityResolver, type CommunityResolver } from "./ipoCommunity";
 import { MENTIONABLE_TYPES, type MentionResolver } from "./mentions";
@@ -18,6 +21,8 @@ import type { IpoStatus, PostContext, PostView } from "./types";
  *                whose pages have a discussion board
  *   IPOs         the IPO catalogue (Upstox, lib/services/ipo.ts): open and
  *                upcoming issues
+ *   Bonds        individual NSE/BSE-listed bonds by ISIN (lib/bonds): G-Secs,
+ *                SDLs, T-bills, Sovereign Gold Bonds, corporate bonds
  */
 
 /* ------------------------------------------------------------ autocomplete */
@@ -41,6 +46,20 @@ export type EntitySuggestion =
       status: "open" | "upcoming";
       board: "mainboard" | "sme";
       href: string;
+    }
+  | {
+      kind: "bond";
+      isin: string;
+      /** The exchange trading symbol ("718GS2033"); the mention text. */
+      symbol: string;
+      name: string;
+      issuer: string | null;
+      category: BondCategory;
+      coupon: number | null;
+      maturity: string | null;
+      /** "NSE", "NSE · BSE". */
+      exchange: string;
+      href: string;
     };
 
 export type EntitySearch = {
@@ -58,12 +77,30 @@ const IPO_TIMEOUT_MS = 3_000;
 export interface EntityDeps {
   search: (query: string, limit: number, filters: { types: InstrumentType[] }) => Promise<SearchResponse>;
   ipoBoard: () => Promise<IpoBoardResult>;
+  /** Optional so callers that only need stocks and IPOs can leave it out. */
+  bonds?: (query: string) => Promise<BondSearch>;
 }
 
 export const defaultEntityDeps: EntityDeps = {
   search: (query, limit, filters) => searchInstruments(query, limit, filters),
   ipoBoard: () => getIpoBoard(),
+  bonds: (query) => searchBonds(query),
 };
+
+export function bondSuggestion(bond: Bond): Extract<EntitySuggestion, { kind: "bond" }> {
+  return {
+    kind: "bond",
+    isin: bond.isin,
+    symbol: bond.listings[0]?.symbol ?? bond.isin,
+    name: bond.name,
+    issuer: bond.issuer,
+    category: bond.category,
+    coupon: bond.coupon,
+    maturity: bond.maturity,
+    exchange: bond.listings.map((l) => l.exchange).join(" · "),
+    href: bondPath(bond.isin),
+  };
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([promise.catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
@@ -81,9 +118,10 @@ export function ipoMatches(name: string, symbol: string | null, query: string): 
 export async function searchEntities(rawQuery: string, deps: EntityDeps = defaultEntityDeps): Promise<EntitySearch> {
   const query = rawQuery.trim().replace(/\s+/g, " ").slice(0, ENTITY_QUERY_MAX);
 
-  const [instruments, board] = await Promise.all([
+  const [instruments, board, bondSearch] = await Promise.all([
     deps.search(query, MAX_INSTRUMENT_SUGGESTIONS, { types: [...MENTIONABLE_TYPES] }).catch(() => null),
     withTimeout(deps.ipoBoard(), IPO_TIMEOUT_MS),
+    deps.bonds ? withTimeout(deps.bonds(query), IPO_TIMEOUT_MS) : Promise.resolve<BondSearch>({ bonds: [], partial: false }),
   ]);
 
   const ipos: EntitySuggestion[] =
@@ -105,11 +143,14 @@ export async function searchEntities(rawQuery: string, deps: EntityDeps = defaul
     .filter((r) => (MENTIONABLE_TYPES as readonly string[]).includes(r.type))
     .map((r) => ({ kind: "instrument" as const, id: r.id, type: r.type, symbol: r.symbol, name: r.name, exchange: r.exchange, label: assetLabel(r), href: r.href }));
 
+  const bonds: EntitySuggestion[] = (bondSearch?.bonds ?? []).slice(0, MAX_BOND_SUGGESTIONS).map(bondSuggestion);
+
   return {
     query,
-    // Listed instruments first (the shared search's ranking), then IPOs.
-    results: [...stocks, ...ipos],
-    partial: !instruments || instruments.partial || !board || !board.ok,
+    // Listed instruments first (the shared search's ranking), then IPOs, then
+    // bonds — bonds first when the query asks for one ("GOI 2034", an ISIN).
+    results: parseBondQuery(query)?.explicit ? [...bonds, ...stocks, ...ipos] : [...stocks, ...ipos, ...bonds],
+    partial: !instruments || instruments.partial || !board || !board.ok || !bondSearch || bondSearch.partial,
   };
 }
 
@@ -120,7 +161,11 @@ export async function searchEntities(rawQuery: string, deps: EntityDeps = defaul
  * shared search under the same id; an IPO must be verified with Upstox (the
  * community resolver does that, creating its community on first use).
  */
-export function mentionResolver(communities: CommunityResolver | null, deps: Pick<EntityDeps, "search"> = defaultEntityDeps): MentionResolver {
+export function mentionResolver(
+  communities: CommunityResolver | null,
+  deps: Pick<EntityDeps, "search"> = defaultEntityDeps,
+  bonds: BondResolver | null = null
+): MentionResolver {
   return {
     async instrument(id, type) {
       const symbol = id.slice(id.indexOf(":") + 1);
@@ -140,11 +185,15 @@ export function mentionResolver(communities: CommunityResolver | null, deps: Pic
       if (!communities) return { ok: false, status: 503, error: "IPO communities aren't switched on yet.", code: "NOT_CONFIGURED" };
       return communities.forIpo(ipoId);
     },
+    async bond(isin) {
+      if (!bonds) return { ok: false, status: 503, error: "Bond tagging isn't switched on yet.", code: "NOT_CONFIGURED" };
+      return bonds.forBond(isin);
+    },
   };
 }
 
 export function getMentionResolver(): MentionResolver {
-  return mentionResolver(getCommunityResolver());
+  return mentionResolver(getCommunityResolver(), defaultEntityDeps, getBondResolver());
 }
 
 /* ------------------------------------------------------------ post context */
@@ -174,6 +223,7 @@ export function getContextDeps(): ContextDeps | null {
 
 function statusOf(community: Community, board: IpoBoardResult | null): IpoStatus | null {
   if (community.type === "stock") return "listed";
+  if (community.type !== "ipo") return null;
   const row = board?.ok && community.ipoId ? board.data.ipos.find((r) => r.id === community.ipoId) : undefined;
   if (!row) return null;
   if (row.section === "closed") return row.listingState === "listed" ? "listed" : "closed";
@@ -224,7 +274,7 @@ export async function attachContext(posts: PostView[], deps: ContextDeps | null)
     const context: PostContext[] = [];
     const seen = new Set<string>();
     const home = post.communityId ? communities.get(post.communityId) : undefined;
-    if (home) {
+    if (home && home.type !== "bond") {
       context.push(ipoContext(home, "community"));
       seen.add(home.id);
     }
@@ -234,6 +284,12 @@ export async function attachContext(posts: PostView[], deps: ContextDeps | null)
         if (community && !seen.has(community.id)) {
           context.push(ipoContext(community, "mention"));
           seen.add(community.id);
+        }
+      } else if (m.kind === "bond") {
+        // The verified record stored with the mention; no lookup per post.
+        if (!seen.has(m.communityId)) {
+          context.push({ kind: "bond", communityId: m.communityId, isin: m.isin, name: m.name, issuer: m.issuer, category: m.category, coupon: m.coupon, maturity: m.maturity, href: bondPath(m.isin), via: "mention" });
+          seen.add(m.communityId);
         }
       } else if (!seen.has(m.id)) {
         context.push({ kind: "instrument", id: m.id, type: m.type, name: m.name, symbol: m.symbol, exchange: m.exchange, href: m.href, via: "mention" });

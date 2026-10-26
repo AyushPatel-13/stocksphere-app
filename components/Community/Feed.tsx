@@ -6,6 +6,7 @@ import Composer from "@/components/Community/Composer";
 import PostCard from "@/components/Community/PostCard";
 import { secondaryButtonClass } from "@/components/ui/Page";
 import { fetchPosts, myLikes, type CommunityUser } from "@/lib/community/client";
+import type { MentionPick } from "@/lib/community/mentionInput";
 import type { Sentiment } from "@/lib/community/rules";
 import type { PostView } from "@/lib/community/types";
 
@@ -17,6 +18,28 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: "bearish", label: "🐻 Bearish" },
 ];
 
+type Asset = "all" | "stock" | "ipo" | "bond";
+
+const ASSETS: { id: Asset; label: string; empty: string }[] = [
+  { id: "all", label: "All", empty: "" },
+  { id: "stock", label: "Stocks", empty: "about stocks" },
+  { id: "ipo", label: "IPOs", empty: "about IPOs" },
+  { id: "bond", label: "Bonds", empty: "about bonds" },
+];
+
+/** Whether a post the member just wrote belongs in the filtered list (same rules as the server's). */
+function inAsset(post: PostView, asset: Asset): boolean {
+  if (asset === "all") return true;
+  if (asset === "stock") return post.symbols.length > 0;
+  if (asset === "ipo") return Boolean(post.communityId) || (post.mentions ?? []).some((m) => m.kind === "ipo");
+  return (post.mentions ?? []).some((m) => m.kind === "bond");
+}
+
+const chipClass = (active: boolean) =>
+  `shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
+    active ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-white" : "border-[#2a2a2a] text-[#aaa] hover:border-[#3a3a3a] hover:text-white"
+  }`;
+
 const PAGE = 20;
 
 type State =
@@ -27,12 +50,16 @@ type State =
 
 /**
  * A post box over a stream of posts: one stock's board when `symbol` is set,
- * one IPO's community when `ipoId` is set, otherwise every post on StockSphere.
+ * one IPO's community when `ipoId` is set, the posts that mention a bond when
+ * `bond` is set, otherwise every post on StockSphere — which `assetFilters`
+ * lets people narrow to stocks, IPOs or bonds (the same posts, filtered).
  */
 export default function Feed({
   user,
   symbol,
   ipoId,
+  bond,
+  assetFilters = false,
   label,
   onPosted,
 }: {
@@ -40,11 +67,19 @@ export default function Feed({
   symbol?: string;
   /** An Upstox IPO id: that IPO's community (and, once listed, its stock's posts). */
   ipoId?: string;
+  /** A bond: the posts that @mention it; new posts start with it tagged. */
+  bond?: { isin: string; seed?: MentionPick };
+  /** Show the All / Stocks / IPOs / Bonds filter (the community floor). */
+  assetFilters?: boolean;
   /** How the board's instrument is named to people (e.g. "NIFTY 50"). */
   label?: string;
   onPosted?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
+  const [asset, setAsset] = useState<Asset>("all");
+  const bondIsin = bond?.isin;
+  const scoped = Boolean(symbol || ipoId || bondIsin);
+  const assetParam = !scoped && asset !== "all" ? asset : undefined;
   const [state, setState] = useState<State>({ status: "loading" });
   const [liked, setLikedIds] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
@@ -53,7 +88,7 @@ export default function Feed({
   useEffect(() => {
     let cancelled = false;
 
-    fetchPosts({ symbol, ipo: ipoId, sentiment: filter === "all" ? undefined : filter, limit: PAGE }).then((result) => {
+    fetchPosts({ symbol, ipo: ipoId, bond: bondIsin, asset: assetParam, sentiment: filter === "all" ? undefined : filter, limit: PAGE }).then((result) => {
       if (cancelled) return;
       if ("error" in result) {
         setState({ status: result.code === "NOT_CONFIGURED" ? "not-configured" : "error" });
@@ -65,7 +100,7 @@ export default function Feed({
     return () => {
       cancelled = true;
     };
-  }, [symbol, ipoId, filter, attempt]);
+  }, [symbol, ipoId, bondIsin, assetParam, filter, attempt]);
 
   // Which visible posts the viewer has liked.
   const userId = user.status === "ready" ? user.profile.id : null;
@@ -88,6 +123,8 @@ export default function Feed({
     const result = await fetchPosts({
       symbol,
       ipo: ipoId,
+      bond: bondIsin,
+      asset: assetParam,
       sentiment: filter === "all" ? undefined : filter,
       before: state.posts[state.posts.length - 1].createdAt,
       limit: PAGE,
@@ -104,7 +141,7 @@ export default function Feed({
         <p className="text-2xl" aria-hidden="true">💬</p>
         <p className="mt-3 font-semibold">Discussions are launching soon</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-[#888]">
-          Posting on {symbol || ipoId ? label ?? symbol ?? "this IPO" : "StockSphere"} opens as soon as community accounts are switched on.
+          Posting on {scoped ? label ?? symbol ?? (bondIsin ? "this bond" : "this IPO") : "StockSphere"} opens as soon as community accounts are switched on.
         </p>
       </div>
     );
@@ -116,17 +153,39 @@ export default function Feed({
         user={user}
         symbol={symbol}
         ipoId={ipoId}
+        seed={bond?.seed}
         label={label}
         onPosted={(post) => {
           // A new post shows at the top of the list it belongs in.
-          if (state.status === "ready" && (filter === "all" || post.sentiment === filter)) {
+          const inBond = !bondIsin || (post.mentions ?? []).some((m) => m.kind === "bond" && m.isin === bondIsin);
+          if (state.status === "ready" && (filter === "all" || post.sentiment === filter) && inAsset(post, scoped ? "all" : asset) && inBond) {
             setState({ ...state, posts: [post, ...state.posts] });
           }
           onPosted?.();
         }}
       />
 
-      <div className="mb-3 mt-5 flex items-center gap-2">
+      {assetFilters && !scoped && (
+        <div role="group" aria-label="What posts are about" className="-mx-1 mt-5 flex items-center gap-2 overflow-x-auto px-1 pb-1">
+          {ASSETS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              aria-pressed={asset === entry.id}
+              onClick={() => {
+                if (asset === entry.id) return;
+                setAsset(entry.id);
+                setState({ status: "loading" });
+              }}
+              className={chipClass(asset === entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div role="group" aria-label="Stance" className={`mb-3 flex items-center gap-2 ${assetFilters && !scoped ? "mt-2" : "mt-5"}`}>
         {FILTERS.map((entry) => (
           <button
             key={entry.id}
@@ -137,11 +196,7 @@ export default function Feed({
               setFilter(entry.id);
               setState({ status: "loading" });
             }}
-            className={`rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              filter === entry.id
-                ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-white"
-                : "border-[#2a2a2a] text-[#aaa] hover:border-[#3a3a3a] hover:text-white"
-            }`}
+            className={chipClass(filter === entry.id)}
           >
             {entry.label}
           </button>
@@ -180,10 +235,15 @@ export default function Feed({
         {state.status === "ready" && state.posts.length === 0 && (
           <div className="px-6 py-12 text-center">
             <p className="font-semibold">
-              {filter === "all" ? "No posts yet" : `No ${filter} posts yet`}
+              {filter === "all" ? "No posts" : `No ${filter} posts`}
+              {!scoped && asset !== "all" ? ` ${ASSETS.find((a) => a.id === asset)!.empty}` : ""} yet
             </p>
             <p className="mt-1 text-sm text-[#888]">
-              {symbol || ipoId ? `Be the first to share a view on ${label ?? symbol ?? "this IPO"}.` : "Start the conversation."}
+              {scoped
+                ? `Be the first to share a view on ${label ?? symbol ?? (bondIsin ? "this bond" : "this IPO")}.`
+                : asset === "bond"
+                  ? "Tag a bond with @ (try “GOI 2033” or “REC bond”) to start one."
+                  : "Start the conversation."}
             </p>
           </div>
         )}
@@ -198,6 +258,7 @@ export default function Feed({
                   liked={liked.has(post.id)}
                   boardSymbol={symbol}
                   boardIpoId={ipoId}
+                  boardBondIsin={bondIsin}
                   onDeleted={(id) =>
                     setState({ ...state, posts: state.posts.filter((p) => p.id !== id) })
                   }

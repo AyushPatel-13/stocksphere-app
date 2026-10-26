@@ -6,7 +6,8 @@ import { useRef, useState } from "react";
 import MentionField, { type MentionFieldHandle } from "@/components/Community/MentionField";
 import { primaryButtonClass, secondaryButtonClass } from "@/components/ui/Page";
 import { editMyPost, publishPost, type CommunityUser } from "@/lib/community/client";
-import { MAX_PICKS, livePicks, removePick, type MentionPick } from "@/lib/community/mentionInput";
+import { bondFacts } from "@/lib/bonds/bonds";
+import { MAX_PICKS, livePicks, pickKey, removePick, type MentionPick } from "@/lib/community/mentionInput";
 import { POST_MAX_LENGTH, type Sentiment } from "@/lib/community/rules";
 import type { PostView } from "@/lib/community/types";
 
@@ -14,24 +15,34 @@ import type { PostView } from "@/lib/community/types";
  * Write a post (or a reply), or edit one of yours. The server decides whether
  * it is allowed; this form just says why when it isn't.
  *
- * Stocks and IPOs are tagged with @ (or the "Tag a stock or IPO" button,
- * which starts an @ at the caret). Each pick is a verified reference the
- * server checks again; plain "@word" text without a pick stays plain text.
+ * Stocks, IPOs and bonds are tagged with @ (or the "Tag" button, which
+ * starts an @ at the caret). Each pick is a verified reference the server
+ * checks again; plain "@word" text without a pick stays plain text. A bond's
+ * page passes its bond as `seed`, so a post written there starts out
+ * discussing it (remove the tag to post about something else).
  */
+
+const PICK_LABEL: Record<MentionPick["kind"], { text: string; className: string }> = {
+  instrument: { text: "Stock", className: "text-[#4ade80]" },
+  ipo: { text: "IPO", className: "text-[#fbbf24]" },
+  bond: { text: "Bond", className: "text-[#7dd3fc]" },
+};
 
 /** A stored post's mentions as picks, for editing. */
 export function picksOf(post: PostView): MentionPick[] {
-  return (post.mentions ?? []).map((m) =>
-    m.kind === "instrument"
-      ? { kind: "instrument", id: m.id, type: m.type, text: post.body.slice(m.start, m.end), name: m.name, detail: `${m.symbol} · ${m.exchange}` }
-      : { kind: "ipo", ipoId: m.ipoId, text: post.body.slice(m.start, m.end), name: m.name, detail: "IPO" }
-  );
+  return (post.mentions ?? []).map((m): MentionPick => {
+    const text = post.body.slice(m.start, m.end);
+    if (m.kind === "instrument") return { kind: "instrument", id: m.id, type: m.type, text, name: m.name, detail: `${m.symbol} · ${m.exchange}` };
+    if (m.kind === "bond") return { kind: "bond", isin: m.isin, text, name: m.name, detail: bondFacts(m) };
+    return { kind: "ipo", ipoId: m.ipoId, text, name: m.name, detail: "IPO" };
+  });
 }
 
 export default function Composer({
   user,
   symbol,
   ipoId,
+  seed,
   label,
   parentId,
   placeholder,
@@ -44,6 +55,8 @@ export default function Composer({
   symbol?: string;
   /** Post in this IPO's community (Upstox IPO id). */
   ipoId?: string;
+  /** Start every new post with this pick already tagged (a bond's page). */
+  seed?: MentionPick;
   /** Display name for the board's instrument, used in the prompt. */
   label?: string;
   parentId?: string;
@@ -54,8 +67,9 @@ export default function Composer({
   onPosted: (post: PostView) => void;
   onCancel?: () => void;
 }) {
-  const [body, setBody] = useState(editing?.body ?? "");
-  const [picks, setPicks] = useState<MentionPick[]>(() => (editing ? picksOf(editing) : []));
+  const fresh = () => (seed ? { body: `${seed.text} `, picks: [seed] } : { body: "", picks: [] as MentionPick[] });
+  const [body, setBody] = useState(() => editing?.body ?? fresh().body);
+  const [picks, setPicks] = useState<MentionPick[]>(() => (editing ? picksOf(editing) : fresh().picks));
   const [sentiment, setSentiment] = useState<Sentiment | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
@@ -108,8 +122,9 @@ export default function Composer({
     }
 
     if (!editing) {
-      setBody("");
-      setPicks([]);
+      const next = fresh();
+      setBody(next.body);
+      setPicks(next.picks);
       setSentiment(null);
     }
     onPosted(result.post);
@@ -149,8 +164,8 @@ export default function Composer({
           placeholder={
             placeholder ??
             (symbol || (ipoId && label)
-              ? `What's your view on ${label ?? symbol}? Type @ to tag a stock or IPO`
-              : "Share your view. Type @ to tag a stock or IPO, e.g. @SBIN")
+              ? `What's your view on ${label ?? symbol}? Type @ to tag a stock, IPO or bond`
+              : "Share your view. Type @ to tag a stock, IPO or bond, e.g. @SBIN or @GOI 2033")
           }
           aria-label={isEdit ? "Edit your post" : parentId ? "Write a reply" : "Write a post"}
           className="min-h-[2.5rem] w-full resize-y bg-transparent text-[15px] leading-relaxed text-white outline-none placeholder:text-[#666]"
@@ -160,8 +175,8 @@ export default function Composer({
       {live.length > 0 && (
         <ul aria-label="Tagged" className="mt-2 flex flex-wrap gap-1.5">
           {live.map((pick, index) => (
-            <li key={`${pick.kind}:${pick.kind === "ipo" ? pick.ipoId : pick.id}:${index}`} className="flex max-w-full items-center gap-1 rounded-full border border-[#2a2a2a] bg-[#151515] py-0.5 pl-2.5 pr-1 text-xs">
-              <span className={pick.kind === "ipo" ? "text-[#fbbf24]" : "text-[#4ade80]"}>{pick.kind === "ipo" ? "IPO" : "Stock"}</span>
+            <li key={`${pickKey(pick)}:${index}`} title={pick.detail} className="flex max-w-full items-center gap-1 rounded-full border border-[#2a2a2a] bg-[#151515] py-0.5 pl-2.5 pr-1 text-xs">
+              <span className={PICK_LABEL[pick.kind].className}>{PICK_LABEL[pick.kind].text}</span>
               <span className="truncate text-[#ddd]">{pick.name}</span>
               <button
                 type="button"
@@ -214,7 +229,7 @@ export default function Composer({
             disabled={live.length >= MAX_PICKS}
             className="rounded-full border border-[#2a2a2a] px-3 py-1 text-xs font-semibold text-[#999] transition-colors hover:border-[#3a3a3a] hover:text-white disabled:opacity-40"
           >
-            ＠ Tag a stock or IPO
+            ＠ Tag a stock, IPO or bond
           </button>
         )}
 

@@ -29,6 +29,10 @@ export async function fetchPosts(params: {
   symbol?: string;
   /** An Upstox IPO id: that IPO's community. */
   ipo?: string;
+  /** A bond's ISIN: the posts that mention it. */
+  bond?: string;
+  /** The community floor's asset filter. */
+  asset?: "stock" | "ipo" | "bond";
   parent?: string;
   sentiment?: Sentiment;
   before?: string;
