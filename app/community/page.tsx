@@ -88,7 +88,7 @@ export default function CommunityPage() {
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
-          <Feed user={user} onPosted={() => setRefresh((n) => n + 1)} />
+          <Feed user={user} assetFilters onPosted={() => setRefresh((n) => n + 1)} />
         </div>
 
         <aside className="space-y-6">

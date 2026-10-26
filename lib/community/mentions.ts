@@ -1,17 +1,20 @@
+import { BOND_ISIN, bondPath, isBondIsin, type Bond, type BondCategory } from "../bonds/bonds";
 import type { InstrumentType, SearchResult } from "../search/types";
 import { isValidSymbol } from "../validation/symbol";
+import type { BondResolveResult } from "./bondCommunity";
 import { isIpoId } from "./paths";
 import type { ResolveResult } from "./ipoCommunity";
 
 /**
- * Structured @mentions of instruments and IPOs (supabase/migrations/
- * 20261026000100_post_mentions.sql).
+ * Structured @mentions of instruments, IPOs and bonds (supabase/migrations/
+ * 20261026000100_post_mentions.sql, 20261027000100_bond_communities.sql).
  *
  * The composer sends what the member picked from the @ autocomplete as
- * { kind, id | ipoId, text } — `text` being the readable "@SBIN" it inserted.
+ * { kind, id | ipoId | isin, text } — `text` being the readable "@SBIN" it inserted.
  * The server never trusts names, symbols or statuses from the client: it
  * re-resolves every pick against real records (the shared instrument search,
- * the Upstox-verified IPO community), finds each mention's text in the final
+ * the Upstox-verified IPO community, the bond's exchange listing by ISIN),
+ * finds each mention's text in the final
  * body, and stores identity + position + a display snapshot.
  *
  * Nothing here reads post text to guess an entity: a post names a stock or an
@@ -47,9 +50,32 @@ export type IpoMention = {
   end: number;
 };
 
-export type StoredMention = InstrumentMention | IpoMention;
+/**
+ * A bond, by ISIN — never by the issuer's ticker. The other fields are the
+ * verified exchange record at the time of writing (see lib/bonds/bonds.ts),
+ * null where the record doesn't state them.
+ */
+export type BondMention = {
+  kind: "bond";
+  communityId: string;
+  isin: string;
+  /** The exchange trading symbol the mention text shows ("718GS2033"). */
+  symbol: string;
+  name: string;
+  issuer: string | null;
+  category: BondCategory;
+  coupon: number | null;
+  maturity: string | null;
+  start: number;
+  end: number;
+};
 
-export type MentionInput = { kind: "instrument"; id: string; type: InstrumentType; text: string } | { kind: "ipo"; ipoId: string; text: string };
+export type StoredMention = InstrumentMention | IpoMention | BondMention;
+
+export type MentionInput =
+  | { kind: "instrument"; id: string; type: InstrumentType; text: string }
+  | { kind: "ipo"; ipoId: string; text: string }
+  | { kind: "bond"; isin: string; text: string };
 
 const INSTRUMENT_ID = /^[A-Za-z]{2,10}:[A-Za-z0-9][A-Za-z0-9.&^-]{0,24}$/;
 
@@ -59,7 +85,7 @@ type Fail = { ok: false; status: number; error: string; code?: string };
 export function parseMentionInputs(raw: unknown): { ok: true; inputs: MentionInput[] } | Fail {
   if (raw === undefined || raw === null) return { ok: true, inputs: [] };
   if (!Array.isArray(raw)) return { ok: false, status: 400, error: "Invalid mentions." };
-  if (raw.length > MAX_MENTIONS) return { ok: false, status: 422, error: `Mention at most ${MAX_MENTIONS} stocks or IPOs in a post.`, code: "RULES" };
+  if (raw.length > MAX_MENTIONS) return { ok: false, status: 422, error: `Mention at most ${MAX_MENTIONS} stocks, IPOs or bonds in a post.`, code: "RULES" };
 
   const inputs: MentionInput[] = [];
   for (const item of raw) {
@@ -77,6 +103,9 @@ export function parseMentionInputs(raw: unknown): { ok: true; inputs: MentionInp
     } else if (r.kind === "ipo") {
       if (!isIpoId(r.ipoId)) return { ok: false, status: 400, error: "Invalid mention." };
       inputs.push({ kind: "ipo", ipoId: r.ipoId, text });
+    } else if (r.kind === "bond") {
+      if (!isBondIsin(r.isin)) return { ok: false, status: 400, error: "Invalid mention." };
+      inputs.push({ kind: "bond", isin: r.isin, text });
     } else {
       return { ok: false, status: 400, error: "Invalid mention." };
     }
@@ -124,13 +153,15 @@ export interface MentionResolver {
   instrument(id: string, type: InstrumentType): Promise<{ ok: true; result: SearchResult } | Fail>;
   /** The IPO's community (created on first use, verified with Upstox). */
   ipo(ipoId: string): Promise<ResolveResult>;
+  /** The bond's community and verified record (created on first use, by ISIN). */
+  bond(isin: string): Promise<BondResolveResult>;
 }
 
 export type ResolvedMentions = {
   mentions: StoredMention[];
   /** Board symbols the instrument mentions add to posts.symbols. */
   symbols: string[];
-  /** IPO communities mentioned (posts.mention_community_ids). */
+  /** IPO and bond communities mentioned (posts.mention_community_ids). */
   communityIds: string[];
 };
 
@@ -150,9 +181,11 @@ export async function resolveMentions(
   // Each distinct entity is resolved once, all in parallel.
   const instrumentKeys = [...new Set(inputs.filter((i) => i.kind === "instrument").map((i) => `${i.type}|${i.id}`))];
   const ipoIds = [...new Set(inputs.filter((i) => i.kind === "ipo").map((i) => i.ipoId))];
-  const [instruments, ipos] = await Promise.all([
+  const isins = [...new Set(inputs.filter((i) => i.kind === "bond").map((i) => i.isin))];
+  const [instruments, ipos, bonds] = await Promise.all([
     Promise.all(instrumentKeys.map((key) => resolver.instrument(key.split("|")[1], key.split("|")[0] as InstrumentType))),
     Promise.all(ipoIds.map((id) => resolver.ipo(id))),
+    Promise.all(isins.map((isin) => resolver.bond(isin))),
   ]);
 
   const byInstrument = new Map<string, SearchResult>();
@@ -167,6 +200,12 @@ export async function resolveMentions(
     if (!found.ok) return { ok: false, status: found.status, error: found.error, code: found.code };
     byIpo.set(ipoIds[i], { communityId: found.community.id, name: found.community.name });
   }
+  const byIsin = new Map<string, { communityId: string; bond: Bond }>();
+  for (let i = 0; i < isins.length; i++) {
+    const found = bonds[i];
+    if (!found.ok) return { ok: false, status: found.status, error: found.error, code: found.code };
+    byIsin.set(isins[i], { communityId: found.community.id, bond: found.bond });
+  }
 
   const mentions: StoredMention[] = [];
   const symbols: string[] = [];
@@ -179,10 +218,26 @@ export async function resolveMentions(
       const symbol = boardSymbolOf(result.href) ?? result.symbol;
       mentions.push({ kind: "instrument", id: result.id, type: result.type, symbol, exchange: result.exchange, name: result.name, href: result.href, start, end });
       if (!symbols.includes(symbol)) symbols.push(symbol);
-    } else {
+    } else if (input.kind === "ipo") {
       const ipo = byIpo.get(input.ipoId)!;
       mentions.push({ kind: "ipo", communityId: ipo.communityId, ipoId: input.ipoId, name: ipo.name, start, end });
       if (!communityIds.includes(ipo.communityId)) communityIds.push(ipo.communityId);
+    } else {
+      const { communityId, bond } = byIsin.get(input.isin)!;
+      mentions.push({
+        kind: "bond",
+        communityId,
+        isin: bond.isin,
+        symbol: bond.listings[0]?.symbol ?? bond.isin,
+        name: bond.name,
+        issuer: bond.issuer,
+        category: bond.category,
+        coupon: bond.coupon,
+        maturity: bond.maturity,
+        start,
+        end,
+      });
+      if (!communityIds.includes(communityId)) communityIds.push(communityId);
     }
   });
 
@@ -192,6 +247,7 @@ export async function resolveMentions(
 /* ------------------------------------------------------------ reading */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BOND_CATEGORIES: readonly BondCategory[] = ["government", "state", "tbill", "sgb", "corporate"];
 const str = (v: unknown) => (typeof v === "string" ? v : null);
 
 /**
@@ -228,10 +284,36 @@ export function readMentions(raw: unknown, body: string): StoredMention[] {
       const ipoId = str(r.ipoId);
       if (!communityId || !UUID.test(communityId) || !isIpoId(ipoId)) continue;
       out.push({ kind: "ipo", communityId, ipoId: ipoId!, name: str(r.name) ?? "IPO", start, end });
+    } else if (r.kind === "bond") {
+      const communityId = str(r.communityId);
+      const isin = str(r.isin);
+      const category = BOND_CATEGORIES.find((c) => c === r.category);
+      if (!communityId || !UUID.test(communityId) || !isin || !BOND_ISIN.test(isin) || !category) continue;
+      const maturity = str(r.maturity);
+      out.push({
+        kind: "bond",
+        communityId,
+        isin,
+        symbol: str(r.symbol) ?? isin,
+        name: str(r.name) ?? isin,
+        issuer: str(r.issuer),
+        category,
+        coupon: typeof r.coupon === "number" && Number.isFinite(r.coupon) ? r.coupon : null,
+        maturity: maturity && /^\d{4}(?:-\d{2}-\d{2})?$/.test(maturity) ? maturity : null,
+        start,
+        end,
+      });
     } else {
       continue;
     }
     last = end;
   }
   return out;
+}
+
+/** Where a stored mention links: the instrument's page, the IPO's community, or the bond's page. */
+export function mentionPath(mention: StoredMention, ipoPath: (ipoId: string) => string): string {
+  if (mention.kind === "instrument") return mention.href;
+  if (mention.kind === "bond") return bondPath(mention.isin);
+  return ipoPath(mention.ipoId);
 }

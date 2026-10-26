@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
 
+import { isBondIsin } from "@/lib/bonds/bonds";
+import { getBondResolver, type BondResolver } from "@/lib/community/bondCommunity";
 import { communityScope } from "@/lib/community/communities";
 import { attachContext, getContextDeps, getMentionResolver, type ContextDeps } from "@/lib/community/entities";
 import { getCommunityResolver, type CommunityResolver } from "@/lib/community/ipoCommunity";
 import type { MentionResolver } from "@/lib/community/mentions";
-import { createPost, editPost, getSupabaseStore, type CommunityStore, type ListQuery } from "@/lib/community/service";
+import { ASSET_FILTERS, createPost, editPost, getSupabaseStore, type AssetFilter, type CommunityStore, type ListQuery } from "@/lib/community/service";
 import { isValidSymbol } from "@/lib/validation/symbol";
 
 /**
  * GET   /api/community/posts?symbol=TCS&sentiment=bullish&before=<iso>&limit=20
  *       GET …?ipo=<Upstox IPO id> for an IPO's community.
+ *       GET …?bond=<ISIN> for the posts that @mention that bond.
+ *       GET …?asset=stock|ipo|bond filters the community floor by what posts are about.
  *       GET …?parent=<post id> for a post's replies (oldest first).
  *       Public. Hidden posts never appear (RLS). A stock whose IPO community
  *       has been linked also shows that community's posts; an IPO community
@@ -20,7 +24,7 @@ import { isValidSymbol } from "@/lib/validation/symbol";
  * POST  /api/community/posts  { body, sentiment?, symbol?, ipoId?, parentId?, mentions? }
  * PATCH /api/community/posts  { id, body, mentions? }   (author only)
  *       Authorization: Bearer <Supabase access token>
- *       `mentions`: [{ kind: "instrument", id, type, text } | { kind: "ipo", ipoId, text }]
+ *       `mentions`: [{ kind: "instrument", id, type, text } | { kind: "ipo", ipoId, text } | { kind: "bond", isin, text }]
  *       — picks from the @ autocomplete; each is verified on the server.
  *       201/200 { success, post } · 400/401/403/404/422/429/503 { success:false, error, code? }
  */
@@ -46,7 +50,8 @@ export async function GET(
   _context?: unknown,
   store: CommunityStore | null = getSupabaseStore(),
   communities: CommunityResolver | null = getCommunityResolver(),
-  contextDeps: ContextDeps | null = getContextDeps()
+  contextDeps: ContextDeps | null = getContextDeps(),
+  bonds: BondResolver | null = getBondResolver()
 ) {
   if (!store) {
     return NextResponse.json({ success: false, error: "Community isn't set up yet.", code: "NOT_CONFIGURED" }, { status: 503 });
@@ -60,6 +65,17 @@ export async function GET(
   }
 
   const ipoId = params.get("ipo")?.trim() || undefined;
+
+  const bondIsin = params.get("bond")?.trim().toUpperCase() || undefined;
+  if (bondIsin && !isBondIsin(bondIsin)) {
+    return NextResponse.json({ success: false, error: "Invalid bond" }, { status: 400 });
+  }
+
+  const assetParam = params.get("asset") || undefined;
+  if (assetParam && assetParam !== "all" && !(ASSET_FILTERS as readonly string[]).includes(assetParam)) {
+    return NextResponse.json({ success: false, error: "Invalid filter" }, { status: 400 });
+  }
+  const asset = assetParam && assetParam !== "all" ? (assetParam as AssetFilter) : undefined;
 
   const parentId = params.get("parent") || undefined;
   if (parentId && !UUID.test(parentId)) {
@@ -81,6 +97,11 @@ export async function GET(
       // No community yet: nobody has posted in it or mentioned it.
       if (!found) return NextResponse.json({ success: true, posts: [], hasMore: false });
       community = communityScope(found);
+    } else if (!parentId && bondIsin) {
+      const found = bonds ? await bonds.findBond(bondIsin) : null;
+      // No community yet: nobody has mentioned this bond.
+      if (!found) return NextResponse.json({ success: true, posts: [], hasMore: false });
+      community = communityScope(found);
     } else if (!parentId && symbol && communities) {
       const linked = await communities.forBoard(symbol);
       if (linked) {
@@ -89,7 +110,8 @@ export async function GET(
       }
     }
 
-    const posts = await store.listPosts({ symbol, community, parentId, sentiment, before, limit });
+    const floor = !parentId && !symbol && !ipoId && !bondIsin;
+    const posts = await store.listPosts({ symbol, community, parentId, sentiment, before, limit, ...(floor && asset ? { asset } : {}) });
     return NextResponse.json({ success: true, posts: await attachContext(posts, contextDeps), hasMore: posts.length === limit });
   } catch (error) {
     console.error("Community list error:", error);
@@ -138,7 +160,7 @@ export async function POST(
   } catch (error) {
     // Mentions picked before the post_mentions migration is applied.
     if ((error as { code?: string })?.code === "42703" || (error as { code?: string })?.code === "PGRST204") {
-      return NextResponse.json({ success: false, error: "Stock and IPO mentions aren't switched on yet. Remove them and post again.", code: "NOT_CONFIGURED" }, { status: 503 });
+      return NextResponse.json({ success: false, error: "Mentions aren't switched on yet. Remove them and post again.", code: "NOT_CONFIGURED" }, { status: 503 });
     }
     console.error("Community post error:", error);
     return NextResponse.json({ success: false, error: "Couldn't publish your post. Please try again." }, { status: 500 });

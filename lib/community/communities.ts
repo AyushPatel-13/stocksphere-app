@@ -14,13 +14,18 @@ import { isValidSymbol } from "../validation/symbol";
  * Stock boards keep reading posts by symbol. When a symbol belongs to a linked
  * community, the board also reads that community's posts — the same records
  * the IPO page shows.
+ *
+ * A bond is a community too (supabase/migrations/20261027000100_bond_
+ * communities.sql): type 'bond', keyed by the bond's own ISIN, created the
+ * first time someone @mentions it. It never gets a ticker and never changes
+ * type; its page (/bonds/<ISIN>) reads the posts that mention it.
  */
 
 export type Exchange = "NSE" | "BSE";
 
 export type Community = {
   id: string;
-  type: "ipo" | "stock";
+  type: "ipo" | "stock" | "bond";
   name: string;
   isin: string | null;
   ipoId: string | null;
@@ -43,6 +48,8 @@ export interface CommunityDirectory {
   byListing(exchange: Exchange, symbol: string): Promise<Community | null>;
   /** Insert or return the existing row; safe under concurrent first posts (unique keys). */
   ensureIpo(input: NewIpoCommunity): Promise<Community>;
+  /** The bond's community, created on first use. The ISIN must already be verified. */
+  ensureBond(input: { isin: string; name: string }): Promise<Community>;
 }
 
 export { IPO_ID_PATTERN, ipoCommunityPath, isIpoId } from "./paths";
@@ -101,7 +108,7 @@ export function isNotMigrated(error: unknown): boolean {
 
 type CommunityRow = {
   id: string;
-  type: "ipo" | "stock";
+  type: "ipo" | "stock" | "bond";
   name: string;
   isin: string | null;
   upstox_ipo_id: string | null;
@@ -147,6 +154,8 @@ export function supabaseDirectory(reader: SupabaseClient, admin: SupabaseClient 
       if (!admin) throw Object.assign(new Error("Service role not configured"), { code: "NOT_CONFIGURED" });
 
       const existing = (await directory.byIpoId(input.ipoId)) ?? (input.isin ? await directory.byIsin(input.isin) : null);
+      // An equity ISIN can't be a bond's, but never hand a bond community to an IPO.
+      if (existing?.type === "bond") throw Object.assign(new Error("ISIN belongs to a bond"), { code: "CONFLICT" });
       if (existing) {
         // Upstox publishes an upcoming issue's ISIN late: fill it in once.
         if (!existing.isin && input.isin && existing.ipoId === input.ipoId) {
@@ -168,6 +177,21 @@ export function supabaseDirectory(reader: SupabaseClient, admin: SupabaseClient 
       // Someone else created it a moment ago: use theirs.
       const raced = (await directory.byIpoId(input.ipoId)) ?? (input.isin ? await directory.byIsin(input.isin) : null);
       if (!raced) throw error;
+      return raced;
+    },
+
+    async ensureBond({ isin, name }) {
+      if (!admin) throw Object.assign(new Error("Service role not configured"), { code: "NOT_CONFIGURED" });
+      const existing = await directory.byIsin(isin);
+      if (existing) {
+        if (existing.type !== "bond") throw Object.assign(new Error("ISIN belongs to another community"), { code: "CONFLICT" });
+        return existing;
+      }
+      const { data, error } = await admin.from("communities").insert({ type: "bond", name, isin }).select(COMMUNITY_COLUMNS).single();
+      if (!error) return toCommunity(data as CommunityRow);
+      if (error.code !== UNIQUE_VIOLATION) throw error;
+      const raced = await directory.byIsin(isin);
+      if (!raced || raced.type !== "bond") throw error;
       return raced;
     },
   };

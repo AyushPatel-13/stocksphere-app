@@ -2,14 +2,15 @@
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type TextareaHTMLAttributes } from "react";
 
+import { bondFacts } from "@/lib/bonds/bonds";
 import { fetchEntities } from "@/lib/community/client";
 import type { EntitySuggestion } from "@/lib/community/entities";
 import { MAX_PICKS, activeMention, insertMention, livePicks, mentionTextFor, type MentionPick } from "@/lib/community/mentionInput";
 import { nextActiveIndex } from "@/lib/search/types";
 
 /**
- * A textarea with an @ autocomplete for stocks and IPOs, anchored at the
- * caret. Typing "@sbi" lists verified matches from /api/community/entities;
+ * A textarea with an @ autocomplete for stocks, IPOs and bonds, anchored at
+ * the caret. Typing "@sbi" lists verified matches from /api/community/entities;
  * picking one inserts "@SBIN " and records the pick (its id), which the server
  * verifies again when the post is saved. Arrow keys, Enter/Tab, Escape, mouse
  * and touch all work; an @ inside a word or email address doesn't open it.
@@ -51,9 +52,29 @@ function caretPoint(textarea: HTMLTextAreaElement, position: number): { top: num
 }
 
 function pickFrom(suggestion: EntitySuggestion): MentionPick {
-  return suggestion.kind === "instrument"
-    ? { kind: "instrument", id: suggestion.id, type: suggestion.type, text: mentionTextFor(suggestion), name: suggestion.name, detail: `${suggestion.symbol} · ${suggestion.exchange}` }
-    : { kind: "ipo", ipoId: suggestion.ipoId, text: mentionTextFor(suggestion), name: suggestion.name, detail: `IPO · ${suggestion.status === "open" ? "Open" : "Upcoming"}` };
+  const text = mentionTextFor(suggestion);
+  if (suggestion.kind === "instrument") {
+    return { kind: "instrument", id: suggestion.id, type: suggestion.type, text, name: suggestion.name, detail: `${suggestion.symbol} · ${suggestion.exchange}` };
+  }
+  if (suggestion.kind === "bond") return { kind: "bond", isin: suggestion.isin, text, name: suggestion.name, detail: bondFacts(suggestion) };
+  return { kind: "ipo", ipoId: suggestion.ipoId, text, name: suggestion.name, detail: `IPO · ${suggestion.status === "open" ? "Open" : "Upcoming"}` };
+}
+
+function keyOf(suggestion: EntitySuggestion): string {
+  return suggestion.kind === "instrument" ? suggestion.id : suggestion.kind === "bond" ? `bond:${suggestion.isin}` : `ipo:${suggestion.ipoId}`;
+}
+
+function badgeOf(suggestion: EntitySuggestion): { text: string; className: string } {
+  if (suggestion.kind === "ipo") return { text: "IPO", className: "bg-[#f59e0b]/15 text-[#fbbf24]" };
+  if (suggestion.kind === "bond") return { text: "BND", className: "bg-[#38bdf8]/12 text-[#7dd3fc]" };
+  const text = suggestion.type === "index" ? "IX" : suggestion.type === "crypto" ? "₿" : suggestion.type === "etf" ? "ETF" : "EQ";
+  return { text, className: "bg-[#22c55e]/12 text-[#4ade80]" };
+}
+
+function detailOf(suggestion: EntitySuggestion): string {
+  if (suggestion.kind === "ipo") return `${suggestion.status === "open" ? "IPO open" : "Upcoming IPO"} · ${suggestion.board === "sme" ? "SME" : "Mainboard"}`;
+  if (suggestion.kind === "bond") return `${suggestion.symbol} · ${suggestion.exchange} · ${bondFacts(suggestion)}`;
+  return `${suggestion.symbol} · ${suggestion.exchange} · ${suggestion.label}`;
 }
 
 export type MentionFieldHandle = { focus: () => void; startMention: () => void };
@@ -84,7 +105,7 @@ const MentionField = forwardRef<MentionFieldHandle, Props>(function MentionField
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
-    // The "Tag a stock or IPO" button: type an @ at the caret and open the list.
+    // The "Tag" button: type an @ at the caret and open the list.
     startMention: () => {
       const textarea = textareaRef.current;
       if (!textarea) return;
@@ -216,22 +237,22 @@ const MentionField = forwardRef<MentionFieldHandle, Props>(function MentionField
           style={{ top: anchor.top, left: anchor.left, width: `min(${POPOVER_WIDTH}px, 100%)` }}
         >
           {atLimit ? (
-            <p className="px-3 py-2.5 text-[#999]">You can mention up to {MAX_PICKS} stocks or IPOs in a post.</p>
+            <p className="px-3 py-2.5 text-[#999]">You can mention up to {MAX_PICKS} stocks, IPOs or bonds in a post.</p>
           ) : lookup.status === "hint" ? (
-            <p className="px-3 py-2.5 text-[#999]">Type a company, ticker or IPO name</p>
+            <p className="px-3 py-2.5 text-[#999]">Type a company, ticker, IPO, or a bond (“GOI 2033”, “REC bond”, an ISIN)</p>
           ) : lookup.status === "loading" ? (
             <p className="px-3 py-2.5 text-[#999]" role="status">Searching…</p>
           ) : lookup.status === "error" ? (
             <p className="px-3 py-2.5 text-[#f87171]" role="alert">{lookup.message}</p>
           ) : results.length === 0 ? (
             <p className="px-3 py-2.5 text-[#999]" role="status">
-              No stock or IPO matches “{lookup.status === "ready" ? lookup.query : ""}”{lookup.status === "ready" && lookup.partial ? " (some sources didn't answer)" : ""}.
+              No stock, IPO or listed bond matches “{lookup.status === "ready" ? lookup.query : ""}”{lookup.status === "ready" && lookup.partial ? " (some sources didn't answer)" : ""}.
             </p>
           ) : (
-            <ul id={listId} role="listbox" aria-label="Stocks and IPOs" className="max-h-64 overflow-y-auto overscroll-contain py-1">
+            <ul id={listId} role="listbox" aria-label="Stocks, IPOs and bonds" className="max-h-64 overflow-y-auto overscroll-contain py-1">
               {results.map((suggestion, index) => (
                 <li
-                  key={suggestion.kind === "instrument" ? suggestion.id : `ipo:${suggestion.ipoId}`}
+                  key={keyOf(suggestion)}
                   id={`${listId}-${index}`}
                   role="option"
                   aria-selected={index === active}
@@ -243,21 +264,12 @@ const MentionField = forwardRef<MentionFieldHandle, Props>(function MentionField
                   onMouseEnter={() => setActive(index)}
                   className={`flex cursor-pointer items-center gap-2.5 px-3 py-2 ${index === active ? "bg-[#1f1f1f]" : ""}`}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold ${
-                      suggestion.kind === "ipo" ? "bg-[#f59e0b]/15 text-[#fbbf24]" : "bg-[#22c55e]/12 text-[#4ade80]"
-                    }`}
-                  >
-                    {suggestion.kind === "ipo" ? "IPO" : suggestion.type === "index" ? "IX" : suggestion.type === "crypto" ? "₿" : suggestion.type === "etf" ? "ETF" : "EQ"}
+                  <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold ${badgeOf(suggestion).className}`}>
+                    {badgeOf(suggestion).text}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-white">{suggestion.name}</span>
-                    <span className="block truncate text-[11px] text-[#888]">
-                      {suggestion.kind === "ipo"
-                        ? `${suggestion.status === "open" ? "IPO open" : "Upcoming IPO"} · ${suggestion.board === "sme" ? "SME" : "Mainboard"}`
-                        : `${suggestion.symbol} · ${suggestion.exchange} · ${suggestion.label}`}
-                    </span>
+                    <span className="block truncate text-[11px] text-[#888]">{detailOf(suggestion)}</span>
                   </span>
                 </li>
               ))}

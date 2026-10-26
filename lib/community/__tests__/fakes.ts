@@ -75,6 +75,17 @@ export function memoryDirectory(seed: Community[] = []) {
       rows.set(id, row);
       return row;
     },
+    async ensureBond({ isin, name }) {
+      const existing = find((c) => c.isin === isin);
+      if (existing) {
+        if (existing.type !== "bond") throw Object.assign(new Error("ISIN belongs to another community"), { code: "CONFLICT" });
+        return existing;
+      }
+      const id = `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`;
+      const row: Community = { id, type: "bond", name, isin, ipoId: null, board: null, exchange: null, symbol: null, listedAt: null };
+      rows.set(id, row);
+      return row;
+    },
   };
   return directory;
 }

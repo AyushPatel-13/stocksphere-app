@@ -13,18 +13,26 @@ import {
   timeAgo,
   type CommunityUser,
 } from "@/lib/community/client";
-import type { StoredMention } from "@/lib/community/mentions";
+import { bondFacts } from "@/lib/bonds/bonds";
+import { mentionPath, type StoredMention } from "@/lib/community/mentions";
 import { ipoCommunityPath } from "@/lib/community/paths";
 import { tokenize } from "@/lib/community/tokens";
 import type { IpoStatus, PostContext, PostView } from "@/lib/community/types";
 
-/** Where a stored mention links: the instrument's page, or the IPO's community. */
-function mentionHref(mention: StoredMention): string {
-  return mention.kind === "instrument" ? mention.href : ipoCommunityPath(mention.ipoId);
+const MENTION_STYLE: Record<StoredMention["kind"], string> = {
+  instrument: "text-[#4ade80]",
+  ipo: "text-[#fbbf24]",
+  bond: "text-[#7dd3fc]",
+};
+
+function mentionTitle(mention: StoredMention): string {
+  if (mention.kind === "ipo") return `${mention.name} (IPO)`;
+  if (mention.kind === "bond") return `${mention.name} · ${bondFacts(mention)}`;
+  return `${mention.name} · ${mention.symbol}`;
 }
 
 /**
- * A post's text with verified stock/IPO mentions, $CASHTAGS, @handles and
+ * A post's text with verified stock/IPO/bond mentions, $CASHTAGS, @handles and
  * links as real links — never HTML. Mention spans come from stored positions
  * (checked by readMentions on the server); the rest is tokenized as before,
  * so old posts render exactly as they did.
@@ -38,9 +46,9 @@ export function PostBody({ body, mentions = [] }: { body: string; mentions?: Sto
     parts.push(
       <Link
         key={`m${m}`}
-        href={mentionHref(mention)}
-        title={mention.kind === "ipo" ? `${mention.name} (IPO)` : `${mention.name} · ${mention.symbol}`}
-        className={`font-semibold hover:underline ${mention.kind === "ipo" ? "text-[#fbbf24]" : "text-[#4ade80]"}`}
+        href={mentionPath(mention, ipoCommunityPath)}
+        title={mentionTitle(mention)}
+        className={`font-semibold hover:underline ${MENTION_STYLE[mention.kind]}`}
       >
         {body.slice(mention.start, mention.end)}
       </Link>
@@ -89,8 +97,9 @@ const VISIBLE_CONTEXT = 3;
 
 /**
  * What the post is about, from stored relations only: "Discussing IPO: X ·
- * Open", the stocks it tagged. A post with none shows nothing — the text is
- * never read for it.
+ * Open", the stocks it tagged, "Discussing bond: name — issuer · coupon ·
+ * maturity · ISIN" (verified fields only). A post with none shows nothing —
+ * the text is never read for it.
  */
 export function PostContextChips({ context }: { context: PostContext[] }) {
   const [all, setAll] = useState(false);
@@ -115,6 +124,19 @@ export function PostContextChips({ context }: { context: PostContext[] }) {
                 {item.listed.exchange}: {item.listed.symbol}
               </Link>
             )}
+          </li>
+        ) : item.kind === "bond" ? (
+          <li key={`bond:${item.communityId}`} className="w-full max-w-md text-xs">
+            <Link
+              href={item.href}
+              className="flex min-w-0 flex-col rounded-lg border border-[#38bdf8]/30 bg-[#38bdf8]/[0.07] px-2.5 py-1.5 hover:border-[#38bdf8]/60"
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0 font-semibold text-[#7dd3fc]">Discussing bond</span>
+                <span className="truncate font-medium text-white">{item.name}</span>
+              </span>
+              <span className="truncate text-[11px] text-[#9fb6c4]">{bondFacts(item)}</span>
+            </Link>
           </li>
         ) : (
           <li key={`instrument:${item.id}`} className="max-w-full text-xs">
@@ -171,6 +193,7 @@ export default function PostCard({
   liked,
   boardSymbol,
   boardIpoId,
+  boardBondIsin,
   isReply = false,
   onDeleted,
 }: {
@@ -180,6 +203,8 @@ export default function PostCard({
   boardSymbol?: string;
   /** On an IPO's own page its chip would only repeat the page. */
   boardIpoId?: string;
+  /** Likewise on a bond's page (its ISIN). */
+  boardBondIsin?: string;
   isReply?: boolean;
   onDeleted: (id: string) => void;
 }) {
@@ -305,7 +330,11 @@ export default function PostCard({
           {!isReply && !editing && (
             <PostContextChips
               context={(post.context ?? []).filter((item) =>
-                item.kind === "ipo" ? !boardIpoId || item.ipoId !== boardIpoId : !boardSymbol || item.symbol !== boardSymbol
+                item.kind === "ipo"
+                  ? !boardIpoId || item.ipoId !== boardIpoId
+                  : item.kind === "bond"
+                    ? !boardBondIsin || item.isin !== boardBondIsin
+                    : !boardSymbol || item.symbol !== boardSymbol
               )}
             />
           )}

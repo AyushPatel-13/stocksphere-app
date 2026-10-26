@@ -179,7 +179,7 @@ export function getCommunityResolver(): CommunityResolver | null {
 
 export type PublicCommunity = {
   id: string;
-  type: "ipo" | "stock";
+  type: Community["type"];
   name: string;
   ipoId: string | null;
   isin: string | null;
