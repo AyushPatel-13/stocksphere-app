@@ -171,8 +171,34 @@ const DEFAULT_DEPS: HistoryDeps = { getYahooSeries, getUpstoxDaily, now: Date.no
 
 const MAX_CACHE = 400;
 
+/**
+ * The close of the last daily candle that started before `sessionStart`.
+ *
+ * Yahoo's 1-minute series reports a `previousClose` that can be a session
+ * behind (on 28 Oct 2026 BANKNIFTY's said 54366.7, the 26 Oct close, while
+ * the 27 Oct close was 53974.9), so the 1D day change is taken from the
+ * daily series instead. Null when there is no earlier daily candle.
+ */
+export function previousDailyClose(daily: Candle[], sessionStart: number): number | null {
+  const earlier = daily.filter((candle) => candle.t < sessionStart - 60_000);
+  return earlier.at(-1)?.c ?? null;
+}
+
 export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
   const cache = new Map<string, { at: number; history: History }>();
+  const dailyCloses = new Map<string, { at: number; close: number | null }>();
+
+  // One small daily request per symbol and session, kept for 10 minutes.
+  async function dailyPreviousClose(yahoo: string, sessionStart: number): Promise<number | null> {
+    const key = `${yahoo}|${sessionStart}`;
+    const hit = dailyCloses.get(key);
+    if (hit && deps.now() - hit.at < 10 * 60_000) return hit.close;
+    const daily = await deps.getYahooSeries(yahoo, "5d", "1d");
+    const close = daily ? previousDailyClose(daily.candles, sessionStart) : null;
+    if (dailyCloses.size >= MAX_CACHE) dailyCloses.delete(dailyCloses.keys().next().value as string);
+    if (close !== null) dailyCloses.set(key, { at: deps.now(), close });
+    return close;
+  }
 
   return async function getHistory(asset: ResolvedAsset, range: HistoryRange): Promise<History | null> {
     const config = RANGES[range];
@@ -211,6 +237,11 @@ export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
       : series.candles;
     if (candles.length === 0) return null;
 
+    const previousClose =
+      range === "1d" && source === "Yahoo"
+        ? (await dailyPreviousClose(asset.yahoo, candles[0].t)) ?? series.previousClose
+        : series.previousClose;
+
     const history: History = {
       type: asset.type,
       symbol: asset.symbol,
@@ -221,7 +252,7 @@ export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
       range,
       interval: source === "Upstox" ? "1d" : config.interval,
       candles,
-      previousClose: series.previousClose,
+      previousClose,
       fiftyTwoWeekHigh: series.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: series.fiftyTwoWeekLow,
       marketTime: series.marketTime,

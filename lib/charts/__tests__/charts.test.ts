@@ -241,3 +241,55 @@ test("an overview row takes its day change from the previous close", () => {
   assert.equal(empty.price, null);
   assert.deepEqual(empty.spark, []);
 });
+
+test("1D day change comes from the daily series, not the stale intraday previousClose", async () => {
+  // BANKNIFTY on 28 Oct 2026: Yahoo's 1-minute meta said 54366.7 (the 26 Oct
+  // close); the daily series and Upstox both had 27 Oct closing at 53974.9.
+  const ist = (date: string) => Date.parse(`${date}T03:45:00Z`);
+  const asked: string[] = [];
+  const load = createHistoryLoader({
+    getYahooSeries: async (_symbol, range, interval) => {
+      asked.push(`${range}/${interval}`);
+      const base = {
+        name: null, currency: "INR", exchangeTimezone: "Asia/Kolkata", fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null,
+        regularMarketPrice: 54267.4, marketTime: null, sessionStart: null, sessionEnd: null,
+      };
+      if (interval === "1d") {
+        return {
+          ...base, previousClose: 54925.7,
+          candles: [
+            { t: ist("2026-10-26"), o: null, h: null, l: null, c: 54366.7, v: null },
+            { t: ist("2026-10-27"), o: null, h: null, l: null, c: 53974.9, v: null },
+          ],
+        };
+      }
+      return {
+        ...base, previousClose: 54366.7,
+        candles: [
+          { t: ist("2026-10-28"), o: null, h: null, l: null, c: 54100, v: null },
+          { t: ist("2026-10-28") + 60_000, o: null, h: null, l: null, c: 54267.4, v: null },
+        ],
+      };
+    },
+    getUpstoxDaily: async () => null,
+    now: () => ist("2026-10-28"),
+  });
+
+  const history = await load(resolveAsset("index", "BANKNIFTY")!, "1d");
+  assert.equal(history?.previousClose, 53974.9);
+  const row = toOverviewRow({ name: "Nifty Bank", symbol: "BANKNIFTY", yahooSymbol: "^NSEBANK", category: "india" } as never, history);
+  assert.equal(Number(row.change?.toFixed(1)), 292.5);
+  assert.deepEqual(asked, ["1d/1m", "5d/1d"]);
+
+  // Without a daily series, the intraday figure is still used rather than nothing.
+  const fallback = createHistoryLoader({
+    getYahooSeries: async (_s, _r, interval) => (interval === "1d" ? null : {
+      name: null, currency: null, exchangeTimezone: null, previousClose: 100, fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null,
+      regularMarketPrice: null, marketTime: null, sessionStart: null, sessionEnd: null,
+      candles: [{ t: 5, o: null, h: null, l: null, c: 101, v: null }],
+    }),
+    getUpstoxDaily: async () => null,
+    now: () => 0,
+  });
+  assert.equal((await fallback(resolveAsset("index", "NIFTY")!, "1d"))?.previousClose, 100);
+});
