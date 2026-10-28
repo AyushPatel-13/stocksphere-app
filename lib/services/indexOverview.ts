@@ -1,4 +1,5 @@
 import { ALL_INDICES, type MarketIndex } from "../data/instruments/indices";
+import { roundPercent, roundPrice } from "../utils/roundPrice";
 import { getHistory, resolveAsset, type History } from "./history";
 
 /**
@@ -34,17 +35,18 @@ export function toOverviewRow(index: MarketIndex, history: History | null): Inde
   const price = closes.at(-1) ?? null;
   const previous = history?.previousClose ?? null;
   const change = price !== null && previous !== null ? price - previous : null;
+  const round = (value: number | null) => (value === null ? null : roundPrice(value));
 
   return {
     symbol: index.symbol,
     name: index.name,
     category: index.category,
-    price,
-    change,
-    changePercent: change !== null && previous ? (change / previous) * 100 : null,
-    fiftyTwoWeekHigh: history?.fiftyTwoWeekHigh ?? null,
-    fiftyTwoWeekLow: history?.fiftyTwoWeekLow ?? null,
-    spark: downsample(closes),
+    price: round(price),
+    change: round(change),
+    changePercent: change !== null && previous ? roundPercent((change / previous) * 100) : null,
+    fiftyTwoWeekHigh: round(history?.fiftyTwoWeekHigh ?? null),
+    fiftyTwoWeekLow: round(history?.fiftyTwoWeekLow ?? null),
+    spark: downsample(closes).map(roundPrice),
   };
 }
 

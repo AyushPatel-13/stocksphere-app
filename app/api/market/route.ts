@@ -16,6 +16,7 @@ import { getYahooQuote } from "@/lib/apis/yahoo";
 
 import { isValidSymbol } from "@/lib/validation/symbol";
 import { clientAddress, createWindowLimiter } from "@/lib/utils/rateLimit";
+import { roundQuote } from "@/lib/utils/roundPrice";
 
 /**
  * This route is public and a US symbol spends Twelve Data / Alpha Vantage
@@ -233,7 +234,7 @@ async function getSingleQuote(
       return NextResponse.json({
         success: true,
         symbol,
-        quote,
+        quote: roundQuote(quote),
       });
     }
 
@@ -385,8 +386,8 @@ async function getMarketOverview(
 
     return NextResponse.json({
       success: true,
-      us,
-      india: indianQuotes,
+      us: Object.fromEntries(Object.entries(us).map(([key, quote]) => [key, quote && roundQuote(quote)])),
+      india: indianQuotes.map(roundQuote),
     });
   } catch (error) {
     console.error(
