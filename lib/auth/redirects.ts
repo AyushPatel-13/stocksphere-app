@@ -55,8 +55,13 @@ export type AuthFailure = "cancelled" | "failed";
  *
  * Supabase puts these in the query for PKCE and in the fragment for errors on
  * some paths, so both are read.
+ *
+ * `signedIn`: whether a session exists now. A `?code=` can still be in the
+ * address bar after the exchange worked (the URL is cleaned a moment later,
+ * or a second exchange of the same code lost the race), so with a session
+ * a leftover code is not a failure. Explicit error parameters still are.
  */
-export function classifyAuthReturn(href: string): AuthFailure | null {
+export function classifyAuthReturn(href: string, signedIn = false): AuthFailure | null {
   let url: URL;
   try {
     url = new URL(href);
@@ -72,7 +77,7 @@ export function classifyAuthReturn(href: string): AuthFailure | null {
   if (error || errorCode || read("error_description")) {
     return error === "access_denied" ? "cancelled" : "failed";
   }
-  if (params.get("code")) return "failed";
+  if (params.get("code") && !signedIn) return "failed";
   return null;
 }
 

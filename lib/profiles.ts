@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { profileEditProblem } from "./profileView";
 import { handleProblem, normaliseHandle } from "./validation/handle";
 
 /**
@@ -18,9 +19,12 @@ export type Profile = {
   bio: string;
   role: "user" | "moderator" | "admin";
   created_at: string;
+  /** Kept by the follows migration's trigger. */
+  follower_count?: number;
+  following_count?: number;
 };
 
-const COLUMNS = "id, username, display_name, avatar_url, bio, role, created_at";
+const COLUMNS = "id, username, display_name, avatar_url, bio, role, created_at, follower_count, following_count";
 
 /**
  * The outcome of looking up the signed-in user's profile.
@@ -131,5 +135,33 @@ export async function createMyProfile(input: {
     return { ok: false, reason: "failed", message: "Couldn't save your profile. Please try again." };
   }
 
+  return { ok: true, profile: data as Profile };
+}
+
+
+export type UpdateProfileResult = { ok: true; profile: Profile } | { ok: false; message: string };
+
+/**
+ * Change your display name and bio. RLS ("users update their own profile")
+ * and the column grants allow exactly this row and these columns; the
+ * `id` filter is the session's, never the caller's.
+ */
+export async function updateMyProfile(input: { displayName: string; bio: string }): Promise<UpdateProfileResult> {
+  const problem = profileEditProblem(input);
+  if (problem) return { ok: false, message: problem };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, message: "Please sign in again." };
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ display_name: input.displayName.trim(), bio: input.bio.trim() })
+    .eq("id", user.id)
+    .select(COLUMNS)
+    .maybeSingle();
+
+  if (error || !data) return { ok: false, message: "Couldn't save your profile. Please try again." };
   return { ok: true, profile: data as Profile };
 }

@@ -2,7 +2,8 @@ import type { BondCategory } from "../bonds/bonds";
 import type { InstrumentType } from "../search/types";
 import type { PredictionStats } from "../predictions/rules";
 import type { StoredMention } from "./mentions";
-import type { Sentiment } from "./rules";
+import type { StockQuote } from "./quotes";
+import type { PostKind, Sentiment } from "./rules";
 
 export type IpoStatus = "upcoming" | "open" | "closed" | "listed";
 
@@ -25,7 +26,18 @@ export type PostContext =
       listed: { exchange: string; symbol: string; href: string } | null;
       via: "community" | "mention";
     }
-  | { kind: "instrument"; id: string; type: InstrumentType; name: string; symbol: string; exchange: string; href: string; via: "mention" }
+  | {
+      kind: "instrument";
+      id: string;
+      type: InstrumentType;
+      name: string;
+      symbol: string;
+      exchange: string;
+      href: string;
+      via: "mention";
+      /** Last price and day change from the market-data provider; absent when there is no verified quote. */
+      quote?: StockQuote;
+    }
   | {
       kind: "bond";
       communityId: string;
@@ -44,6 +56,10 @@ export type PostContext =
 /** A post as the UI receives it. Plain text body; never HTML. */
 export type PostView = {
   id: string;
+  /** Optional headline of a top-level post (post_titles_and_kinds migration). */
+  title?: string | null;
+  /** Optional post type of a top-level post. */
+  kind?: PostKind | null;
   body: string;
   sentiment: Sentiment | null;
   symbols: string[];
@@ -52,6 +68,17 @@ export type PostView = {
   /** A comment's top-level post (null for a top-level post). */
   rootId?: string | null;
   likeCount: number;
+  /** Photos (community_images migration), 1-4, with their public addresses. */
+  images?: { path: string; url: string; width: number; height: number; alt: string }[];
+  /** Times reposted (reposts migration); absent before it, and then no repost, quote or save controls are shown. */
+  repostCount?: number;
+  /** A quote post: the post it quotes. */
+  quoteOf?: string | null;
+  /** Added by the API to quote posts: the quoted post, or null when it's no longer visible. */
+  quoted?: PostView | null;
+  /** Up and down votes (post_votes migration); absent before it, and then no vote control is shown. */
+  upCount?: number;
+  downCount?: number;
   /** Direct replies. */
   replyCount: number;
   /** On a top-level post: comments in its thread at any depth. */

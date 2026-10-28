@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import Composer from "@/components/Community/Composer";
 import PostCard from "@/components/Community/PostCard";
-import { fetchThread, myLikes, type CommunityUser } from "@/lib/community/client";
-import { MAX_INDENT, buildThread, descendantCount, mergeComments, pathTo, type ThreadNode } from "@/lib/community/thread";
+import { NO_MARKS, fetchThread, myMarks, type CommunityUser, type Marks } from "@/lib/community/client";
+import { MAX_INDENT, REPLY_SORTS, buildThread, descendantCount, mergeComments, pathTo, sortThread, type ReplySort, type ThreadNode } from "@/lib/community/thread";
 import type { PostView } from "@/lib/community/types";
 
 /**
@@ -39,10 +39,11 @@ export default function Thread({
 }) {
   const [state, setState] = useState<State>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
-  const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
+  const [marks, setMarks] = useState<Marks>(NO_MARKS);
   // Only one reply box at a time: the comment it answers.
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<ReplySort>("top");
 
   useEffect(() => {
     let cancelled = false;
@@ -60,15 +61,15 @@ export default function Thread({
   useEffect(() => {
     if (!userId || !commentIds) return;
     let cancelled = false;
-    myLikes(userId, commentIds.split(",")).then((ids) => {
-      if (!cancelled) setLikedIds(ids);
+    myMarks(userId, commentIds.split(",")).then((found) => {
+      if (!cancelled) setMarks(found);
     });
     return () => {
       cancelled = true;
     };
   }, [userId, commentIds]);
 
-  const tree = useMemo(() => (state.status === "ready" ? buildThread(state.comments, post.id) : []), [state, post.id]);
+  const tree = useMemo(() => (state.status === "ready" ? sortThread(buildThread(state.comments, post.id), sort) : []), [state, post.id, sort]);
 
   // A linked comment: scroll to it once it is on the page (its branch is never collapsed on load).
   const found = highlight ? pathTo(tree, highlight).length > 0 : false;
@@ -120,7 +121,8 @@ export default function Thread({
           <PostCard
             post={comment}
             user={user}
-            liked={likedIds.has(comment.id)}
+            liked={marks.liked.has(comment.id)}
+            vote={marks.votes.get(comment.id) ?? 0}
             isReply
             highlighted={comment.id === highlight}
             // Past the indentation cap the line no longer shows whom it answers.
@@ -210,6 +212,23 @@ export default function Thread({
       )}
 
       {state.status === "ready" && tree.length === 0 && <p className="mt-3 text-sm text-[#666]">No comments yet. Start the discussion.</p>}
+
+      {tree.length > 1 && (
+        <div role="group" aria-label="Sort replies" className="mt-3 flex items-center gap-1 text-xs">
+          <span className="mr-1 text-[#666]">Sort by</span>
+          {REPLY_SORTS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              aria-pressed={sort === option.id}
+              onClick={() => setSort(option.id)}
+              className={`rounded-full px-2.5 py-1 font-semibold transition-colors ${sort === option.id ? "bg-[#1f1f1f] text-white" : "text-[#888] hover:text-white"}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {tree.length > 0 && <ul className="mt-1">{tree.map(renderNode)}</ul>}
 

@@ -4,124 +4,134 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import PredictionBadge from "@/components/Predictions/Badge";
-import PredictionCard from "@/components/Predictions/PredictionCard";
-import { PageShell, StatCard } from "@/components/ui/Page";
-import { getProfileByHandle, type Profile } from "@/lib/profiles";
+import Composer from "@/components/Community/Composer";
+import Dialog from "@/components/Profile/Dialog";
+import EditProfileDialog from "@/components/Profile/EditProfileDialog";
+import ProfileHeader from "@/components/Profile/ProfileHeader";
+import ProfileTabs from "@/components/Profile/ProfileTabs";
+import { PageShell } from "@/components/ui/Page";
+import { useCommunityUser } from "@/lib/community/client";
+import type { PostView } from "@/lib/community/types";
 import { fetchPredictions } from "@/lib/predictions/client";
-import { accuracy, type PredictionStats } from "@/lib/predictions/rules";
-import type { PredictionView } from "@/lib/predictions/service";
+import type { PredictionStats } from "@/lib/predictions/rules";
+import { getProfileByHandle, type Profile } from "@/lib/profiles";
+
+const NO_STATS: PredictionStats = { resolved: 0, wins: 0, points: 0 };
 
 /**
- * A member's public page: who they are and their prediction track record —
- * the same record behind the badge shown next to their name in the community.
+ * A member's public page: who they are, then their posts, posts and replies,
+ * likes and predictions in tabs. The owner can edit their name and bio, and
+ * anyone who may post gets a + button for the composer.
  */
 export default function UserProfilePage() {
   const params = useParams();
   const username = decodeURIComponent(String(params.username ?? "")).toLowerCase();
+  const user = useCommunityUser();
 
   // undefined while loading, null when no member has this handle.
   const [member, setMember] = useState<Profile | null | undefined>(undefined);
-  const [predictions, setPredictions] = useState<PredictionView[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [stats, setStats] = useState<PredictionStats>(NO_STATS);
+  const [editing, setEditing] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [added, setAdded] = useState<PostView[]>([]);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-
     getProfileByHandle(username)
       .then((profile) => {
         if (!cancelled) setMember(profile);
       })
       .catch(() => {
-        if (!cancelled) setMember(null);
+        if (!cancelled) setFailed(true);
       });
-
-    fetchPredictions({ user: username, limit: 10 }).then((result) => {
-      if (!cancelled) setPredictions(Array.isArray(result) ? result : []);
+    // The prediction record behind the badge (the same one shown next to names in the community).
+    fetchPredictions({ user: username, limit: 1 }).then((result) => {
+      if (!cancelled && Array.isArray(result) && result[0]) setStats(result[0].user.stats);
     });
-
     return () => {
       cancelled = true;
     };
-  }, [username]);
+  }, [username, attempt]);
 
-  const stats: PredictionStats = predictions?.[0]?.user.stats ?? { resolved: 0, wins: 0, points: 0 };
-  const acc = accuracy(stats);
-  const open = predictions?.filter((p) => p.status === "open").length ?? 0;
+  const own = user.status === "ready" && member != null && user.profile.id === member.id;
+  const canPost = user.status === "ready";
 
   return (
     <PageShell>
-      <header className="mb-8 flex items-center gap-4">
-        {member?.avatar_url ? (
-          // eslint-disable-next-line @next/next/no-img-element -- Google avatar host isn't configured for next/image
-          <img
-            src={member.avatar_url}
-            alt=""
-            width={64}
-            height={64}
-            referrerPolicy="no-referrer"
-            className="h-16 w-16 shrink-0 rounded-2xl border border-[#262626] object-cover"
-          />
-        ) : (
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-[#262626] bg-[#151515] text-2xl font-bold text-[#22c55e]">
-            {(member?.display_name || username).charAt(0).toUpperCase() || "?"}
-          </div>
-        )}
-        <div className="min-w-0">
-          <h1 className="flex flex-wrap items-center gap-2 text-[28px] font-bold leading-tight tracking-tight">
-            <span className="truncate">{member?.display_name || username}</span>
-            {member && member.role !== "user" && (
-              <span className="rounded-md border border-[#22c55e]/40 bg-[#22c55e]/10 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#4ade80]">
-                {member.role === "admin" ? "Team" : "Mod"}
-              </span>
-            )}
-            <PredictionBadge stats={stats} size="md" showRecordWithoutBadge={false} />
-          </h1>
-          <p className="mt-1 text-sm text-[#888]">
-            {member ? (
-              <>
-                @{member.username} · Joined{" "}
-                {new Date(member.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}
-              </>
-            ) : member === null ? (
-              "Not a registered StockSphere member"
-            ) : (
-              " "
-            )}
-          </p>
+      {failed ? (
+        <div className="rounded-2xl border border-[#222] bg-[#111] px-6 py-12 text-center">
+          <p className="font-semibold">This profile couldn&apos;t be loaded.</p>
+          <button
+            type="button"
+            onClick={() => {
+              setFailed(false);
+              setMember(undefined);
+              setAttempt((n) => n + 1);
+            }}
+            className="mt-3 text-sm text-[#22c55e] hover:underline"
+          >
+            Try again
+          </button>
         </div>
-      </header>
+      ) : member === undefined ? (
+        <div aria-busy="true" aria-label="Loading profile" className="rounded-2xl border border-[#1f1f1f] bg-[#0d0d0d] p-6">
+          <div className="h-20 w-20 animate-pulse rounded-full bg-[#1a1a1a]" />
+          <div className="mt-4 h-6 w-48 animate-pulse rounded bg-[#1a1a1a]" />
+          <div className="mt-2 h-4 w-32 animate-pulse rounded bg-[#181818]" />
+        </div>
+      ) : member === null ? (
+        <div className="rounded-2xl border border-[#222] bg-[#111] px-6 py-12 text-center">
+          <p className="font-semibold">@{username} isn&apos;t a StockSphere member.</p>
+          <Link href="/community" className="mt-2 inline-block text-sm text-[#22c55e] hover:underline">
+            Back to the community
+          </Link>
+        </div>
+      ) : (
+        <>
+          <ProfileHeader key={`header-${member.id}`} member={member} user={user} own={own} stats={stats} onEdit={() => setEditing(true)} />
+          <ProfileTabs key={`tabs-${member.id}`} username={member.username} user={user} own={own} added={own ? added : []} stats={stats} />
+        </>
+      )}
 
-      {member?.bio && <p className="-mt-4 mb-8 max-w-xl text-[15px] leading-relaxed text-[#cfcfcf]">{member.bio}</p>}
+      {canPost && member && (
+        <button
+          type="button"
+          onClick={() => setComposing(true)}
+          aria-label="Write a post"
+          title="Write a post"
+          className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[#22c55e] text-3xl font-light leading-none text-black shadow-[0_8px_30px_rgba(34,197,94,0.35)] transition hover:scale-105 hover:bg-[#4ade80] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#22c55e] active:scale-95 sm:right-8 sm:bottom-8"
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+      )}
 
-      <h2 className="mb-3 text-lg font-semibold">Prediction record</h2>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="Accuracy" value={acc === null ? "—" : `${Math.round(acc)}%`} />
-        <StatCard label="Right / scored" value={`${stats.wins}/${stats.resolved}`} />
-        <StatCard label="Points" value={stats.points} tone={stats.points > 0 ? "up" : "neutral"} />
-        <StatCard label="Open calls" value={open} />
-      </div>
+      {editing && own && member && (
+        <EditProfileDialog
+          profile={member}
+          onClose={() => setEditing(false)}
+          onSaved={(profile) => {
+            setMember(profile);
+            setEditing(false);
+          }}
+        />
+      )}
 
-      <h2 className="mb-3 mt-8 text-lg font-semibold">Recent predictions</h2>
-      <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
-        {predictions === null ? (
-          <div className="h-24 animate-pulse bg-[#141414]" />
-        ) : predictions.length === 0 ? (
-          <p className="px-6 py-10 text-center text-sm text-[#888]">
-            No predictions yet.{" "}
-            <Link href="/predictions" className="text-[#22c55e] hover:underline">
-              Make one
-            </Link>
-          </p>
-        ) : (
-          <ul>
-            {predictions.map((prediction) => (
-              <li key={prediction.id} className="border-b border-[#1b1b1b] last:border-b-0">
-                <PredictionCard prediction={prediction} showUser={false} />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {composing && (
+        // The composer asks before discarding a draft, so the dialog leaves Escape and outside clicks to it.
+        <Dialog title="New post" onClose={() => setComposing(false)} guarded>
+          <Composer
+            user={user}
+            autoFocus
+            onCancel={() => setComposing(false)}
+            onPosted={(post) => {
+              setAdded((all) => [post, ...all]);
+              setComposing(false);
+            }}
+          />
+        </Dialog>
+      )}
     </PageShell>
   );
 }

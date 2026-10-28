@@ -2,6 +2,7 @@ import { getAdminClient, getPublicClient } from "../supabase/server";
 import { isValidSymbol } from "../validation/symbol";
 import { stockBoardSymbol } from "./communities";
 import type { CommunityResolver } from "./ipoCommunity";
+import { imageOwner, imageUrl, parseImageInputs, readPostImages, type PostImage } from "./images";
 import { parseMentionInputs, readMentions, resolveMentions, type MentionResolver, type StoredMention } from "./mentions";
 import {
   LINK_UNLOCK_DAYS,
@@ -9,9 +10,12 @@ import {
   accountAgeDays,
   checkContent,
   checkRate,
+  checkTitle,
   extractCashtags,
+  isPostKind,
   normaliseForDuplicate,
   postSymbols,
+  type PostKind,
   type Sentiment,
 } from "./rules";
 import type { PostView, SentimentSummary, TrendingSymbol } from "./types";
@@ -37,10 +41,20 @@ export type NewPostRow = {
   /** Only set when the post has verified @mentions (post_mentions migration). */
   mentions?: StoredMention[];
   mention_community_ids?: string[];
+  /** Only set when given (post_titles_and_kinds migration); never on a comment. */
+  title?: string;
+  kind?: PostKind;
+  /** A quote post: the top-level post it quotes (reposts migration). */
+  quote_of?: string;
+  /** Photos, already checked to be the author's own unused uploads (community_images migration). */
+  images?: PostImage[];
 };
 
 /** What an author's edit changes. Mentions are replaced as a whole. */
 export type PostEdit = {
+  /** Only present when the edit sets them (null clears); never on a comment. */
+  title?: string | null;
+  kind?: PostKind | null;
   body: string;
   symbols: string[];
   mentions: StoredMention[];
@@ -108,6 +122,15 @@ export type ListQuery = {
   /** One post or comment by id. */
   id?: string;
   sentiment?: Sentiment;
+  /** Top-level posts of one type. */
+  kind?: PostKind;
+  /** A member's own writing (a profile id), newest first: their posts, and with `withReplies` their comments too. */
+  author?: string;
+  withReplies?: boolean;
+  /** These posts, in any order (a profile's Liked tab). */
+  ids?: string[];
+  /** Posts with a verified instrument mention on this exchange. */
+  exchange?: Exchange;
   before?: string;
   limit: number;
 };
@@ -129,6 +152,26 @@ export interface CommunityStore {
   updatePost?(postId: string, authorId: string, edit: PostEdit): Promise<PostView | null>;
   /** Tell someone their post or comment was answered. Optional; a failure never fails the reply. */
   notify?(row: ReplyNotification): Promise<void>;
+  /** The author's own uploads among `paths` that no post uses yet (community_images migration). */
+  unusedUploads?(userId: string, paths: string[]): Promise<{ path: string; width: number; height: number }[]>;
+  /** Link uploads to the post that now uses them; returns how many were linked. */
+  attachUploads?(postId: string, userId: string, paths: string[]): Promise<number>;
+  /** Remove a post that couldn't be completed (its photos couldn't be linked). */
+  discardPost?(postId: string, userId: string): Promise<void>;
+  /** The members these @handles belong to (profiles are public); unknown handles are left out. */
+  profilesByHandle?(handles: string[]): Promise<{ id: string; username: string }[]>;
+  /** A profile's id by @handle (profiles are public), or null. */
+  profileId?(username: string): Promise<string | null>;
+  /** One page of ranked top-level post ids (community_feed migration). Throws NOT_CONFIGURED before it. */
+  rankPosts?(query: RankQuery): Promise<string[]>;
+  /** Whom a member follows (profile ids). */
+  followees?(userId: string): Promise<string[]>;
+  /** The symbols on a member's watchlist (their followed stocks). */
+  watchSymbols?(userId: string): Promise<string[]>;
+  /** What a member reposted, newest first, before `beforeIso` (reposts are public). */
+  reposts?(userId: string, beforeIso: string | undefined, limit: number): Promise<{ postId: string; likedAt: string }[]>;
+  /** What a member liked, newest like first, before `beforeIso` (likes are public). */
+  likes?(userId: string, beforeIso: string | undefined, limit: number): Promise<{ postId: string; likedAt: string }[]>;
 }
 
 export type CreatePostInput = {
@@ -143,6 +186,13 @@ export type CreatePostInput = {
   ipoId?: unknown;
   /** Picks from the @ autocomplete: [{ kind, id | ipoId, text }]. */
   mentions?: unknown;
+  /** Optional headline and post type; top-level posts only. */
+  title?: unknown;
+  kind?: unknown;
+  /** Quote this top-level post (a post of your own that embeds it). */
+  quoteOf?: unknown;
+  /** Photos uploaded through /api/community/images: [{ path, alt? }], at most 4, top-level posts only. */
+  images?: unknown;
 };
 
 export type CreatePostResult =
@@ -197,6 +247,25 @@ export async function createPost(
   const mentionInputs = parseMentionInputs(input.mentions);
   if (!mentionInputs.ok) return mentionInputs;
 
+  const meta = readPostMeta(input.title, input.kind);
+  if (!meta.ok) return meta;
+
+  const imageInputs = parseImageInputs(input.images);
+  if (!imageInputs.ok) return imageInputs;
+
+  let quoteOf: string | null = null;
+  let quotedAuthor: string | null = null;
+  if (input.quoteOf !== undefined && input.quoteOf !== null) {
+    if (typeof input.quoteOf !== "string" || !UUID.test(input.quoteOf)) return { ok: false, status: 400, error: "Invalid quote." };
+    if (input.parentId !== undefined && input.parentId !== null) return { ok: false, status: 400, error: "Replies can't quote a post." };
+    // Read through the public client, so a hidden post can't be quoted.
+    const quoted = await store.getParent(input.quoteOf);
+    if (!quoted || quoted.deleted) return { ok: false, status: 404, error: "The post you're quoting is no longer available." };
+    if (quoted.parentId != null) return { ok: false, status: 400, error: "Only posts can be quoted, not comments." };
+    quoteOf = input.quoteOf;
+    quotedAuthor = quoted.authorId ?? null;
+  }
+
   let parentId: string | null = null;
   let parentSymbols: string[] = [];
   let parent: ParentRecord | null = null;
@@ -223,6 +292,8 @@ export async function createPost(
     }
     parentId = input.parentId;
     parentSymbols = parent.symbols;
+    if (meta.title || meta.kind) return { ok: false, status: 400, error: "Comments don't take a title or post type." };
+    if (imageInputs.images.length) return { ok: false, status: 400, error: "Photos can be added to posts, not comments." };
   }
 
   const age = accountAgeDays(author.createdAt, now);
@@ -242,6 +313,27 @@ export async function createPost(
   const recent = await store.recentBodies(author.id, new Date(now - 86_400_000).toISOString());
   if (recent.some((body) => normaliseForDuplicate(body) === fingerprint)) {
     return { ok: false, status: 422, error: "You already posted this.", code: "DUPLICATE" };
+  }
+
+  // Photos: each must be this author's own upload that no post uses yet.
+  let images: PostImage[] = [];
+  if (imageInputs.images.length) {
+    if (imageInputs.images.some((image) => imageOwner(image.path) !== author.id.toLowerCase())) {
+      return { ok: false, status: 403, error: "You can only post your own photos." };
+    }
+    if (!store.unusedUploads || !store.attachUploads) return IMAGES_OFF;
+    let found: { path: string; width: number; height: number }[];
+    try {
+      found = await store.unusedUploads(author.id, imageInputs.images.map((image) => image.path));
+    } catch (error) {
+      if ((error as { code?: string })?.code === "NOT_CONFIGURED") return IMAGES_OFF;
+      throw error;
+    }
+    const byPath = new Map(found.map((record) => [record.path, record]));
+    if (imageInputs.images.some((image) => !byPath.has(image.path))) {
+      return { ok: false, status: 409, error: "One of the photos is no longer available. Remove it and add it again.", code: "IMAGE_GONE" };
+    }
+    images = imageInputs.images.map((image) => ({ path: image.path, width: byPath.get(image.path)!.width, height: byPath.get(image.path)!.height, alt: image.alt }));
   }
 
   // The community, last: an IPO community is created by its first post, so
@@ -270,27 +362,120 @@ export async function createPost(
   const base = parentId ? parentSymbols : [board ?? communityBoard].filter((s): s is string => Boolean(s));
   const symbols = Array.from(new Set([...base, ...mentioned.symbols, ...postSymbols(content.body)])).slice(0, MAX_SYMBOLS);
 
-  const post = await store.insertPost({
-    author_id: author.id,
-    body: content.body,
-    // Replies don't take a stance; the board's sentiment comes from posts.
-    sentiment: parentId ? null : sentiment,
-    symbols,
-    parent_id: parentId,
-    ...(communityId ? { community_id: communityId } : {}),
-    ...(mentioned.mentions.length ? { mentions: mentioned.mentions, mention_community_ids: mentioned.communityIds } : {}),
-  });
+  let post: PostView;
+  try {
+    post = await store.insertPost({
+      author_id: author.id,
+      body: content.body,
+      // Replies don't take a stance; the board's sentiment comes from posts.
+      sentiment: parentId ? null : sentiment,
+      symbols,
+      parent_id: parentId,
+      ...(communityId ? { community_id: communityId } : {}),
+      ...(mentioned.mentions.length ? { mentions: mentioned.mentions, mention_community_ids: mentioned.communityIds } : {}),
+      ...(meta.title ? { title: meta.title } : {}),
+      ...(meta.kind ? { kind: meta.kind } : {}),
+      ...(quoteOf ? { quote_of: quoteOf } : {}),
+      ...(images.length ? { images } : {}),
+    });
+  } catch (error) {
+    if (images.length && isMissingColumn(error)) return IMAGES_OFF;
+    if (quoteOf && isMissingColumn(error)) return QUOTES_OFF;
+    if ((meta.title || meta.kind) && isMissingColumn(error)) return KINDS_OFF;
+    throw error;
+  }
 
-  if (parent?.authorId && rootId && parent.authorId !== author.id && store.notify) {
+  // The photos now belong to the post. If they can't be linked, the post is taken back:
+  // otherwise the cleanup job would later remove photos the post shows.
+  if (images.length) {
+    const paths = images.map((image) => image.path);
+    let linked = 0;
     try {
-      await store.notify(replyNotification({ ...parent, authorId: parent.authorId }, post, rootId));
+      linked = await store.attachUploads!(post.id, author.id, paths);
+      if (linked < paths.length) linked = (await store.attachUploads!(post.id, author.id, paths)) + linked;
     } catch (error) {
-      console.error("Reply notification error:", error);
+      console.error("Attaching photos failed:", error);
     }
+    if (linked < paths.length) {
+      await store.discardPost?.(post.id, author.id).catch(() => undefined);
+      return { ok: false, status: 409, error: "Your photos couldn't be attached. Please try posting again.", code: "IMAGE_GONE" };
+    }
+  }
+
+  // Who hears about it: the author answered, the author quoted, and members @mentioned by handle.
+  // One notification per person, never yourself; a failure never fails the post.
+  if (store.notify) {
+    const rows: ReplyNotification[] = [];
+    const told = new Set<string>([author.id]);
+    if (parent?.authorId && rootId && !told.has(parent.authorId)) {
+      rows.push(replyNotification({ ...parent, authorId: parent.authorId }, post, rootId));
+      told.add(parent.authorId);
+    }
+    if (quotedAuthor && !told.has(quotedAuthor)) {
+      rows.push(postNotification(quotedAuthor, `@${post.author.username} quoted your post`, post, rootId));
+      told.add(quotedAuthor);
+    }
+    const handles = userHandles(content.body, mentioned.mentions);
+    if (handles.length && store.profilesByHandle) {
+      try {
+        for (const member of await store.profilesByHandle(handles)) {
+          if (told.has(member.id)) continue;
+          rows.push(postNotification(member.id, `@${post.author.username} mentioned you`, post, rootId));
+          told.add(member.id);
+        }
+      } catch (error) {
+        console.error("Mention lookup error:", error);
+      }
+    }
+    await Promise.all(
+      rows.map((row) =>
+        store.notify!(row).catch((error) => {
+          console.error("Community notification error:", error);
+        })
+      )
+    );
   }
 
   return { ok: true, post };
 }
+
+type PostMeta = { ok: true; title: string | null; kind: PostKind | null } | { ok: false; status: number; error: string; code?: string };
+
+/** A post's optional title and type, checked. Blank or missing means none. */
+export function readPostMeta(title: unknown, kind: unknown): PostMeta {
+  const checked = checkTitle(title);
+  if (!checked.ok) return { ok: false, status: 422, error: checked.reason, code: "RULES" };
+  if (kind === undefined || kind === null || kind === "") return { ok: true, title: checked.title, kind: null };
+  if (!isPostKind(kind)) return { ok: false, status: 400, error: "Unknown post type." };
+  return { ok: true, title: checked.title, kind };
+}
+
+/** A write naming a column the database doesn't have yet (a migration waiting for approval). */
+function isMissingColumn(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return code === UNDEFINED_COLUMN || code === "PGRST204";
+}
+
+const IMAGES_OFF = {
+  ok: false,
+  status: 503,
+  error: "Photo uploads aren't switched on yet. Remove the photos and post again.",
+  code: "NOT_CONFIGURED",
+} as const;
+
+const QUOTES_OFF = {
+  ok: false,
+  status: 503,
+  error: "Quote posts aren't switched on yet.",
+  code: "NOT_CONFIGURED",
+} as const;
+
+const KINDS_OFF = {
+  ok: false,
+  status: 503,
+  error: "Titles and post types aren't switched on yet. Remove them and try again.",
+  code: "NOT_CONFIGURED",
+} as const;
 
 /** Where a comment lives: its post's page, opened at that comment. */
 export function commentPath(rootId: string, commentId: string): string {
@@ -298,6 +483,38 @@ export function commentPath(rootId: string, commentId: string): string {
 }
 
 /** "@ayush replied to your comment", with the reply's text and a link to it. */
+/** Most members one post can @mention by handle (and so notify). */
+export const MAX_USER_MENTIONS = 5;
+
+/**
+ * The @handles a post names, lowercase and de-duplicated, at most
+ * MAX_USER_MENTIONS. Text inside a verified stock/IPO/bond mention ("@SBIN")
+ * isn't a handle, and neither is the "@" of an email address. They're only
+ * candidates: the server notifies only handles that belong to a real member.
+ */
+export function userHandles(body: string, mentions: StoredMention[] = []): string[] {
+  const found: string[] = [];
+  for (const match of body.matchAll(/(^|[^A-Za-z0-9_.@])@([A-Za-z][A-Za-z0-9_]{2,19})(?![A-Za-z0-9_])/g)) {
+    const start = (match.index ?? 0) + match[1].length;
+    if (mentions.some((m) => start < m.end && start + match[2].length + 1 > m.start)) continue;
+    const handle = match[2].toLowerCase();
+    if (!found.includes(handle)) found.push(handle);
+    if (found.length === MAX_USER_MENTIONS) break;
+  }
+  return found;
+}
+
+/** "@ayush mentioned you" / "@ayush quoted your post", with the post's text and a link to it. */
+export function postNotification(userId: string, title: string, post: PostView, rootId: string | null): ReplyNotification {
+  const text = post.body.replace(/\s+/g, " ").trim();
+  return {
+    user_id: userId,
+    title: title.slice(0, 140),
+    body: text.length > 200 ? `${text.slice(0, 199)}…` : text,
+    link: rootId ? commentPath(rootId, post.id) : `/community/post/${post.id}`,
+  };
+}
+
 export function replyNotification(parent: ParentRecord & { authorId: string }, reply: PostView, rootId: string): ReplyNotification {
   const text = reply.body.replace(/\s+/g, " ").trim();
   return {
@@ -308,13 +525,22 @@ export function replyNotification(parent: ParentRecord & { authorId: string }, r
   };
 }
 
-export type EditPostInput = { token: string | null; postId: unknown; body: unknown; mentions?: unknown };
+export type EditPostInput = {
+  token: string | null;
+  postId: unknown;
+  body: unknown;
+  mentions?: unknown;
+  /** Left out: unchanged. Blank or null: removed. Top-level posts only. */
+  title?: unknown;
+  kind?: unknown;
+};
 
 /**
  * An author edits their own post: the text, and the mentions (kept, removed
  * or replaced — whatever the edited composer sends). The same content rules
- * as a new post apply. The board the post was written on, its sentiment, its
- * community and its replies are unchanged.
+ * as a new post apply, and a top-level post's title and type can change too.
+ * The board the post was written on, its sentiment, its community and its
+ * replies are unchanged.
  */
 export async function editPost(
   input: EditPostInput,
@@ -336,11 +562,19 @@ export async function editPost(
   const mentionInputs = parseMentionInputs(input.mentions);
   if (!mentionInputs.ok) return mentionInputs;
 
+  const meta = readPostMeta(input.title, input.kind);
+  if (!meta.ok) return meta;
+
   const existing = await store.getPostForEdit(input.postId);
   // Someone else's post looks the same as a missing one.
   if (!existing || existing.hidden || existing.deleted || existing.authorId !== userId) {
     return { ok: false, status: 404, error: "That post no longer exists." };
   }
+  if (existing.parentId && (meta.title || meta.kind)) return { ok: false, status: 400, error: "Comments don't take a title or post type." };
+  // Only what the edit names is written, so an edit that leaves them alone works before the migration too.
+  const metaEdit = existing.parentId
+    ? {}
+    : { ...(input.title !== undefined ? { title: meta.title } : {}), ...(input.kind !== undefined ? { kind: meta.kind } : {}) };
 
   const author = await store.getAuthor(userId);
   if (!author) return { ok: false, status: 403, error: "Pick your @handle before posting.", code: "NO_PROFILE" };
@@ -360,19 +594,29 @@ export async function editPost(
   const kept = existing.symbols.filter((s) => !derived.has(s));
   const symbols = Array.from(new Set([...kept, ...mentioned.symbols, ...extractCashtags(content.body)])).slice(0, MAX_SYMBOLS);
 
-  const post = await store.updatePost(input.postId, userId, {
-    body: content.body,
-    symbols,
-    mentions: mentioned.mentions,
-    mention_community_ids: mentioned.communityIds,
-    edited_at: new Date(now).toISOString(),
-  });
+  let post: PostView | null;
+  try {
+    post = await store.updatePost(input.postId, userId, {
+      ...metaEdit,
+      body: content.body,
+      symbols,
+      mentions: mentioned.mentions,
+      mention_community_ids: mentioned.communityIds,
+      edited_at: new Date(now).toISOString(),
+    });
+  } catch (error) {
+    if (Object.keys(metaEdit).length && isMissingColumn(error)) return KINDS_OFF;
+    throw error;
+  }
   return post ? { ok: true, post } : { ok: false, status: 404, error: "That post no longer exists." };
 }
 
 /* ------------------------------------------------------------------ */
 /* Supabase-backed store                                               */
 /* ------------------------------------------------------------------ */
+
+/** Where photos are served from (the public bucket's address). */
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
 const BASE_COLUMNS = "id, body, sentiment, symbols, parent_id, like_count, reply_count, created_at";
 const AUTHOR = "author:profiles!posts_author_id_fkey(username, display_name, avatar_url, role, pred_resolved, pred_wins, pred_points)";
@@ -384,12 +628,16 @@ const AUTHOR_BASIC = "author:profiles!posts_author_id_fkey(username, display_nam
  * (undefined column) and the next set is tried, so boards keep working while
  * a migration waits for approval.
  */
-const COLUMN_SETS: { columns: string; mentions: boolean; community: boolean; threads: boolean }[] = [
-  { columns: `${BASE_COLUMNS}, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true },
-  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: false },
-  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false, community: true, threads: false },
-  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false, community: false, threads: false },
-  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false, community: false, threads: false },
+const COLUMN_SETS: { columns: string; mentions: boolean; community: boolean; threads: boolean; kinds: boolean; reposts: boolean; images: boolean }[] = [
+  { columns: `${BASE_COLUMNS}, images, repost_count, quote_of, up_count, down_count, title, kind, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true, kinds: true, reposts: true, images: true },
+  { columns: `${BASE_COLUMNS}, repost_count, quote_of, up_count, down_count, title, kind, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true, kinds: true, reposts: true, images: false },
+  { columns: `${BASE_COLUMNS}, up_count, down_count, title, kind, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true, kinds: true, reposts: false, images: false },
+  { columns: `${BASE_COLUMNS}, title, kind, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true, kinds: true, reposts: false, images: false },
+  { columns: `${BASE_COLUMNS}, root_id, comment_count, deleted_at, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: true, kinds: false, reposts: false, images: false },
+  { columns: `${BASE_COLUMNS}, community_id, mentions, edited_at, ${AUTHOR}`, mentions: true, community: true, threads: false, kinds: false, reposts: false, images: false },
+  { columns: `${BASE_COLUMNS}, community_id, ${AUTHOR}`, mentions: false, community: true, threads: false, kinds: false, reposts: false, images: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR}`, mentions: false, community: false, threads: false, kinds: false, reposts: false, images: false },
+  { columns: `${BASE_COLUMNS}, ${AUTHOR_BASIC}`, mentions: false, community: false, threads: false, kinds: false, reposts: false, images: false },
 ];
 
 /** Matches no row: a filter the schema can't answer yet has no posts. */
@@ -431,6 +679,13 @@ type AuthorJoin = {
 
 type PostRow = {
   id: string;
+  images?: unknown;
+  repost_count?: number;
+  quote_of?: string | null;
+  up_count?: number;
+  down_count?: number;
+  title?: string | null;
+  kind?: string | null;
   body: string;
   sentiment: Sentiment | null;
   symbols: string[] | null;
@@ -483,6 +738,7 @@ export function toPostView(row: PostRow): PostView {
 
   return {
     id: row.id,
+    ...(row.parent_id === null && row.title !== undefined ? { title: row.title ?? null, kind: isPostKind(row.kind) ? row.kind : null } : {}),
     body: row.body,
     sentiment: row.sentiment,
     symbols: row.symbols ?? [],
@@ -493,6 +749,12 @@ export function toPostView(row: PostRow): PostView {
     rootId,
     ...thread,
     likeCount: row.like_count,
+    // Before the post_votes migration there are no votes to show.
+    ...(row.up_count !== undefined ? { upCount: row.up_count, downCount: row.down_count ?? 0 } : {}),
+    // Photos (community_images migration), with their public addresses.
+    ...(row.images !== undefined && readPostImages(row.images).length ? { images: readPostImages(row.images).map((image) => ({ ...image, url: imageUrl(image.path, SUPABASE_URL) })) } : {}),
+    // Before the reposts migration there is nothing to repost, quote or save.
+    ...(row.repost_count !== undefined && row.parent_id === null ? { repostCount: row.repost_count, quoteOf: row.quote_of ?? null } : {}),
     replyCount: row.reply_count,
     createdAt: row.created_at,
     author: {
@@ -533,11 +795,23 @@ export function getSupabaseStore(): CommunityStore | null {
   const reader = getPublicClient();
   if (!admin || !reader) return null;
 
-  function listWith(set: (typeof COLUMN_SETS)[number], { symbol, community, asset, parentId, thread, after, id, sentiment, before, limit }: ListQuery) {
+  function listWith(set: (typeof COLUMN_SETS)[number], { symbol, community, asset, parentId, thread, after, id, sentiment, kind, before, limit, author, withReplies, ids, exchange }: ListQuery) {
     const { columns, mentions } = set;
     let query = reader!.from("posts").select(columns);
 
     if (id) return query.eq("id", id).limit(1);
+    if (ids) {
+      // Deleted comments kept as placeholders aren't anyone's liked post.
+      query = query.in("id", ids.filter((v) => UUID.test(v)));
+      return (set.threads ? query.is("deleted_at", null) : query).limit(limit);
+    }
+    if (author) {
+      query = query.eq("author_id", author).order("created_at", { ascending: false });
+      if (!withReplies) query = query.is("parent_id", null);
+      if (set.threads) query = query.is("deleted_at", null);
+      if (before) query = query.lt("created_at", before);
+      return query.limit(limit);
+    }
     if (thread) {
       // Before the migration a thread is one level: the post's direct replies.
       query = (set.threads ? query.eq("root_id", thread) : query.eq("parent_id", thread))
@@ -559,6 +833,10 @@ export function getSupabaseStore(): CommunityStore | null {
       query = "or" in filter ? query.or(filter.or) : query.filter(filter.column, filter.op, filter.value);
     }
     if (sentiment) query = query.eq("sentiment", sentiment);
+    // jsonb containment as a JSON literal (contains() would send a Postgres array); exchange is NSE or BSE, never request text.
+    if (exchange) query = mentions ? query.filter("mentions", "cs", JSON.stringify([{ kind: "instrument", exchange }])) : query.eq("id", NONE);
+    // Before the post_titles_and_kinds migration no post has a type.
+    if (kind && !parentId) query = set.kinds ? query.eq("kind", kind) : query.eq("id", NONE);
     if (before) query = query.lt("created_at", before);
 
     return query.limit(limit);
@@ -665,6 +943,106 @@ export function getSupabaseStore(): CommunityStore | null {
       return toPostView(full.data as unknown as PostRow);
     },
 
+    async rankPosts(q) {
+      const { data, error } = await reader.rpc("community_feed", {
+        p_sort: q.sort,
+        p_since: q.since ?? null,
+        p_any_authors: q.anyAuthors ?? null,
+        p_any_symbols: q.anySymbols ?? null,
+        p_any_community: q.anyCommunity ?? null,
+        p_boost_authors: q.boostAuthors ?? null,
+        p_boost_symbols: q.boostSymbols ?? null,
+        p_sentiment: q.sentiment ?? null,
+        p_kind: q.kind ?? null,
+        p_exchange: q.exchange ?? null,
+        p_limit: q.limit,
+        p_offset: q.offset,
+      });
+      if (error) {
+        // The function (or a column it needs) isn't there yet: its migrations wait for approval.
+        if (RANKING_MISSING.includes(error.code ?? "")) throw Object.assign(new Error("Ranked feeds aren't switched on"), { code: "NOT_CONFIGURED" });
+        throw error;
+      }
+      return ((data ?? []) as { post_id: string }[]).map((row) => row.post_id);
+    },
+
+    async followees(userId) {
+      const { data, error } = await admin.from("follows").select("followee_id").eq("follower_id", userId).limit(FOLLOW_LIMIT);
+      if (error) {
+        if (MISSING_TABLE.includes(error.code ?? "")) return [];
+        throw error;
+      }
+      return (data ?? []).map((row) => row.followee_id as string);
+    },
+
+    async watchSymbols(userId) {
+      // The watchlist is private (RLS: owner only); this reads it only for the viewer whose token was verified.
+      const { data, error } = await admin.from("watchlist").select("symbol").eq("user_id", userId).limit(FOLLOW_LIMIT);
+      if (error) {
+        if (MISSING_TABLE.includes(error.code ?? "")) return [];
+        throw error;
+      }
+      return [...new Set((data ?? []).map((row) => String(row.symbol).trim().toUpperCase()).filter(isValidSymbol))];
+    },
+
+    async unusedUploads(userId, paths) {
+      const { data, error } = await admin.from("community_uploads").select("path, width, height").eq("user_id", userId).is("post_id", null).is("attached_at", null).in("path", paths);
+      if (error) {
+        if (MISSING_TABLE.includes(error.code ?? "")) throw Object.assign(new Error("Photos aren't switched on"), { code: "NOT_CONFIGURED" });
+        throw error;
+      }
+      return (data ?? []).map((r) => ({ path: r.path as string, width: r.width as number, height: r.height as number }));
+    },
+
+    async attachUploads(postId, userId, paths) {
+      const { data, error } = await admin
+        .from("community_uploads")
+        .update({ post_id: postId, attached_at: new Date().toISOString() })
+        .eq("user_id", userId)
+        .is("post_id", null)
+        .is("attached_at", null)
+        .in("path", paths)
+        .select("path");
+      if (error) throw error;
+      return data?.length ?? 0;
+    },
+
+    async discardPost(postId, userId) {
+      await admin.from("posts").delete().eq("id", postId).eq("author_id", userId);
+    },
+
+    async profilesByHandle(handles) {
+      if (!handles.length) return [];
+      const { data, error } = await reader.from("profiles").select("id, username").in("username", handles.slice(0, MAX_USER_MENTIONS));
+      if (error) throw error;
+      return (data ?? []).map((row) => ({ id: row.id as string, username: row.username as string }));
+    },
+
+    async profileId(username) {
+      const { data, error } = await reader.from("profiles").select("id").eq("username", username).maybeSingle();
+      if (error) throw error;
+      return (data?.id as string | undefined) ?? null;
+    },
+
+    async likes(userId, beforeIso, limit) {
+      let query = reader.from("post_likes").select("post_id, created_at").eq("user_id", userId).order("created_at", { ascending: false });
+      if (beforeIso) query = query.lt("created_at", beforeIso);
+      const { data, error } = await query.limit(limit);
+      if (error) throw error;
+      return (data ?? []).map((row) => ({ postId: row.post_id as string, likedAt: row.created_at as string }));
+    },
+
+    async reposts(userId, beforeIso, limit) {
+      let query = reader.from("reposts").select("post_id, created_at").eq("user_id", userId).order("created_at", { ascending: false });
+      if (beforeIso) query = query.lt("created_at", beforeIso);
+      const { data, error } = await query.limit(limit);
+      if (error) {
+        if (MISSING_TABLE.includes(error.code ?? "")) throw Object.assign(new Error("Reposts aren't switched on"), { code: "NOT_CONFIGURED" });
+        throw error;
+      }
+      return (data ?? []).map((row) => ({ postId: row.post_id as string, likedAt: row.created_at as string }));
+    },
+
     async notify(row) {
       // The alerts migration's in-app notifications (the navbar bell); without that table there is nowhere to put one.
       const { error } = await admin.from("notifications").insert({ ...row, kind: "community" });
@@ -707,6 +1085,187 @@ export function getSupabaseStore(): CommunityStore | null {
 /* ------------------------------------------------------------------ */
 /* Read helpers                                                        */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------ ranked feeds */
+
+export type FeedName = "for-you" | "following" | "trending" | "latest" | "top";
+export const FEEDS: readonly FeedName[] = ["for-you", "following", "trending", "latest", "top"];
+export type FeedSort = "hot" | "new" | "top" | "discussed" | "trending";
+export const FEED_SORTS: readonly FeedSort[] = ["hot", "new", "top", "discussed", "trending"];
+export type FeedRange = "day" | "week" | "month" | "year" | "all";
+export const FEED_RANGES: readonly FeedRange[] = ["day", "week", "month", "year", "all"];
+export type Exchange = "NSE" | "BSE";
+
+/** How many follows / watched symbols a feed considers. */
+const FOLLOW_LIMIT = 500;
+/** The ranking function, or a column it reads, isn't in the database yet. */
+const RANKING_MISSING = ["PGRST202", "42883", "42703", "42P01"];
+const MISSING_TABLE = ["42P01", "PGRST205"];
+
+export type RankQuery = {
+  sort: FeedSort;
+  since?: string;
+  anyAuthors?: string[];
+  anySymbols?: string[];
+  anyCommunity?: string;
+  boostAuthors?: string[];
+  boostSymbols?: string[];
+  sentiment?: Sentiment;
+  kind?: PostKind;
+  exchange?: Exchange;
+  limit: number;
+  offset: number;
+};
+
+const RANGE_DAYS: Record<FeedRange, number | null> = { day: 1, week: 7, month: 30, year: 365, all: null };
+
+/** The start of a Top / Most discussed range, or undefined for all time. */
+export function rangeStart(range: FeedRange, now: number): string | undefined {
+  const days = RANGE_DAYS[range];
+  return days === null ? undefined : new Date(now - days * 86_400_000).toISOString();
+}
+
+export function defaultSort(feed: FeedName): FeedSort {
+  return feed === "for-you" ? "hot" : feed === "trending" ? "trending" : feed === "top" ? "top" : "new";
+}
+
+export type FeedInput = {
+  feed: FeedName;
+  /** How to order it. Defaults: For You hot, Trending trending, Top top, Latest and Following new. */
+  sort?: FeedSort;
+  range?: FeedRange;
+  /** The signed-in viewer, already verified from their token; null when signed out. */
+  viewerId: string | null;
+  /** A board's scope (its symbols and community) instead of a feed tab. */
+  scope?: { anySymbols: string[]; anyCommunity?: string };
+  sentiment?: Sentiment;
+  kind?: PostKind;
+  exchange?: Exchange;
+  offset: number;
+  limit: number;
+};
+
+export type FeedResult =
+  | { ok: true; posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows" }
+  | { ok: false; status: number; error: string; code?: string };
+
+/**
+ * One feed implementation for every tab and board: it works out whom and
+ * what the viewer follows (server-side, for the verified viewer only), asks
+ * community_feed for a ranked page of ids, then reads those posts in one
+ * query and keeps the rank order. Paged by offset (`next`).
+ */
+export async function getFeed(store: CommunityStore | null, input: FeedInput, now: number = Date.now()): Promise<FeedResult> {
+  if (!store?.rankPosts) return { ok: false, status: 503, error: "Ranked feeds aren't switched on yet.", code: "NOT_CONFIGURED" };
+
+  const sort = input.sort ?? defaultSort(input.feed);
+  const ranged = sort === "top" || sort === "discussed";
+  const query: RankQuery = {
+    sort,
+    since: ranged ? rangeStart(input.range ?? "week", now) : undefined,
+    sentiment: input.sentiment,
+    kind: input.kind,
+    exchange: input.exchange,
+    limit: input.limit,
+    offset: input.offset,
+  };
+
+  if (input.scope) {
+    query.anySymbols = input.scope.anySymbols.length ? input.scope.anySymbols : undefined;
+    query.anyCommunity = input.scope.anyCommunity;
+  } else if (input.feed === "following" || input.feed === "for-you") {
+    if (input.feed === "following" && !input.viewerId) {
+      return { ok: false, status: 401, error: "Sign in to see posts from people and stocks you follow.", code: "SIGNED_OUT" };
+    }
+    if (input.viewerId) {
+      const [authors, symbols] = await Promise.all([store.followees?.(input.viewerId) ?? [], store.watchSymbols?.(input.viewerId) ?? []]);
+      if (input.feed === "following") {
+        if (!authors.length && !symbols.length) return { ok: true, posts: [], hasMore: false, next: null, empty: "no-follows" };
+        query.anyAuthors = authors.length ? authors : undefined;
+        query.anySymbols = symbols.length ? symbols : undefined;
+      } else {
+        query.boostAuthors = authors.length ? authors : undefined;
+        query.boostSymbols = symbols.length ? symbols : undefined;
+      }
+    }
+  }
+
+  let ids: string[];
+  try {
+    ids = await store.rankPosts(query);
+  } catch (error) {
+    if ((error as { code?: string })?.code === "NOT_CONFIGURED") {
+      return { ok: false, status: 503, error: "This feed switches on once its database update is approved.", code: "NOT_CONFIGURED" };
+    }
+    throw error;
+  }
+  if (!ids.length) return { ok: true, posts: [], hasMore: false, next: null };
+
+  const byId = new Map((await store.listPosts({ ids, limit: ids.length })).map((post) => [post.id, post]));
+  const posts = ids.flatMap((id) => byId.get(id) ?? []);
+  const hasMore = ids.length === input.limit;
+  return { ok: true, posts, hasMore, next: hasMore ? String(input.offset + ids.length) : null };
+}
+
+export type ProfileTab = "posts" | "replies" | "liked" | "reposts";
+export const PROFILE_TABS: readonly ProfileTab[] = ["posts", "replies", "liked", "reposts"];
+
+export type ProfileFeedResult =
+  | { ok: true; posts: PostView[]; hasMore: boolean; next: string | null }
+  | { ok: false; status: number; error: string; code?: string };
+
+/**
+ * One tab of a member's profile: their posts; their posts and comments; the
+ * posts they liked, or reposted, in the order they did it. `before` is the
+ * previous page's `next` (a post's created_at, or for Liked a like's).
+ * Hidden posts never appear (RLS), nor do deleted-comment placeholders.
+ */
+export async function getProfileFeed(
+  store: CommunityStore | null,
+  { username, tab, before, limit }: { username: string; tab: ProfileTab; before?: string; limit: number }
+): Promise<ProfileFeedResult> {
+  if (!store?.profileId || (tab === "liked" && !store.likes) || (tab === "reposts" && !store.reposts)) {
+    return { ok: false, status: 503, error: "Profiles aren't set up yet.", code: "NOT_CONFIGURED" };
+  }
+  const userId = await store.profileId(username);
+  if (!userId) return { ok: false, status: 404, error: "No member has that handle." };
+
+  if (tab === "posts" || tab === "replies") {
+    const posts = await store.listPosts({ author: userId, withReplies: tab === "replies", before, limit });
+    return { ok: true, posts, hasMore: posts.length === limit, next: posts.length ? posts[posts.length - 1].createdAt : null };
+  }
+
+  let likes: { postId: string; likedAt: string }[];
+  try {
+    likes = tab === "liked" ? await store.likes!(userId, before, limit) : await store.reposts!(userId, before, limit);
+  } catch (error) {
+    if ((error as { code?: string })?.code === "NOT_CONFIGURED") return { ok: false, status: 503, error: "Reposts aren't switched on yet.", code: "NOT_CONFIGURED" };
+    throw error;
+  }
+  if (!likes.length) return { ok: true, posts: [], hasMore: false, next: null };
+  const found = new Map((await store.listPosts({ ids: likes.map((l) => l.postId), limit })).map((post) => [post.id, post]));
+  // A liked post that was since hidden or deleted drops out; the cursor still moves past its like.
+  const posts = likes.flatMap((like) => found.get(like.postId) ?? []);
+  return { ok: true, posts, hasMore: likes.length === limit, next: likes[likes.length - 1].likedAt };
+}
+
+/**
+ * Adds `quoted` to quote posts: the post each one quotes, read in one query
+ * for the whole page. A quoted post that's hidden now comes back null, and
+ * the card says the original is unavailable.
+ */
+export async function attachQuotes(store: CommunityStore, posts: PostView[]): Promise<PostView[]> {
+  const ids = [...new Set(posts.flatMap((post) => (post.quoteOf ? [post.quoteOf] : [])))];
+  if (!ids.length) return posts;
+  let found = new Map<string, PostView>();
+  try {
+    found = new Map((await store.listPosts({ ids, limit: ids.length })).map((post) => [post.id, post]));
+  } catch (error) {
+    console.error("Quoted posts error:", error);
+    return posts;
+  }
+  return posts.map((post) => (post.quoteOf ? { ...post, quoted: found.get(post.quoteOf) ?? null } : post));
+}
 
 export const SENTIMENT_WINDOW_DAYS = 7;
 
