@@ -77,7 +77,7 @@ function detailOf(suggestion: EntitySuggestion): string {
   return `${suggestion.symbol} · ${suggestion.exchange} · ${suggestion.label}`;
 }
 
-export type MentionFieldHandle = { focus: () => void; startMention: () => void };
+export type MentionFieldHandle = { focus: () => void; startMention: () => void; insertText: (text: string) => void };
 
 type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & {
   value: string;
@@ -113,6 +113,15 @@ const MentionField = forwardRef<MentionFieldHandle, Props>(function MentionField
       const before = value.slice(0, caret);
       const insert = before && !/\s$/.test(before) ? " @" : "@";
       onChange(before + insert + value.slice(caret));
+      pendingCaret.current = caret + insert.length;
+    },
+    // The "Link" button: put text at the caret, set off by spaces.
+    insertText: (text: string) => {
+      const caret = textareaRef.current?.selectionStart ?? value.length;
+      const before = value.slice(0, caret);
+      const after = value.slice(caret);
+      const insert = `${before && !/\s$/.test(before) ? " " : ""}${text}${after.startsWith(" ") ? "" : " "}`;
+      onChange(before + insert + after);
       pendingCaret.current = caret + insert.length;
     },
   }));

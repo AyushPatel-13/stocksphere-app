@@ -13,6 +13,27 @@ export const MAX_SYMBOLS = 5;
 
 export type Sentiment = "bullish" | "bearish";
 
+/* ------------------------------------------------------------ titles and types */
+
+export const TITLE_MAX_LENGTH = 120;
+
+/** What sort of post it is. Optional; comments never have one. */
+export const POST_KINDS = ["analysis", "technical", "earnings", "news", "question", "discussion"] as const;
+export type PostKind = (typeof POST_KINDS)[number];
+
+export const POST_KIND_LABELS: Record<PostKind, string> = {
+  analysis: "Analysis",
+  technical: "Technical Analysis",
+  earnings: "Earnings",
+  news: "News",
+  question: "Question",
+  discussion: "Discussion",
+};
+
+export function isPostKind(value: unknown): value is PostKind {
+  return typeof value === "string" && (POST_KINDS as readonly string[]).includes(value);
+}
+
 /* ------------------------------------------------------------ cashtags */
 
 /**
@@ -79,13 +100,8 @@ export function checkContent(raw: string, canPostLinks: boolean): ContentVerdict
     return { ok: false, reason: `Keep it under ${POST_MAX_LENGTH} characters.` };
   }
 
-  for (const { pattern, reason } of BLOCKED_PATTERNS) {
-    if (pattern.test(body)) return { ok: false, reason };
-  }
-
-  if (PHONE_PATTERN.test(body)) {
-    return { ok: false, reason: "Phone numbers aren't allowed in posts." };
-  }
+  const blocked = blockedReason(body);
+  if (blocked) return { ok: false, reason: blocked };
 
   const links = body.match(URL_PATTERN) ?? [];
   if (links.length > 0 && !canPostLinks) {
@@ -95,12 +111,7 @@ export function checkContent(raw: string, canPostLinks: boolean): ContentVerdict
     return { ok: false, reason: "Use at most 2 links in a post." };
   }
 
-  // Shouting: mostly capital letters in a longer post.
-  const letters = body.replace(/[^A-Za-z]/g, "");
-  const capitals = body.replace(/[^A-Z]/g, "");
-  if (letters.length >= 20 && capitals.length / letters.length > 0.7) {
-    return { ok: false, reason: "Please don't post in all caps." };
-  }
+  if (shouting(body)) return { ok: false, reason: "Please don't post in all caps." };
 
   // A run of the same character ("🚀🚀🚀🚀🚀🚀🚀🚀", "!!!!!!!!!!") is noise.
   if (/(.)\1{9,}/u.test(body)) {
@@ -108,6 +119,42 @@ export function checkContent(raw: string, canPostLinks: boolean): ContentVerdict
   }
 
   return { ok: true, body };
+}
+
+/** Spam, tip-selling and phone numbers: refused in a title as in a body. */
+function blockedReason(text: string): string | null {
+  for (const { pattern, reason } of BLOCKED_PATTERNS) {
+    if (pattern.test(text)) return reason;
+  }
+  return PHONE_PATTERN.test(text) ? "Phone numbers aren't allowed in posts." : null;
+}
+
+/** Shouting: mostly capital letters in a longer text. */
+function shouting(text: string): boolean {
+  const letters = text.replace(/[^A-Za-z]/g, "");
+  const capitals = text.replace(/[^A-Z]/g, "");
+  return letters.length >= 20 && capitals.length / letters.length > 0.7;
+}
+
+export type TitleVerdict = { ok: true; title: string | null } | { ok: false; reason: string };
+
+/**
+ * Check an optional title: one line, at most TITLE_MAX_LENGTH characters,
+ * no links, and the same spam rules as a body. Blank means no title.
+ */
+export function checkTitle(raw: unknown): TitleVerdict {
+  if (raw === undefined || raw === null) return { ok: true, title: null };
+  if (typeof raw !== "string") return { ok: false, reason: "Invalid title." };
+
+  const title = raw.replace(/\s+/g, " ").trim();
+  if (!title) return { ok: true, title: null };
+  if (title.length > TITLE_MAX_LENGTH) return { ok: false, reason: `Keep the title under ${TITLE_MAX_LENGTH} characters.` };
+  if (/\b(?:https?:\/\/|www\.)\S+/i.test(title)) return { ok: false, reason: "Put links in the post, not the title." };
+
+  const blocked = blockedReason(title);
+  if (blocked) return { ok: false, reason: blocked };
+  if (shouting(title)) return { ok: false, reason: "Please don't write the title in all caps." };
+  return { ok: true, title };
 }
 
 /* ------------------------------------------------------------ limits */

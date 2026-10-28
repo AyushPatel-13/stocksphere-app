@@ -121,3 +121,30 @@ export function pathTo(tree: ThreadNode[], id: string): string[] {
 
 /** Indentation stops here on deep threads; deeper replies say whom they answer instead. */
 export const MAX_INDENT = 5;
+
+export type ReplySort = "top" | "new" | "old";
+
+export const REPLY_SORTS: { id: ReplySort; label: string }[] = [
+  { id: "top", label: "Top" },
+  { id: "new", label: "New" },
+  { id: "old", label: "Oldest" },
+];
+
+const scoreOfNode = (node: ThreadNode) => (node.post ? (node.post.upCount ?? 0) - (node.post.downCount ?? 0) : 0);
+
+/**
+ * The same tree with siblings re-ordered at every level: Top (score, then
+ * oldest first, so a thread without votes reads as it always did), New
+ * (newest first) or Oldest. Nothing is moved between parents, nothing is
+ * dropped, and the input isn't changed.
+ */
+export function sortThread(nodes: ThreadNode[], sort: ReplySort): ThreadNode[] {
+  const compare =
+    sort === "top"
+      ? (a: ThreadNode, b: ThreadNode) => scoreOfNode(b) - scoreOfNode(a) || byTime(a, b)
+      : sort === "new"
+        ? (a: ThreadNode, b: ThreadNode) => byTime(b, a)
+        : byTime;
+  const visit = (list: ThreadNode[]): ThreadNode[] => [...list].sort(compare).map((node) => ({ ...node, children: visit(node.children) }));
+  return visit(nodes);
+}

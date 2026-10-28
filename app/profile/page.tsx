@@ -7,6 +7,7 @@ import type { User } from "@supabase/supabase-js";
 import AuthGuard from "@/components/AuthGuard";
 import { PageShell, Panel, secondaryButtonClass } from "@/components/ui/Page";
 import { signOutAndLeave } from "@/lib/auth/session";
+import { useCommunityUser } from "@/lib/community/client";
 import { supabase } from "@/lib/supabase";
 
 const LINKS = [
@@ -18,6 +19,7 @@ const LINKS = [
 
 export default function ProfilePage() {
   const [user, setUser] = useState<User | null>(null);
+  const member = useCommunityUser();
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -55,6 +57,11 @@ export default function ProfilePage() {
               <div className="min-w-0 flex-1">
                 <h1 className="truncate text-2xl font-bold tracking-tight">{name}</h1>
                 <p className="mt-1 truncate text-sm text-[#888]">{user.email}</p>
+                {member.status === "ready" && (
+                  <Link href={`/profile/${member.profile.username}`} className="mt-2 inline-block text-sm font-semibold text-[#22c55e] hover:text-[#4ade80]">
+                    View your public profile @{member.profile.username} →
+                  </Link>
+                )}
               </div>
 
               <button

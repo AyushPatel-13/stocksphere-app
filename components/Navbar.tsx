@@ -10,6 +10,8 @@ import { signOutAndLeave } from "@/lib/auth/session";
 import SearchModal from "@/components/Search/SearchModal";
 import NotificationBell from "@/components/NotificationBell";
 import { navigation } from "@/components/navigation";
+import { useCommunityUser } from "@/lib/community/client";
+import { myProfileHref } from "@/lib/profileView";
 
 /**
  * The navbar's own stylesheet.
@@ -59,6 +61,9 @@ export default function Navbar() {
   }, []);
 
   const logout = signOutAndLeave;
+  // Your avatar and name open your public profile (or onboarding, until you pick a handle).
+  const member = useCommunityUser();
+  const profileHref = myProfileHref(member);
 
   const fullName =
     user?.user_metadata?.full_name ||
@@ -139,23 +144,29 @@ export default function Navbar() {
 
           {user ? (
             <>
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt={fullName}
-                  width={38}
-                  height={38}
-                  className="h-[38px] w-[38px] rounded-full border border-[#222] object-cover"
-                />
-              ) : (
-                <div className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-[#222] bg-[#111] font-semibold text-green-500">
-                  {fullName.charAt(0).toUpperCase()}
-                </div>
-              )}
+              <Link
+                href={profileHref}
+                aria-label="Your profile"
+                className="flex items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/60 sm:gap-3"
+              >
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt={fullName}
+                    width={38}
+                    height={38}
+                    className="h-[38px] w-[38px] rounded-full border border-[#222] object-cover"
+                  />
+                ) : (
+                  <div className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-[#222] bg-[#111] font-semibold text-green-500">
+                    {fullName.charAt(0).toUpperCase()}
+                  </div>
+                )}
 
-              <span className="hidden max-w-[120px] truncate text-sm font-semibold text-white lg:block">
-                {fullName}
-              </span>
+                <span className="hidden max-w-[120px] truncate text-sm font-semibold text-white hover:text-green-400 lg:block">
+                  {fullName}
+                </span>
+              </Link>
 
               <button
                 onClick={logout}
@@ -208,6 +219,15 @@ export default function Navbar() {
               );
             })}
           </ul>
+          {user && (
+            <Link
+              href={profileHref}
+              onClick={() => setMenuPath(null)}
+              className="mt-3 flex items-center justify-center gap-2 rounded-lg border border-[#222] py-2.5 text-sm font-semibold text-white hover:bg-[#1a1a1a]"
+            >
+              Your profile
+            </Link>
+          )}
           {user && (
             <button
               type="button"

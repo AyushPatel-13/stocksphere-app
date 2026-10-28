@@ -1,13 +1,26 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import Composer from "@/components/Community/Composer";
 import PostCard from "@/components/Community/PostCard";
 import { secondaryButtonClass } from "@/components/ui/Page";
-import { fetchPosts, myLikes, type CommunityUser } from "@/lib/community/client";
+import { NO_MARKS, fetchPosts, myMarks, type CommunityUser, type Marks, type FeedRangeId, type FeedSortId } from "@/lib/community/client";
+import {
+  BOARD_SORTS,
+  DEFAULT_TAB,
+  FEED_TABS,
+  RANGES,
+  isRanked,
+  nextPage,
+  showsNewPost,
+  usesRange,
+  viewParams,
+  type FeedViewState,
+} from "@/lib/community/feedView";
 import type { MentionPick } from "@/lib/community/mentionInput";
-import type { Sentiment } from "@/lib/community/rules";
+import { POST_KINDS, POST_KIND_LABELS, isPostKind, type PostKind, type Sentiment } from "@/lib/community/rules";
 import type { PostView } from "@/lib/community/types";
 
 type Filter = "all" | Sentiment;
@@ -42,11 +55,48 @@ const chipClass = (active: boolean) =>
 
 const PAGE = 20;
 
+/** A compact labelled dropdown for the filter row. */
+function Select({
+  label,
+  value,
+  active,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  active: boolean;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex shrink-0 items-center">
+      <span className="sr-only">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => event.target.value !== value && onChange(event.target.value)}
+        className={`rounded-full border bg-[#111] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus:border-[#3a3a3a] ${
+          active ? "border-[#22c55e]/60 text-white" : "border-[#2a2a2a] text-[#aaa]"
+        }`}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 type State =
   | { status: "loading" }
   | { status: "not-configured" }
+  /** A ranked feed whose database update hasn't been approved yet. */
+  | { status: "ranking-off" }
+  | { status: "signed-out" }
   | { status: "error" }
-  | { status: "ready"; posts: PostView[]; hasMore: boolean };
+  | { status: "ready"; posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows" };
 
 /**
  * A post box over a stream of posts: one stock's board when `symbol` is set,
@@ -77,30 +127,62 @@ export default function Feed({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [asset, setAsset] = useState<Asset>("all");
+  const [kind, setKind] = useState<PostKind | "all">("all");
+  const [exchange, setExchange] = useState<"all" | "NSE" | "BSE">("all");
+  const [view, setView] = useState<FeedViewState>({ tab: DEFAULT_TAB, sort: "new", range: "week" });
+  const kindParam = kind === "all" ? undefined : kind;
+  const exchangeParam = exchange === "all" ? undefined : exchange;
   const bondIsin = bond?.isin;
   const scoped = Boolean(symbol || ipoId || bondIsin);
-  const assetParam = !scoped && asset !== "all" ? asset : undefined;
+  const ranked = isRanked(view, scoped);
+  // The asset chips filter the newest-first floor; ranked feeds have their own filters.
+  const assetParam = !scoped && !ranked && asset !== "all" ? asset : undefined;
+  const { feed: feedParam, sort: sortParam, range: rangeParam } = viewParams(view, scoped);
   const [state, setState] = useState<State>({ status: "loading" });
-  const [liked, setLikedIds] = useState<Set<string>>(new Set());
+  const [marks, setMarks] = useState<Marks>(NO_MARKS);
   const [loadingMore, setLoadingMore] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
+  const query = {
+    symbol,
+    ipo: ipoId,
+    bond: bondIsin,
+    asset: assetParam,
+    kind: kindParam,
+    exchange: exchangeParam,
+    feed: feedParam,
+    sort: sortParam,
+    range: rangeParam,
+    sentiment: filter === "all" ? undefined : filter,
+    limit: PAGE,
+  };
+  const queryKey = JSON.stringify(query);
 
   useEffect(() => {
     let cancelled = false;
 
-    fetchPosts({ symbol, ipo: ipoId, bond: bondIsin, asset: assetParam, sentiment: filter === "all" ? undefined : filter, limit: PAGE }).then((result) => {
+    fetchPosts(JSON.parse(queryKey)).then((result) => {
       if (cancelled) return;
       if ("error" in result) {
-        setState({ status: result.code === "NOT_CONFIGURED" ? "not-configured" : "error" });
+        setState({
+          status:
+            result.code === "NOT_CONFIGURED" ? (ranked ? "ranking-off" : "not-configured") : result.code === "SIGNED_OUT" ? "signed-out" : "error",
+        });
       } else {
-        setState({ status: "ready", posts: result.posts, hasMore: result.hasMore });
+        setState({ status: "ready", posts: result.posts, hasMore: result.hasMore, next: result.next, empty: result.empty });
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [symbol, ipoId, bondIsin, assetParam, filter, attempt]);
+  }, [queryKey, ranked, attempt]);
+
+  /** Change the view or a filter: show loading until the new list arrives. */
+  function change(apply: () => void) {
+    apply();
+    setState({ status: "loading" });
+  }
 
   // Which visible posts the viewer has liked.
   const userId = user.status === "ready" ? user.profile.id : null;
@@ -109,8 +191,8 @@ export default function Feed({
   useEffect(() => {
     if (!userId || !postIds) return;
     let cancelled = false;
-    myLikes(userId, postIds.split(",")).then((ids) => {
-      if (!cancelled) setLikedIds(ids);
+    myMarks(userId, postIds.split(",")).then((found) => {
+      if (!cancelled) setMarks(found);
     });
     return () => {
       cancelled = true;
@@ -119,19 +201,15 @@ export default function Feed({
 
   async function loadMore() {
     if (state.status !== "ready" || state.posts.length === 0) return;
+    const page = nextPage(view, scoped, state.posts, state.next);
+    if (!page) return;
     setLoadingMore(true);
-    const result = await fetchPosts({
-      symbol,
-      ipo: ipoId,
-      bond: bondIsin,
-      asset: assetParam,
-      sentiment: filter === "all" ? undefined : filter,
-      before: state.posts[state.posts.length - 1].createdAt,
-      limit: PAGE,
-    });
+    const result = await fetchPosts({ ...query, ...page });
     setLoadingMore(false);
     if (!("error" in result)) {
-      setState({ status: "ready", posts: [...state.posts, ...result.posts], hasMore: result.hasMore });
+      // Rankings can shift between pages; never show a post twice.
+      const seen = new Set(state.posts.map((p) => p.id));
+      setState({ status: "ready", posts: [...state.posts, ...result.posts.filter((p) => !seen.has(p.id))], hasMore: result.hasMore, next: result.next });
     }
   }
 
@@ -158,25 +236,53 @@ export default function Feed({
         onPosted={(post) => {
           // A new post shows at the top of the list it belongs in.
           const inBond = !bondIsin || (post.mentions ?? []).some((m) => m.kind === "bond" && m.isin === bondIsin);
-          if (state.status === "ready" && (filter === "all" || post.sentiment === filter) && inAsset(post, scoped ? "all" : asset) && inBond) {
+          const inExchange = exchange === "all" || (post.mentions ?? []).some((m) => m.kind === "instrument" && m.exchange === exchange);
+          if (
+            state.status === "ready" &&
+            showsNewPost(view, scoped) &&
+            (filter === "all" || post.sentiment === filter) &&
+            (kind === "all" || post.kind === kind) &&
+            inAsset(post, scoped || ranked ? "all" : asset) &&
+            inBond &&
+            inExchange
+          ) {
             setState({ ...state, posts: [post, ...state.posts] });
           }
           onPosted?.();
         }}
       />
 
-      {assetFilters && !scoped && (
-        <div role="group" aria-label="What posts are about" className="-mx-1 mt-5 flex items-center gap-2 overflow-x-auto px-1 pb-1">
+      {!scoped && (
+        <div role="tablist" aria-label="Feed" className="-mx-4 mt-5 flex overflow-x-auto overflow-y-hidden border-b border-[#1f1f1f] px-4 [scrollbar-width:none] sm:mx-0 sm:px-0">
+          {FEED_TABS.map((tab) => {
+            const active = view.tab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => !active && change(() => setView({ ...view, tab: tab.id }))}
+                className={`relative shrink-0 px-4 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#22c55e]/60 ${
+                  active ? "text-white" : "text-[#888] hover:bg-[#111] hover:text-white"
+                }`}
+              >
+                {tab.label}
+                <span aria-hidden="true" className={`absolute inset-x-3 -bottom-px h-[3px] rounded-full ${active ? "bg-[#22c55e]" : "bg-transparent"}`} />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {assetFilters && !scoped && !ranked && (
+        <div role="group" aria-label="What posts are about" className="-mx-1 mt-3 flex items-center gap-2 overflow-x-auto px-1 pb-1">
           {ASSETS.map((entry) => (
             <button
               key={entry.id}
               type="button"
               aria-pressed={asset === entry.id}
-              onClick={() => {
-                if (asset === entry.id) return;
-                setAsset(entry.id);
-                setState({ status: "loading" });
-              }}
+              onClick={() => asset !== entry.id && change(() => setAsset(entry.id))}
               className={chipClass(asset === entry.id)}
             >
               {entry.label}
@@ -185,22 +291,59 @@ export default function Feed({
         </div>
       )}
 
-      <div role="group" aria-label="Stance" className={`mb-3 flex items-center gap-2 ${assetFilters && !scoped ? "mt-2" : "mt-5"}`}>
+      <div role="group" aria-label="Filters" className={`mb-3 flex flex-wrap items-center gap-2 ${!scoped ? "mt-2" : "mt-5"}`}>
         {FILTERS.map((entry) => (
           <button
             key={entry.id}
             type="button"
             aria-pressed={filter === entry.id}
-            onClick={() => {
-              if (filter === entry.id) return;
-              setFilter(entry.id);
-              setState({ status: "loading" });
-            }}
+            onClick={() => filter !== entry.id && change(() => setFilter(entry.id))}
             className={chipClass(filter === entry.id)}
           >
             {entry.label}
           </button>
         ))}
+
+        <span className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {scoped && (
+            <Select
+              label="Sort"
+              value={view.sort}
+              active={view.sort !== "new"}
+              onChange={(value) => change(() => setView({ ...view, sort: value as FeedSortId }))}
+              options={BOARD_SORTS.map((s) => ({ value: s.id, label: s.label }))}
+            />
+          )}
+          {usesRange(view, scoped) && (
+            <Select
+              label="Period"
+              value={view.range}
+              active
+              onChange={(value) => change(() => setView({ ...view, range: value as FeedRangeId }))}
+              options={RANGES.map((r) => ({ value: r.id, label: r.label }))}
+            />
+          )}
+          <Select
+            label="Post type"
+            value={kind}
+            active={kind !== "all"}
+            onChange={(value) => change(() => setKind(isPostKind(value) ? value : "all"))}
+            options={[{ value: "all", label: "All types" }, ...POST_KINDS.map((value) => ({ value, label: POST_KIND_LABELS[value] }))]}
+          />
+          {!bondIsin && !ipoId && (
+            <Select
+              label="Exchange"
+              value={exchange}
+              active={exchange !== "all"}
+              onChange={(value) => change(() => setExchange(value === "NSE" || value === "BSE" ? value : "all"))}
+              options={[
+                { value: "all", label: "All exchanges" },
+                { value: "NSE", label: "NSE" },
+                { value: "BSE", label: "BSE" },
+              ]}
+            />
+          )}
+        </span>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
@@ -221,10 +364,7 @@ export default function Feed({
             <p className="text-sm text-[#888]">Posts couldn&apos;t be loaded right now.</p>
             <button
               type="button"
-              onClick={() => {
-                setState({ status: "loading" });
-                setAttempt((n) => n + 1);
-              }}
+              onClick={() => change(() => setAttempt((n) => n + 1))}
               className={`${secondaryButtonClass} mt-3`}
             >
               Try again
@@ -232,10 +372,50 @@ export default function Feed({
           </div>
         )}
 
-        {state.status === "ready" && state.posts.length === 0 && (
+        {state.status === "ranking-off" && (
+          <div className="px-6 py-12 text-center">
+            <p className="font-semibold">This feed isn&apos;t switched on yet</p>
+            <p className="mx-auto mt-1 max-w-sm text-sm text-[#888]">
+              {`${scoped ? "Sorting by votes and discussion" : `${FEED_TABS.find((t) => t.id === view.tab)?.label} ranks posts by votes and engagement, which`} needs a database update that hasn't been approved yet.`}
+            </p>
+            <button
+              type="button"
+              onClick={() => change(() => setView({ ...view, tab: "latest", sort: "new" }))}
+              className={`${secondaryButtonClass} mt-3`}
+            >
+              Show latest posts
+            </button>
+          </div>
+        )}
+
+        {state.status === "signed-out" && (
+          <div className="px-6 py-12 text-center">
+            <p className="font-semibold">Sign in to see your Following feed</p>
+            <p className="mt-1 text-sm text-[#888]">It shows posts from people you follow and about stocks on your watchlist.</p>
+            <Link href="/login" className={`${secondaryButtonClass} mt-3 inline-block`}>
+              Sign in
+            </Link>
+          </div>
+        )}
+
+        {state.status === "ready" && state.posts.length === 0 && state.empty === "no-follows" && (
+          <div className="px-6 py-12 text-center">
+            <p className="font-semibold">You aren&apos;t following anyone or any stock yet</p>
+            <p className="mt-1 text-sm text-[#888]">Follow members from their profiles, or add stocks to your watchlist, and their posts show up here.</p>
+          </div>
+        )}
+
+        {state.status === "ready" && state.posts.length === 0 && !state.empty && ranked && !scoped && view.tab === "trending" && (
+          <div className="px-6 py-12 text-center">
+            <p className="font-semibold">Nothing is trending right now</p>
+            <p className="mt-1 text-sm text-[#888]">Trending shows posts with votes, likes or comments in the last 24 hours.</p>
+          </div>
+        )}
+
+        {state.status === "ready" && state.posts.length === 0 && !state.empty && !(ranked && !scoped && view.tab === "trending") && (
           <div className="px-6 py-12 text-center">
             <p className="font-semibold">
-              {filter === "all" ? "No posts" : `No ${filter} posts`}
+              {filter === "all" ? "No" : `No ${filter}`} {kind === "all" ? "posts" : `${POST_KIND_LABELS[kind].toLowerCase()} posts`}
               {!scoped && asset !== "all" ? ` ${ASSETS.find((a) => a.id === asset)!.empty}` : ""} yet
             </p>
             <p className="mt-1 text-sm text-[#888]">
@@ -255,7 +435,11 @@ export default function Feed({
                 <PostCard
                   post={post}
                   user={user}
-                  liked={liked.has(post.id)}
+                  liked={marks.liked.has(post.id)}
+                  vote={marks.votes.get(post.id) ?? 0}
+                  reposted={marks.reposted.has(post.id)}
+                  saved={marks.saved.has(post.id)}
+                  onQuoted={(quote) => state.status === "ready" && showsNewPost(view, scoped) && setState({ ...state, posts: [quote, ...state.posts] })}
                   boardSymbol={symbol}
                   boardIpoId={ipoId}
                   boardBondIsin={bondIsin}

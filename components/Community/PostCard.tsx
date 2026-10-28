@@ -1,95 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 
 import Composer from "@/components/Community/Composer";
+import { KindBadge, LinkCards, PostBody, PostTitle, QuotedPost } from "@/components/Community/PostContent";
+import Dialog from "@/components/Profile/Dialog";
+import PostImages from "@/components/Community/PostImages";
 import Thread from "@/components/Community/Thread";
 import PredictionBadge from "@/components/Predictions/Badge";
 import {
   deleteMyPost,
   reportPost,
   setLiked,
+  setReposted,
+  setSaved,
+  setVote,
   timeAgo,
   type CommunityUser,
 } from "@/lib/community/client";
 import { bondFacts } from "@/lib/bonds/bonds";
-import { mentionPath, type StoredMention } from "@/lib/community/mentions";
-import { ipoCommunityPath } from "@/lib/community/paths";
-import { tokenize } from "@/lib/community/tokens";
+import { formatQuote, type StockQuote } from "@/lib/community/quotes";
+import { applyVote, formatScore, nextVote, scoreOf, type Vote, type VoteCounts } from "@/lib/community/votes";
+import { commentHref } from "@/lib/profileView";
 import type { IpoStatus, PostContext, PostView } from "@/lib/community/types";
-
-const MENTION_STYLE: Record<StoredMention["kind"], string> = {
-  instrument: "text-[#4ade80]",
-  ipo: "text-[#fbbf24]",
-  bond: "text-[#7dd3fc]",
-};
-
-function mentionTitle(mention: StoredMention): string {
-  if (mention.kind === "ipo") return `${mention.name} (IPO)`;
-  if (mention.kind === "bond") return `${mention.name} · ${bondFacts(mention)}`;
-  return `${mention.name} · ${mention.symbol}`;
-}
-
-/**
- * A post's text with verified stock/IPO/bond mentions, $CASHTAGS, @handles and
- * links as real links — never HTML. Mention spans come from stored positions
- * (checked by readMentions on the server); the rest is tokenized as before,
- * so old posts render exactly as they did.
- */
-export function PostBody({ body, mentions = [] }: { body: string; mentions?: StoredMention[] }) {
-  const parts: ReactNode[] = [];
-  let last = 0;
-  mentions.forEach((mention, m) => {
-    if (mention.start < last) return;
-    if (mention.start > last) parts.push(<TextPart key={`t${m}`} text={body.slice(last, mention.start)} />);
-    parts.push(
-      <Link
-        key={`m${m}`}
-        href={mentionPath(mention, ipoCommunityPath)}
-        title={mentionTitle(mention)}
-        className={`font-semibold hover:underline ${MENTION_STYLE[mention.kind]}`}
-      >
-        {body.slice(mention.start, mention.end)}
-      </Link>
-    );
-    last = mention.end;
-  });
-  if (last < body.length) parts.push(<TextPart key="tail" text={body.slice(last)} />);
-
-  return <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-[#e5e5e5]">{parts}</p>;
-}
-
-function TextPart({ text }: { text: string }) {
-  return (
-    <>
-      {tokenize(text).map((token, i) => {
-        if (token.type === "cashtag") {
-          return (
-            <Link key={i} href={`/stock/${encodeURIComponent(token.symbol)}`} className="font-semibold text-[#4ade80] hover:underline">
-              {token.value}
-            </Link>
-          );
-        }
-        if (token.type === "mention") {
-          return (
-            <Link key={i} href={`/profile/${token.handle}`} className="font-medium text-[#60a5fa] hover:underline">
-              {token.value}
-            </Link>
-          );
-        }
-        if (token.type === "link") {
-          return (
-            <a key={i} href={token.href} target="_blank" rel="noopener noreferrer nofollow ugc" className="text-[#60a5fa] underline underline-offset-2">
-              {token.value}
-            </a>
-          );
-        }
-        return <span key={i}>{token.value}</span>;
-      })}
-    </>
-  );
-}
 
 const IPO_STATUS_LABEL: Record<IpoStatus, string> = { upcoming: "Upcoming", open: "Open", closed: "Closed", listed: "Listed" };
 
@@ -140,9 +74,14 @@ export function PostContextChips({ context }: { context: PostContext[] }) {
           </li>
         ) : (
           <li key={`instrument:${item.id}`} className="max-w-full text-xs">
-            <Link href={item.href} className="flex min-w-0 items-center gap-1.5 rounded-md border border-[#2a2a2a] bg-[#161616] px-2 py-0.5 text-[#cfcfcf] hover:text-[#4ade80]">
+            <Link
+              href={item.href}
+              title={item.quote ? formatQuote(item.quote).title : undefined}
+              className="flex min-w-0 items-center gap-1.5 rounded-md border border-[#2a2a2a] bg-[#161616] px-2 py-0.5 text-[#cfcfcf] hover:text-[#4ade80]"
+            >
               <span className="font-semibold text-white">{item.symbol}</span>
               <span className="truncate text-[#999]">{item.name}</span>
+              {item.quote && <QuoteText quote={item.quote} />}
             </Link>
           </li>
         )
@@ -155,6 +94,16 @@ export function PostContextChips({ context }: { context: PostContext[] }) {
         </li>
       )}
     </ul>
+  );
+}
+
+function QuoteText({ quote }: { quote: StockQuote }) {
+  const view = formatQuote(quote);
+  return (
+    <span className="flex shrink-0 items-center gap-1 tabular-nums">
+      <span className="text-[#ddd]">{view.price}</span>
+      {view.change && <span className={view.tone === "up" ? "text-[#4ade80]" : view.tone === "down" ? "text-[#f87171]" : "text-[#999]"}>{view.change}</span>}
+    </span>
   );
 }
 
@@ -191,6 +140,10 @@ export default function PostCard({
   post: initial,
   user,
   liked,
+  vote = 0,
+  reposted = false,
+  saved = false,
+  onQuoted,
   boardSymbol,
   boardIpoId,
   boardBondIsin,
@@ -205,6 +158,13 @@ export default function PostCard({
   post: PostView;
   user: CommunityUser;
   liked: boolean;
+  /** The viewer's vote on this post or comment. */
+  vote?: Vote;
+  /** Whether the viewer reposted / saved this post. */
+  reposted?: boolean;
+  saved?: boolean;
+  /** A quote post the viewer just wrote from this card, for the list to show. */
+  onQuoted?: (quote: PostView) => void;
   boardSymbol?: string;
   /** On an IPO's own page its chip would only repeat the page. */
   boardIpoId?: string;
@@ -245,8 +205,106 @@ export default function PostCard({
     setIsLiked(liked);
   }
 
+  // Votes, the same way: the viewer's vote arrives after the list loads.
+  const voting = initial.upCount !== undefined;
+  const [myVote, setMyVote] = useState<Vote>(vote);
+  const [voteProp, setVoteProp] = useState<Vote>(vote);
+  if (vote !== voteProp) {
+    setVoteProp(vote);
+    setMyVote(vote);
+  }
+  const [votes, setVotes] = useState<VoteCounts>({ up: initial.upCount ?? 0, down: initial.downCount ?? 0 });
+  const [voteBusy, setVoteBusy] = useState(false);
+
+  // Reposts, quotes and saves exist once their migration is applied (the post then has a repost count).
+  const sharing = initial.repostCount !== undefined && !isReply;
+  const [isReposted, setIsReposted] = useState(reposted);
+  const [isSaved, setIsSaved] = useState(saved);
+  const [marksProp, setMarksProp] = useState({ reposted, saved });
+  if (reposted !== marksProp.reposted || saved !== marksProp.saved) {
+    setMarksProp({ reposted, saved });
+    setIsReposted(reposted);
+    setIsSaved(saved);
+  }
+  const [repostCount, setRepostCount] = useState(initial.repostCount ?? 0);
+  const [repostMenu, setRepostMenu] = useState(false);
+  const [quoting, setQuoting] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+
   const signedIn = user.status === "ready";
   const mine = signedIn && user.profile.username === post.author.username;
+
+  /** The post's (or comment's) own page, shared through the phone's share sheet or copied. */
+  async function share(copyOnly = false) {
+    setMenu("closed");
+    const url = `${window.location.origin}${commentHref(post)}`;
+    try {
+      if (!copyOnly && navigator.share) {
+        await navigator.share({ title: post.title ?? `@${post.author.username} on StockSphere`, url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      setNotice("Link copied.");
+    } catch (error) {
+      if ((error as { name?: string })?.name !== "AbortError") setNotice(url);
+    }
+  }
+
+  async function toggleRepost() {
+    setRepostMenu(false);
+    if (!signedIn) {
+      setNotice("Sign in to repost.");
+      return;
+    }
+    if (shareBusy) return;
+    const next = !isReposted;
+    setShareBusy(true);
+    setIsReposted(next);
+    setRepostCount((n) => Math.max(0, n + (next ? 1 : -1)));
+    const ok = await setReposted(post.id, next);
+    setShareBusy(false);
+    if (!ok) {
+      setIsReposted(!next);
+      setRepostCount((n) => Math.max(0, n + (next ? -1 : 1)));
+      setNotice("Couldn't update your repost. Please try again.");
+    } else {
+      setNotice(next ? "Reposted to your profile." : null);
+    }
+  }
+
+  async function toggleSave() {
+    if (!signedIn) {
+      setNotice("Sign in to save posts.");
+      return;
+    }
+    const next = !isSaved;
+    setIsSaved(next);
+    if (!(await setSaved(post.id, next))) {
+      setIsSaved(!next);
+      setNotice("Couldn't update your saved posts. Please try again.");
+    }
+  }
+
+  async function castVote(clicked: 1 | -1) {
+    if (!signedIn) {
+      setNotice("Sign in to vote.");
+      return;
+    }
+    if (voteBusy) return;
+    const from = myVote;
+    const to = nextVote(from, clicked);
+    // Shown at once; put back exactly if the database says no.
+    setVoteBusy(true);
+    setMyVote(to);
+    setVotes((c) => applyVote(c, from, to));
+    const ok = await setVote(post.id, to);
+    setVoteBusy(false);
+    if (!ok) {
+      setMyVote(from);
+      setVotes((c) => applyVote(c, to, from));
+      setNotice("Couldn't save your vote. Please try again.");
+    }
+  }
 
   async function toggleLike() {
     if (!signedIn) {
@@ -334,15 +392,20 @@ export default function PostCard({
                 ↳ replying to <span className="text-[#60a5fa]">@{replyToHandle}</span>
               </span>
             )}
-            {post.sentiment && (
-              <span
-                className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                  post.sentiment === "bullish"
-                    ? "bg-[#22c55e]/12 text-[#4ade80]"
-                    : "bg-[#ef4444]/12 text-[#f87171]"
-                }`}
-              >
-                {post.sentiment === "bullish" ? "🐂 Bullish" : "🐻 Bearish"}
+            {(post.kind || post.sentiment) && (
+              <span className="ml-auto flex items-center gap-1.5">
+                {post.kind && <KindBadge kind={post.kind} />}
+                {post.sentiment && (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                      post.sentiment === "bullish"
+                        ? "bg-[#22c55e]/12 text-[#4ade80]"
+                        : "bg-[#ef4444]/12 text-[#f87171]"
+                    }`}
+                  >
+                    {post.sentiment === "bullish" ? "🐂 Bullish" : "🐻 Bearish"}
+                  </span>
+                )}
               </span>
             )}
           </header>
@@ -360,7 +423,13 @@ export default function PostCard({
                 onCancel={() => setEditing(false)}
               />
             ) : (
-              <PostBody body={post.body} mentions={post.mentions} />
+              <>
+                {post.title && <PostTitle title={post.title} href={openThread ? undefined : `/community/post/${post.id}`} />}
+                <PostBody body={post.body} mentions={post.mentions} />
+                {post.images && post.images.length > 0 && <PostImages images={post.images} author={post.author.username} />}
+                {!isReply && <LinkCards body={post.body} />}
+                {post.quoteOf !== undefined && post.quoteOf !== null && <QuotedPost post={post.quoted} />}
+              </>
             )}
           </div>
 
@@ -387,6 +456,37 @@ export default function PostCard({
           )}
 
           <div className="relative mt-2.5 flex items-center gap-1 text-sm text-[#888]">
+            {voting && (
+              <div role="group" aria-label="Vote" className="mr-1 flex items-center rounded-lg border border-[#222] bg-[#0f0f0f]">
+                <button
+                  type="button"
+                  onClick={() => castVote(1)}
+                  aria-pressed={myVote === 1}
+                  aria-label={myVote === 1 ? "Remove upvote" : "Upvote"}
+                  className={`rounded-l-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] ${myVote === 1 ? "text-[#4ade80]" : "hover:text-[#4ade80]"}`}
+                >
+                  ▲
+                </button>
+                <span
+                  aria-live="polite"
+                  title={`${votes.up} up · ${votes.down} down`}
+                  className={`min-w-[1.75rem] text-center text-xs font-semibold tabular-nums ${myVote === 1 ? "text-[#4ade80]" : myVote === -1 ? "text-[#f87171]" : "text-[#cfcfcf]"}`}
+                >
+                  <span className="sr-only">Score </span>
+                  {formatScore(scoreOf(votes))}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => castVote(-1)}
+                  aria-pressed={myVote === -1}
+                  aria-label={myVote === -1 ? "Remove downvote" : "Downvote"}
+                  className={`rounded-r-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] ${myVote === -1 ? "text-[#f87171]" : "hover:text-[#f87171]"}`}
+                >
+                  ▼
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={toggleLike}
@@ -406,6 +506,63 @@ export default function PostCard({
               >
                 💬 <span className="tabular-nums">{commentCount}</span>
                 <span className="sr-only">comments</span>
+              </button>
+            )}
+
+            {sharing && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => (signedIn ? setRepostMenu(!repostMenu) : setNotice("Sign in to repost."))}
+                  aria-expanded={repostMenu}
+                  aria-haspopup="menu"
+                  aria-label={isReposted ? "Reposted. Repost options" : "Repost or quote"}
+                  className={`flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] ${isReposted ? "text-[#4ade80]" : "hover:text-white"}`}
+                >
+                  <span aria-hidden="true">⟲</span> <span className="tabular-nums">{repostCount}</span>
+                </button>
+                {repostMenu && (
+                  <div role="menu" className="absolute left-0 top-8 z-10 w-44 overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#151515] py-1 text-sm shadow-xl">
+                    <button type="button" role="menuitem" onClick={toggleRepost} className="block w-full px-3 py-2 text-left hover:bg-[#1f1f1f]">
+                      {isReposted ? "Undo repost" : "Repost"}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setRepostMenu(false);
+                        setQuoting(true);
+                      }}
+                      className="block w-full px-3 py-2 text-left hover:bg-[#1f1f1f]"
+                    >
+                      Quote post
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {sharing && (
+              <button
+                type="button"
+                onClick={toggleSave}
+                aria-pressed={isSaved}
+                aria-label={isSaved ? "Remove from saved" : "Save post"}
+                className={`flex items-center rounded-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] ${isSaved ? "text-[#fbbf24]" : "hover:text-white"}`}
+              >
+                <span aria-hidden="true">{isSaved ? "★" : "☆"}</span>
+              </button>
+            )}
+
+            {!isReply && (
+              <button
+                type="button"
+                onClick={() => share()}
+                aria-label="Share post"
+                className="flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] hover:text-white"
+              >
+                <span aria-hidden="true">↗</span>
+                <span className="hidden text-xs font-semibold sm:inline">Share</span>
               </button>
             )}
 
@@ -433,6 +590,9 @@ export default function PostCard({
               <div className="absolute right-0 top-8 z-10 w-56 overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#151515] py-1 text-sm shadow-xl">
                 {menu === "open" && (
                   <>
+                    <button type="button" onClick={() => share(true)} className="block w-full px-3 py-2 text-left hover:bg-[#1f1f1f]">
+                      Copy link
+                    </button>
                     {mine && (
                       <button
                         type="button"
@@ -469,6 +629,22 @@ export default function PostCard({
           </div>
 
           {notice && <p className="mt-1 text-xs text-[#888]">{notice}</p>}
+
+          {quoting && (
+            <Dialog title="Quote post" onClose={() => setQuoting(false)} guarded>
+              <Composer
+                user={user}
+                quoting={post}
+                autoFocus
+                onCancel={() => setQuoting(false)}
+                onPosted={(quote) => {
+                  setQuoting(false);
+                  setNotice("Quote posted.");
+                  onQuoted?.(quote);
+                }}
+              />
+            </Dialog>
+          )}
 
           {showReplies && !isReply && (
             <Thread post={post} user={user} highlight={highlightComment} onCountChange={(delta) => setCommentCount((n) => Math.max(0, n + delta))} />

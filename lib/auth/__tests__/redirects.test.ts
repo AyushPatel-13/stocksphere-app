@@ -63,6 +63,15 @@ test("a return from Google is classified from the URL", () => {
   assert.equal(classifyAuthReturn("not a url"), null);
 });
 
+test("a code still in the URL after a sign-in that worked is not a failure", () => {
+  const base = "https://stocksphere-theta.vercel.app/";
+  // Signed in: the exchange succeeded and the URL just hadn't been cleaned yet (or a second exchange lost the race).
+  assert.equal(classifyAuthReturn(`${base}?code=abc123`, true), null);
+  // An explicit error is still reported, signed in or not.
+  assert.equal(classifyAuthReturn(`${base}?code=abc123&error=server_error`, true), "failed");
+  assert.equal(classifyAuthReturn(`${base}?error=access_denied`, true), "cancelled");
+});
+
 test("failure messages are fixed text, never taken from the URL", () => {
   assert.match(authFailureMessage("cancelled") ?? "", /cancelled/);
   assert.match(authFailureMessage("failed") ?? "", /didn't complete/);

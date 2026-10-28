@@ -4,6 +4,7 @@ import { bondPath, parseBondQuery, type Bond, type BondCategory } from "../bonds
 import { MAX_BOND_SUGGESTIONS, searchBonds, type BondSearch } from "../bonds/catalog";
 import { searchInstruments } from "../search/instruments";
 import { assetLabel, type InstrumentType, type SearchResponse, type SearchResult } from "../search/types";
+import { getIndianMarketQuotes } from "../providers/market.provider";
 import { getIpoBoard, type IpoBoardResult } from "../services/ipo";
 import { getPublicClient } from "../supabase/server";
 import { getBondResolver, type BondResolver } from "./bondCommunity";
@@ -11,6 +12,7 @@ import { COMMUNITY_COLUMNS, stockPath, toCommunity, type Community } from "./com
 import { getCommunityResolver, type CommunityResolver } from "./ipoCommunity";
 import { MENTIONABLE_TYPES, type MentionResolver } from "./mentions";
 import { ipoCommunityPath } from "./paths";
+import { quotableSymbol, quoteCache, type StockQuote } from "./quotes";
 import type { IpoStatus, PostContext, PostView } from "./types";
 
 /**
@@ -202,10 +204,16 @@ export interface ContextDeps {
   /** Communities by id, in one query. */
   communities: (ids: string[]) => Promise<Community[]>;
   ipoBoard: () => Promise<IpoBoardResult>;
+  /** Price previews for bare NSE symbols, one batch per page. Optional: without it tags show no price. */
+  quotes?: (symbols: string[]) => Promise<Map<string, StockQuote>>;
 }
+
+// One cache for the whole server instance, so every feed page shares quotes.
+const sharedQuotes = quoteCache(getIndianMarketQuotes);
 
 export function supabaseContextDeps(reader: SupabaseClient): ContextDeps {
   return {
+    quotes: sharedQuotes,
     async communities(ids) {
       if (ids.length === 0) return [];
       const { data, error } = await reader.from("communities").select(COMMUNITY_COLUMNS).in("id", ids);
@@ -240,20 +248,27 @@ export async function attachContext(posts: PostView[], deps: ContextDeps | null)
   if (!deps || posts.length === 0) return posts;
 
   const ids = new Set<string>();
+  const symbols = new Set<string>();
   for (const post of posts) {
     if (post.communityId) ids.add(post.communityId);
-    for (const m of post.mentions ?? []) if (m.kind === "ipo") ids.add(m.communityId);
+    for (const m of post.mentions ?? []) {
+      if (m.kind === "ipo") ids.add(m.communityId);
+      const symbol = quotableSymbol(m);
+      if (symbol) symbols.add(symbol);
+    }
   }
 
   let communities = new Map<string, Community>();
   let board: IpoBoardResult | null = null;
-  if (ids.size > 0) {
-    const [found, ipoBoard] = await Promise.all([
-      deps.communities([...ids]).catch(() => [] as Community[]),
-      withTimeout(deps.ipoBoard(), IPO_TIMEOUT_MS),
-    ]);
-    communities = new Map(found.map((c) => [c.id, c]));
-    board = ipoBoard;
+  const [lookups, quotes] = await Promise.all([
+    ids.size > 0
+      ? Promise.all([deps.communities([...ids]).catch(() => [] as Community[]), withTimeout(deps.ipoBoard(), IPO_TIMEOUT_MS)])
+      : Promise.resolve(null),
+    symbols.size > 0 && deps.quotes ? deps.quotes([...symbols]).catch(() => new Map<string, StockQuote>()) : Promise.resolve(new Map<string, StockQuote>()),
+  ]);
+  if (lookups) {
+    communities = new Map(lookups[0].map((c) => [c.id, c]));
+    board = lookups[1];
   }
 
   const ipoContext = (community: Community, via: "community" | "mention"): PostContext => {
@@ -292,7 +307,9 @@ export async function attachContext(posts: PostView[], deps: ContextDeps | null)
           seen.add(m.communityId);
         }
       } else if (!seen.has(m.id)) {
-        context.push({ kind: "instrument", id: m.id, type: m.type, name: m.name, symbol: m.symbol, exchange: m.exchange, href: m.href, via: "mention" });
+        const symbol = quotableSymbol(m);
+        const quote = symbol ? quotes.get(symbol) : undefined;
+        context.push({ kind: "instrument", id: m.id, type: m.type, name: m.name, symbol: m.symbol, exchange: m.exchange, href: m.href, via: "mention", ...(quote ? { quote } : {}) });
         seen.add(m.id);
       }
     }

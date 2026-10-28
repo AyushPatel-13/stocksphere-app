@@ -41,6 +41,12 @@ export function SentimentMeter({ symbol, ipoId, refresh }: { symbol?: string; ip
 
   return (
     <div className="rounded-2xl border border-[#222] bg-[#111] p-4">
+      <p className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 text-[11px] uppercase tracking-wide text-[#777]">
+        <span className="font-semibold">Community sentiment</span>
+        <span className="normal-case tracking-normal">
+          {summary.total} {summary.total === 1 ? "post" : "posts"} in the last {summary.windowDays} days
+        </span>
+      </p>
       <div className="mb-2 flex items-baseline justify-between text-sm">
         <span className="font-semibold text-[#4ade80]">
           🐂 {stances > 0 ? `${bullPct}% Bullish` : "Bullish"}
@@ -66,6 +72,9 @@ export function SentimentMeter({ symbol, ipoId, refresh }: { symbol?: string; ip
           </>
         )}
       </div>
+      <p className="mt-2 text-[11px] leading-snug text-[#666]">
+        Members&apos; stated opinions, not advice, a forecast or verified predictions. Prices shown on posts come from market data, not from posts.
+      </p>
     </div>
   );
 }

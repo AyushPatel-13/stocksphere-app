@@ -80,6 +80,13 @@ export function livePicks(text: string, picks: MentionPick[]): MentionPick[] {
     .map((span) => span.pick);
 }
 
+/** The live picks with their positions, in order of appearance (the composer's preview). */
+export function pickSpans(text: string, picks: MentionPick[]): { pick: MentionPick; start: number; end: number }[] {
+  return spansOf(text, picks)
+    .filter((span): span is { pick: MentionPick; start: number; end: number } => span !== null)
+    .sort((a, b) => a.start - b.start);
+}
+
 /** Removes a pick and its text (and one following space). */
 export function removePick(text: string, picks: MentionPick[], index: number): { text: string; picks: MentionPick[] } {
   const spans = spansOf(text, picks);

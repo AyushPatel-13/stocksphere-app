@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 import PostCard from "@/components/Community/PostCard";
 import { PageShell } from "@/components/ui/Page";
-import { fetchPost, myLikes, useCommunityUser } from "@/lib/community/client";
+import { NO_MARKS, fetchPost, myMarks, useCommunityUser, type Marks } from "@/lib/community/client";
 import type { PostView } from "@/lib/community/types";
 
 type State = { status: "loading" } | { status: "missing" } | { status: "error"; message: string } | { status: "ready"; post: PostView; highlight?: string };
@@ -17,7 +17,7 @@ type State = { status: "loading" } | { status: "missing" } | { status: "error"; 
 export default function PostThread({ id, highlight }: { id: string; highlight?: string }) {
   const user = useCommunityUser();
   const [state, setState] = useState<State>({ status: "loading" });
-  const [liked, setLiked] = useState(false);
+  const [marks, setMarks] = useState<Marks>(NO_MARKS);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,7 +45,7 @@ export default function PostThread({ id, highlight }: { id: string; highlight?: 
   const postId = state.status === "ready" ? state.post.id : null;
   useEffect(() => {
     if (!userId || !postId) return;
-    myLikes(userId, [postId]).then((ids) => setLiked(ids.has(postId)));
+    myMarks(userId, [postId]).then(setMarks);
   }, [userId, postId]);
 
   return (
@@ -68,7 +68,10 @@ export default function PostThread({ id, highlight }: { id: string; highlight?: 
             key={state.post.id}
             post={state.post}
             user={user}
-            liked={liked}
+            liked={marks.liked.has(state.post.id)}
+            vote={marks.votes.get(state.post.id) ?? 0}
+            reposted={marks.reposted.has(state.post.id)}
+            saved={marks.saved.has(state.post.id)}
             openThread
             highlightComment={state.highlight}
             onDeleted={() => setState({ status: "missing" })}
