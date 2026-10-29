@@ -5,19 +5,27 @@ import {
   searchUpstoxEquityCandidates,
   type UpstoxEquityCandidate,
 } from "@/lib/apis/upstox";
+import { searchFinnhubSymbols, type FinnhubSymbolMatch } from "@/lib/apis/finnhub";
+import { RETIRED_LISTINGS, isRetiredSymbol, retiredListing } from "@/lib/search/renames";
 import { ToolDefinition, SymbolCandidate, SymbolResolution, okResult } from "../types";
 import { companyNameTokens, matchTier } from "@/lib/search/rank";
 
 // IMPORTANT: results are best-effort candidates, never confirmed matches.
-// Indian equities come from Upstox's NSE instrument search; everything else
-// (US/global, and the fallback when Upstox is unavailable) comes from the small
-// hardcoded list in lib/stocks.ts. This tool must never be presented as an
+// Indian equities come from Upstox's NSE instrument search and US listings
+// from Finnhub's symbol search — the same two sources as the site's search box
+// (lib/search/instruments.ts) — plus the small hardcoded list in lib/stocks.ts
+// as the fallback when they're unavailable. Renamed and demerged companies
+// come from lib/search/renames.ts, which the search box also uses. This tool must never be presented as an
 // authoritative market search, and it deliberately always succeeds (ok: true)
 // even with zero candidates — "no match" is a legitimate, informative result
 // here, not a tool failure.
 const SOURCE_LOCAL = "StockSphere Known Symbols List (limited, non-authoritative)";
 const SOURCE_WITH_UPSTOX =
   "StockSphere Known Symbols List + Upstox Instrument Search (NSE equities, non-authoritative)";
+const SOURCE_WITH_SEARCH =
+  "StockSphere Known Symbols List + Upstox (NSE) and Finnhub (US) symbol search, non-authoritative";
+const SOURCE_RENAMES = "StockSphere renamed and demerged listings (successors verified on NSE)";
+const US_SEARCH_LIMIT = 10;
 
 const MAX_CANDIDATES = 5;
 const UPSTOX_SEARCH_LIMIT = 30;
@@ -48,12 +56,15 @@ export function stripIndianSuffix(value: string): string {
 }
 
 /**
- * Former names people still use, mapped to the name the listing has now
- * (Upstox searches current names only). Lower-case keys.
+ * Former names people still use, mapped to the name of the one listing that
+ * replaced it. Lower-case keys. Derived from lib/search/renames.ts; a demerger
+ * (several successors) isn't here, because no single name is right.
  */
-export const RENAMED_COMPANIES: Record<string, string> = {
-  zomato: "Eternal",
-};
+export const RENAMED_COMPANIES: Record<string, string> = Object.fromEntries(
+  RETIRED_LISTINGS.filter((listing) => listing.successors.length === 1).flatMap((listing) =>
+    listing.formerNames.map((name) => [name, listing.successors[0].name])
+  )
+);
 
 const argsSchema = z.object({
   query: z.string().trim().min(1).max(80),
@@ -67,13 +78,17 @@ export type IndianCandidateSearch = (
   limit?: number
 ) => Promise<UpstoxEquityCandidate[] | null>;
 
+/** Signature of the US symbol search (Finnhub in production; injectable for tests). */
+export type UsCandidateSearch = (query: string, limit?: number) => Promise<FinnhubSymbolMatch[] | null>;
+
 function searchLocalList(searchTerm: string): SymbolCandidate[] {
   const q = searchTerm.toLowerCase();
 
   return stocks
     .filter(
       (stock) =>
-        stock.symbol.toLowerCase().includes(q) || stock.name.toLowerCase().includes(q)
+        !isRetiredSymbol(stock.symbol) &&
+        (stock.symbol.toLowerCase().includes(q) || stock.name.toLowerCase().includes(q))
     )
     .map((stock) => ({ symbol: toCanonicalSymbol(stock.symbol), name: stock.name }));
 }
@@ -86,7 +101,7 @@ function candidatesFromUpstox(rows: UpstoxEquityCandidate[]): SymbolCandidate[] 
   for (const row of rows) {
     const tradingSymbol =
       typeof row?.trading_symbol === "string" ? row.trading_symbol.trim().toUpperCase() : "";
-    if (!tradingSymbol) continue;
+    if (!tradingSymbol || isRetiredSymbol(tradingSymbol)) continue;
 
     candidates.push({
       symbol: `${tradingSymbol}.NS`,
@@ -95,6 +110,17 @@ function candidatesFromUpstox(rows: UpstoxEquityCandidate[]): SymbolCandidate[] 
   }
 
   return candidates;
+}
+
+// US listings that actually name the query: Finnhub answers loosely (Ford
+// brings back Hartford), so a candidate needs a ticker match or a name that
+// starts with the query's words, like the search box's word-start rule.
+function candidatesFromFinnhub(rows: FinnhubSymbolMatch[], lowerSearchTerm: string): SymbolCandidate[] {
+  const queryTokens = companyNameTokens(lowerSearchTerm);
+  return rows
+    .filter((row) => typeof row?.symbol === "string" && /^[A-Z][A-Z0-9.-]{0,9}$/.test(row.symbol))
+    .map((row) => ({ symbol: row.symbol, name: row.description?.trim() || row.symbol }))
+    .filter((candidate) => matchTier(candidate.symbol, candidate.name, lowerSearchTerm, queryTokens) <= 3);
 }
 
 // Ranking lives in lib/search/rank.ts, shared with the search box so the
@@ -116,11 +142,12 @@ function rankTier(
 function mergeAndRank(
   upstoxCandidates: SymbolCandidate[],
   localCandidates: SymbolCandidate[],
-  lowerSearchTerm: string
+  lowerSearchTerm: string,
+  usCandidates: SymbolCandidate[] = []
 ): SymbolCandidate[] {
   const bySymbol = new Map<string, SymbolCandidate>();
 
-  for (const candidate of [...upstoxCandidates, ...localCandidates]) {
+  for (const candidate of [...upstoxCandidates, ...usCandidates, ...localCandidates]) {
     const key = candidate.symbol.toUpperCase();
     if (!bySymbol.has(key)) bySymbol.set(key, candidate);
   }
@@ -159,12 +186,13 @@ export function pickCandidate(query: string, candidates: SymbolCandidate[]): { m
  * calling Upstox. Production code uses the default export below.
  */
 export function createSymbolResolverTool(
-  searchIndianCandidates: IndianCandidateSearch = searchUpstoxEquityCandidates
+  searchIndianCandidates: IndianCandidateSearch = searchUpstoxEquityCandidates,
+  searchUsCandidates: UsCandidateSearch | null = null
 ): ToolDefinition<SymbolResolverToolArgs, SymbolResolution> {
   return {
     name: "resolve_symbol",
     description:
-      "Find ticker candidates for a company name or ticker (e.g. 'Tata Consultancy', 'tcs'). Indian stocks via Upstox NSE search (.NS); a small built-in list covers well-known US names — not a full global search. Ranked exact ticker, exact name, then name prefix; bestMatch is set when one clearly fits. Use symbols exactly as returned.",
+      "Find ticker candidates for a company name or ticker (e.g. 'Tata Consultancy', 'tcs', 'Ford'). Indian stocks via Upstox NSE search (.NS), US listings via Finnhub symbol search; renamed or demerged companies (Zomato, Tata Motors) return their current listings with a note. Ranked exact ticker, exact name, then name prefix; bestMatch is set when one clearly fits. Use symbols exactly as returned.",
     parameters: {
       type: "object",
       properties: {
@@ -179,8 +207,24 @@ export function createSymbolResolverTool(
     argsSchema,
     async execute({ query }) {
       const asked = stripIndianSuffix(query);
-      const renamedTo = RENAMED_COMPANIES[asked.toLowerCase()];
-      const searchTerm = renamedTo ?? asked;
+
+      // A renamed or demerged company: its current listings, from the same
+      // list the search box uses. One successor is a match; several (a
+      // demerger) are left for the member to choose between.
+      const retired = retiredListing(asked);
+      if (retired) {
+        const candidates = retired.successors.map((successor) => ({ symbol: `${successor.symbol}.NS`, name: successor.name }));
+        const resolution: SymbolResolution = {
+          query,
+          candidates,
+          authoritative: false,
+          bestMatch: candidates.length === 1 ? candidates[0] : null,
+          note: retired.note,
+        };
+        return okResult(resolution, SOURCE_RENAMES);
+      }
+
+      const searchTerm = asked;
 
       if (!searchTerm) {
         const empty: SymbolResolution = { query, candidates: [], authoritative: false };
@@ -205,23 +249,37 @@ export function createSymbolResolverTool(
         }
       }
 
+      let usCandidates: SymbolCandidate[] = [];
+      let usConsulted = false;
+      if (searchUsCandidates) {
+        try {
+          const rows = await searchUsCandidates(searchTerm, US_SEARCH_LIMIT);
+          if (Array.isArray(rows)) {
+            usCandidates = candidatesFromFinnhub(rows, searchTerm.toLowerCase());
+            usConsulted = true;
+          }
+        } catch {
+          usCandidates = [];
+        }
+      }
+
       const candidates = mergeAndRank(
         upstoxCandidates,
         searchLocalList(searchTerm),
-        searchTerm.toLowerCase()
+        searchTerm.toLowerCase(),
+        usCandidates
       );
 
-      const picked = pickCandidate(renamedTo ?? query, candidates);
+      const picked = pickCandidate(query, candidates);
       const result: SymbolResolution = {
         query,
         candidates,
         authoritative: false,
         bestMatch: picked && "match" in picked ? picked.match : null,
-        ...(renamedTo ? { note: `"${asked}" is now listed as ${renamedTo}; searched for ${renamedTo}.` } : {}),
       };
-      return okResult(result, upstoxConsulted ? SOURCE_WITH_UPSTOX : SOURCE_LOCAL);
+      return okResult(result, usConsulted ? SOURCE_WITH_SEARCH : upstoxConsulted ? SOURCE_WITH_UPSTOX : SOURCE_LOCAL);
     },
   };
 }
 
-export const symbolResolverTool = createSymbolResolverTool();
+export const symbolResolverTool = createSymbolResolverTool(searchUpstoxEquityCandidates, searchFinnhubSymbols);

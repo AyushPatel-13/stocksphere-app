@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+import { roundMarketPayload } from "@/lib/utils/roundPrice";
 import { getLiveIndices } from "@/lib/services/indices";
 
 /**
@@ -36,7 +38,7 @@ export async function GET(
     return NextResponse.json(
       {
         success: true,
-        data: snapshot.indices,
+        data: roundMarketPayload(snapshot.indices),
         unavailable: snapshot.unavailable,
         fetchedAt: snapshot.fetchedAt,
       },

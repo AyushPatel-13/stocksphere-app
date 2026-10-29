@@ -126,14 +126,15 @@ test("performance: 'this year' (ytd) starts from last year's final close, not 12
   assert.equal(r.returnPct, -5);
 });
 
-test("resolver: a former company name searches the current listing and says so", async () => {
+test("resolver: a former company name returns the current listing and says so", async () => {
   const searched: string[] = [];
   const tool = createSymbolResolverTool(async (q) => {
     searched.push(q);
-    return q === "Eternal" ? [{ trading_symbol: "ETERNAL", name: "ETERNAL LIMITED" }] as never : [];
+    return [];
   });
   const result = await tool.execute({ query: "Zomato" });
-  assert.deepEqual(searched, ["Eternal"]);
+  // Answered from lib/search/renames.ts, the list the search box uses too.
+  assert.deepEqual(searched, []);
   assert.equal(result.data!.bestMatch?.symbol, "ETERNAL.NS");
-  assert.match(result.data!.note ?? "", /now listed as Eternal/);
+  assert.match(result.data!.note ?? "", /renamed Eternal/);
 });

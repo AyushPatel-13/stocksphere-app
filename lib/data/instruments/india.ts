@@ -57,10 +57,13 @@ export type Nifty50Symbol =
 
 /**
  * Indian (NSE) equities the app knows about that are not NIFTY 50 constituents:
- * the "India" section of lib/stocks.ts minus the names already listed above.
- * HAL and TATAMOTORS are the only two.
+ * the "India" section of lib/stocks.ts minus the names already listed above
+ * (HAL, and TMCV from the Tata Motors demerger; see lib/search/renames.ts).
+ * Without TMCV a bare "TMCV" went to the US chain, where Yahoo prices an
+ * unrelated $0.0001 ticker. TATAMOTORS no longer trades but stays here, so a
+ * holding saved under it is still routed to Indian providers, not a US one.
  */
-const OTHER_KNOWN_INDIAN_SYMBOLS = ["HAL", "TATAMOTORS"] as const;
+const OTHER_KNOWN_INDIAN_SYMBOLS = ["HAL", "TATAMOTORS", "TMCV"] as const;
 
 /**
  * Every Indian equity symbol this app knows, bare and uppercase.

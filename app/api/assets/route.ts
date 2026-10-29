@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { roundMarketPayload } from "@/lib/utils/roundPrice";
+
 import { getAssetBoard, type HubType } from "@/lib/services/assetBoard";
 
 /**
@@ -30,7 +32,7 @@ export async function GET(
     }
 
     return NextResponse.json(
-      { success: true, ...board },
+      { success: true, ...roundMarketPayload(board) },
       { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=60" } }
     );
   } catch (error) {
