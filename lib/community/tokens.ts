@@ -12,6 +12,29 @@ export type Token =
 const TOKEN_PATTERN =
   /(\$[A-Za-z][A-Za-z0-9&.-]{0,19})|(@[a-z][a-z0-9_]{2,19})\b|((?:https?:\/\/)[^\s<>"']+)/gi;
 
+const THESIS_PATH = /^\/theses\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+
+/** StockSphere's own hosts: production and its Vercel deployments, and local development. */
+function isSiteHost(host: string): boolean {
+  return host === "localhost" || /^stocksphere[a-z0-9-]*\.vercel\.app$/.test(host);
+}
+
+/**
+ * A link to a thesis on StockSphere itself, as the in-site path to open
+ * ("/theses/<id>"); null for any other link. Only StockSphere's own hosts
+ * count, so a look-alike domain stays an ordinary external link.
+ */
+export function thesisPath(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  const id = isSiteHost(url.hostname) ? url.pathname.match(THESIS_PATH)?.[1] : undefined;
+  return id ? `/theses/${id.toLowerCase()}` : null;
+}
+
 /** A link shown as a card under a post: where it goes, from the URL alone (nothing is fetched). */
 export type LinkPreview = { href: string; host: string; path: string };
 

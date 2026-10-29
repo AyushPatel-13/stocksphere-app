@@ -61,6 +61,7 @@ export default function Composer({
   symbol,
   ipoId,
   seed,
+  draft,
   label,
   parentId,
   postId,
@@ -79,6 +80,8 @@ export default function Composer({
   ipoId?: string;
   /** Start every new post with this pick already tagged (a bond's page). */
   seed?: MentionPick;
+  /** Start the first new post with this text (e.g. a link to the thesis being discussed). */
+  draft?: string;
   /** Display name for the board's instrument, used in the prompt. */
   label?: string;
   /** Reply to this post or comment. */
@@ -98,7 +101,7 @@ export default function Composer({
   onCancel?: () => void;
 }) {
   const fresh = () => (seed ? { body: `${seed.text} `, picks: [seed] } : { body: "", picks: [] as MentionPick[] });
-  const [body, setBody] = useState(() => editing?.body ?? fresh().body);
+  const [body, setBody] = useState(() => editing?.body ?? draft ?? fresh().body);
   const [picks, setPicks] = useState<MentionPick[]>(() => (editing ? picksOf(editing) : fresh().picks));
   const [title, setTitle] = useState(editing?.title ?? "");
   const [kind, setKind] = useState<PostKind | null>(editing?.kind ?? null);

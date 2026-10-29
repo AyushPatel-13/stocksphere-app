@@ -5,7 +5,7 @@ import { bondFacts } from "@/lib/bonds/bonds";
 import { mentionPath, type StoredMention } from "@/lib/community/mentions";
 import { ipoCommunityPath } from "@/lib/community/paths";
 import { POST_KIND_LABELS, type PostKind } from "@/lib/community/rules";
-import { linkPreviews, tokenize } from "@/lib/community/tokens";
+import { linkPreviews, thesisPath, tokenize } from "@/lib/community/tokens";
 import type { PostView } from "@/lib/community/types";
 
 /**
@@ -92,6 +92,18 @@ function TextPart({ text, inert }: { text: string; inert: boolean }) {
           );
         }
         if (token.type === "link") {
+          const thesis = thesisPath(token.href);
+          if (thesis) {
+            return inert ? (
+              <span key={i} className="font-medium text-[#60a5fa]">
+                {token.value}
+              </span>
+            ) : (
+              <Link key={i} href={thesis} className="break-all font-medium text-[#60a5fa] hover:underline">
+                {token.value}
+              </Link>
+            );
+          }
           // External links open in a new tab, so even a preview's are safe to follow.
           return (
             <a key={i} href={token.href} target="_blank" rel="noopener noreferrer nofollow ugc" className="break-all text-[#60a5fa] underline underline-offset-2">
@@ -144,27 +156,45 @@ export function LinkCards({ body }: { body: string }) {
   if (!previews.length) return null;
   return (
     <ul aria-label="Links" className="mt-2 grid gap-1.5 sm:grid-cols-2">
-      {previews.map((preview) => (
-        <li key={preview.href} className="min-w-0">
-          <a
-            href={preview.href}
-            target="_blank"
-            rel="noopener noreferrer nofollow ugc"
-            className="flex min-w-0 items-center gap-2.5 rounded-xl border border-[#242424] bg-[#141414] px-3 py-2 transition-colors hover:border-[#333] hover:bg-[#171717]"
-          >
-            <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#1c1c1c] text-sm">
-              🔗
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-medium text-[#e5e5e5]">{preview.host}</span>
-              <span className="block truncate text-xs text-[#777]">{preview.path || "Opens in a new tab"}</span>
-            </span>
-            <span aria-hidden="true" className="ml-auto shrink-0 text-xs text-[#666]">
-              ↗
-            </span>
-          </a>
-        </li>
-      ))}
+      {previews.map((preview) => {
+        const thesis = thesisPath(preview.href);
+        return (
+          <li key={preview.href} className="min-w-0">
+            {thesis ? (
+              <Link
+                href={thesis}
+                className="flex min-w-0 items-center gap-2.5 rounded-xl border border-[#242424] bg-[#141414] px-3 py-2 transition-colors hover:border-[#333] hover:bg-[#171717]"
+              >
+                <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#1c1c1c] text-sm">
+                  ✍️
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-[#e5e5e5]">Thesis on StockSphere</span>
+                  <span className="block truncate text-xs text-[#777]">The full case, its versions and outcome</span>
+                </span>
+              </Link>
+            ) : (
+              <a
+                href={preview.href}
+                target="_blank"
+                rel="noopener noreferrer nofollow ugc"
+                className="flex min-w-0 items-center gap-2.5 rounded-xl border border-[#242424] bg-[#141414] px-3 py-2 transition-colors hover:border-[#333] hover:bg-[#171717]"
+              >
+                <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#1c1c1c] text-sm">
+                  🔗
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-[#e5e5e5]">{preview.host}</span>
+                  <span className="block truncate text-xs text-[#777]">{preview.path || "Opens in a new tab"}</span>
+                </span>
+                <span aria-hidden="true" className="ml-auto shrink-0 text-xs text-[#666]">
+                  ↗
+                </span>
+              </a>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
