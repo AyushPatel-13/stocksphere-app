@@ -9,6 +9,7 @@ import Dialog from "@/components/Profile/Dialog";
 import EditProfileDialog from "@/components/Profile/EditProfileDialog";
 import ProfileHeader from "@/components/Profile/ProfileHeader";
 import ProfileTabs from "@/components/Profile/ProfileTabs";
+import ReputationPanel from "@/components/Profile/ReputationPanel";
 import { PageShell } from "@/components/ui/Page";
 import { useCommunityUser } from "@/lib/community/client";
 import type { PostView } from "@/lib/community/types";
@@ -91,6 +92,7 @@ export default function UserProfilePage() {
       ) : (
         <>
           <ProfileHeader key={`header-${member.id}`} member={member} user={user} own={own} stats={stats} onEdit={() => setEditing(true)} />
+          <ReputationPanel key={`rep-${member.id}`} username={member.username} />
           <ProfileTabs key={`tabs-${member.id}`} username={member.username} user={user} own={own} added={own ? added : []} stats={stats} />
         </>
       )}
