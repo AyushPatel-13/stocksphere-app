@@ -35,14 +35,14 @@ const quiet = <T>(fn: () => Promise<T>) => {
 
 // ---------------------------------------------------------------- selection
 
-test("gemini registry: SDK provider only with GEMINI_API_KEY; model and transport overridable; Groq first by default", () => {
+test("gemini registry: SDK provider only with GEMINI_API_KEY; model and transport overridable; Gemini first by default", () => {
   assert.deepEqual(buildProviders({ GROQ_API_KEY: "g", GROQ_FALLBACK_MODEL: "none" }).map((p) => p.provider), ["groq"], "missing key: Gemini is skipped");
   assert.deepEqual(buildProviders({ GEMINI_API_KEY: "" }), [], "an empty key counts as missing");
   assert.deepEqual(buildProviders({ GEMINI_API_KEY: "secret-m" }).map((p) => p.id), ["gemini:gemini-3.5-flash-lite"]);
   assert.deepEqual(buildProviders({ GEMINI_API_KEY: "m", GEMINI_MODEL: "gemini-3.8-flash" }).map((p) => p.id), ["gemini:gemini-3.8-flash"]);
   const both = { GEMINI_API_KEY: "secret-m", GROQ_API_KEY: "secret-g", GROQ_FALLBACK_MODEL: "none" };
-  assert.deepEqual(buildProviders(both).map((p) => p.provider), ["groq", "gemini"]);
-  assert.deepEqual(buildProviders({ ...both, LLM_PROVIDERS: "gemini,groq" }).map((p) => p.provider), ["gemini", "groq"]);
+  assert.deepEqual(buildProviders(both).map((p) => p.provider), ["gemini", "groq"]);
+  assert.deepEqual(buildProviders({ ...both, LLM_PROVIDERS: "groq,gemini" }).map((p) => p.provider), ["groq", "gemini"]);
   assert.ok(buildProviders(both).every((p) => !p.id.includes("secret")));
 });
 

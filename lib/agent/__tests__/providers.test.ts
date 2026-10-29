@@ -20,18 +20,18 @@ test("registry: free providers first; with only GROQ_API_KEY it runs on Groq alo
   assert.deepEqual(buildProviders({ GROQ_API_KEY: "g" }).map((p) => p.id), ["groq:openai/gpt-oss-120b", "groq:openai/gpt-oss-20b"]);
   assert.deepEqual(
     buildProviders({ GROQ_API_KEY: "g", GEMINI_API_KEY: "m", GROQ_FALLBACK_MODEL: "none" }).map((p) => p.id),
-    ["groq:openai/gpt-oss-120b", "gemini:gemini-3.5-flash-lite"],
-    "Groq stays first until Gemini has been tested"
+    ["gemini:gemini-3.5-flash-lite", "groq:openai/gpt-oss-120b"],
+    "Gemini first, Groq as its fallback"
   );
 });
 
 test("registry: paid providers only with their keys; LLM_PROVIDERS sets the order; ids never carry keys", () => {
   const env = { GEMINI_API_KEY: "secret-m", GROQ_API_KEY: "secret-g", GROQ_FALLBACK_MODEL: "none", ANTHROPIC_API_KEY: "secret-a", OPENROUTER_API_KEY: "secret-o" };
-  assert.deepEqual(buildProviders(env).map((p) => p.provider), ["groq", "gemini", "openrouter", "anthropic"]);
+  assert.deepEqual(buildProviders(env).map((p) => p.provider), ["gemini", "groq", "openrouter", "anthropic"]);
   const ordered = buildProviders({ ...env, LLM_PROVIDERS: "groq, anthropic,bogus,groq" });
   assert.deepEqual(ordered.map((p) => p.provider), ["groq", "anthropic"]);
   assert.ok(ordered.every((p) => !p.id.includes("secret")));
-  assert.deepEqual(providerOrder({ LLM_PROVIDERS: "" }), ["groq", "gemini", "openrouter", "anthropic", "openai", "xai"]);
+  assert.deepEqual(providerOrder({ LLM_PROVIDERS: "" }), ["gemini", "groq", "openrouter", "anthropic", "openai", "xai"]);
   assert.deepEqual(buildProviders({}), []);
 });
 
@@ -272,4 +272,13 @@ test("chain: a spent daily quota fails fast with an honest message instead of wa
   assert.match(error!.message, /free AI quota for today/);
   assert.deepEqual(deps.slept, [], "no waiting on a daily limit");
   assert.equal(deps.cooldowns.get("groq:m"), 1_000_000 + 15 * 60_000);
+});
+
+test("chain: Gemini overloaded (503) while Groq cools down → a short wait and a retry, not an error", async () => {
+  const gemini = fakeProvider("gemini:m", [new ProviderError("gemini:m", 503, "This model is currently experiencing high demand"), answer("after overload")]);
+  const groq = fakeProvider("groq:m", [new ProviderError("groq:m", 429, "tpm", 20)]);
+  const deps = chain([gemini, groq]);
+  const result = await quiet(() => getChatCompletion([], [], { deadline: 1_000_000 + 45_000 }, deps));
+  assert.equal(result.content, "after overload");
+  assert.deepEqual(deps.slept, [4_000]);
 });

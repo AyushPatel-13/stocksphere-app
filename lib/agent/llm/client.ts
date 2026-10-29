@@ -32,6 +32,8 @@ const DEFAULT_COOLDOWN_MS = 20_000;
  * (Gemini's free tier took 26–79 s for a 250-word answer when measured).
  */
 export const TIMEOUT_COOLDOWN_MS = 2 * 60_000;
+/** How long a provider that answered 503 (overloaded) is skipped when it doesn't say. */
+const OVERLOADED_COOLDOWN_MS = 4_000;
 /** Longest wait for a rate limit to clear when every provider is limited. */
 const MAX_RATE_LIMIT_WAIT_MS = 15_000;
 /** Passes over the chain; a rate-limit wait sits between passes. */
@@ -61,7 +63,7 @@ export function toLLMError(error: unknown): LLMError {
   if (status === 429 && error instanceof ProviderError && error.dailyQuota) {
     return new LLMError("StockSphere AI has used its free AI quota for today. Please try again later.");
   }
-  if (status === 429) return new LLMError("The AI service is busy right now. Please try again in a minute.");
+  if (status === 429 || status === 503) return new LLMError("The AI service is busy right now. Please try again in a minute.");
   if (status === 413) return new LLMError("That question needed more data than the AI service accepts at once. Try asking about fewer items or a shorter period.");
   if (status === 401 || status === 403) return new LLMError("The AI service isn't configured correctly.");
   if (status === 400) return new LLMError("The AI service couldn't process that request. Please rephrase and try again.");
@@ -123,8 +125,8 @@ export async function getChatCompletion(
   }
 
   let lastError: unknown = null;
-  // When every provider was rate-limited, the shortest wait any of them asked
-  // for (capped) is waited out and the chain tried again, as long as the
+  // When every provider was rate-limited or overloaded (429/503), the shortest
+  // wait any of them asked for (capped) is waited out and the chain tried again, as long as the
   // deadline allows — this matters when Groq is the only provider configured.
   for (let pass = 0; pass < MAX_PASSES; pass++) {
     let allRateLimited = true;
@@ -148,6 +150,12 @@ export async function getChatCompletion(
         if (status === 429) {
           const wait = error instanceof ProviderError && error.retryAfterSec ? error.retryAfterSec * 1000 : DEFAULT_COOLDOWN_MS;
           deps.cooldowns.set(provider.id, deps.now() + wait);
+        } else if (status === 503) {
+          // "Model overloaded" clears in seconds, like a per-minute rate limit:
+          // with Groq cooling down at the same moment, one short wait and a
+          // retry beats an error ("Jio financials" failed this way).
+          const wait = error instanceof ProviderError && error.retryAfterSec ? error.retryAfterSec * 1000 : OVERLOADED_COOLDOWN_MS;
+          deps.cooldowns.set(provider.id, deps.now() + wait);
         } else {
           if (status === null && error instanceof Error && /timed out/i.test(error.message)) {
             deps.cooldowns.set(provider.id, deps.now() + TIMEOUT_COOLDOWN_MS);
@@ -169,7 +177,7 @@ export async function getChatCompletion(
   throw toLLMError(lastError ?? Object.assign(new Error("deadline reached before any provider answered"), { status: null }));
 }
 
-/** The configured chain as "groq:… → gemini:gemini-3.5-flash-lite", for logs and the status check. No keys. */
+/** The configured chain as "gemini:gemini-3.5-flash-lite → groq:…", for logs and the status check. No keys. */
 export function describeProviders(): string {
   return defaultDeps().providers.map((p) => p.id).join(" → ") || "none";
 }
