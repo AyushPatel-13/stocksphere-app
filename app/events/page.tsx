@@ -7,6 +7,7 @@ import InstrumentField, { pickedFromResult, type PickedInstrument } from "@/comp
 import { PageHeader, PageShell, inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/ui/Page";
 import { storedSymbolFor } from "@/lib/search/pick";
 import type { EarningsEvent } from "@/lib/services/earningsCalendar";
+import type { MarketEvent } from "@/lib/markets/eventIngest";
 
 /**
  * Events: the upcoming US earnings calendar (Finnhub) and the member's own
@@ -160,6 +161,80 @@ function EarningsCalendar() {
   );
 }
 
+const NSE_KIND_LABEL: Record<MarketEvent["kind"], string> = {
+  dividend: "Dividend",
+  buyback: "Buyback",
+  split: "Split",
+  bonus: "Bonus",
+  rights: "Rights",
+  other: "Corporate action",
+  results: "Results meeting",
+  board_meeting: "Board meeting",
+};
+
+function NseEvents() {
+  const [state, setState] = useState<{ status: "loading" } | { status: "error"; message: string } | { status: "ready"; events: MarketEvent[] }>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/events/market?days=30")
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.success) setState({ status: "ready", events: data.events });
+        else setState({ status: "error", message: data?.code === "NOT_CONFIGURED" ? "Indian exchange events are launching soon." : "Indian exchange events are unavailable right now." });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error", message: "Indian exchange events are unavailable right now." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <section className="rounded-2xl border border-[#222] bg-[#111]">
+      <div className="border-b border-[#1d1d1d] px-5 py-3">
+        <p className="font-semibold">NSE corporate actions and results dates</p>
+        <p className="mt-0.5 text-xs text-[#777]">Ex-dates and board meetings announced on NSE, next 30 days.</p>
+      </div>
+      {state.status === "loading" && <div className="m-4 h-24 animate-pulse rounded-lg bg-[#151515]" />}
+      {state.status === "error" && <p className="px-5 py-8 text-center text-sm text-[#888]">{state.message}</p>}
+      {state.status === "ready" && state.events.length === 0 && (
+        <p className="px-5 py-8 text-center text-sm text-[#888]">No NSE announcements stored for the next 30 days yet.</p>
+      )}
+      {state.status === "ready" && state.events.length > 0 && (
+        <ul className="max-h-[480px] overflow-y-auto">
+          {state.events.map((e) => (
+            <li key={e.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[#1b1b1b] px-5 py-2.5 text-sm last:border-b-0">
+              <span className="w-24 text-xs tabular-nums text-[#aaa]">{e.eventDate ? formatDay(e.eventDate) : "Date not given"}</span>
+              {e.symbol ? (
+                <Link href={`/stock/${encodeURIComponent(e.symbol)}`} className="w-28 font-semibold hover:text-[#22c55e]" title={e.company}>
+                  {e.symbol}
+                </Link>
+              ) : (
+                <span className="w-28 truncate text-[#ccc]" title="Not matched to a main-board NSE listing">
+                  {e.company}
+                </span>
+              )}
+              <span className="text-xs text-[#aaa]">{NSE_KIND_LABEL[e.kind]}</span>
+              <span className="min-w-0 flex-1 truncate text-xs text-[#777]" title={e.purpose}>
+                {e.purpose}
+              </span>
+              <a href={e.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#888] hover:text-white">
+                NSE ↗
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="border-t border-[#1d1d1d] px-5 py-2 text-[11px] text-[#666]">
+        From NSE&apos;s public announcement feeds. A company is linked only when it matches one NSE listing exactly; others are shown by name.
+      </p>
+    </section>
+  );
+}
+
 function Reminders() {
   const [reminders, setReminders] = useState<Reminder[] | null | undefined>(undefined);
   // Only an instrument picked from the shared search; an edited reminder shows its saved symbol.
@@ -281,7 +356,10 @@ export default function EventsPage() {
         }
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <EarningsCalendar />
+        <div className="min-w-0 space-y-6">
+          <NseEvents />
+          <EarningsCalendar />
+        </div>
         <aside>
           <Reminders />
         </aside>
