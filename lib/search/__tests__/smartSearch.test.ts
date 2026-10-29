@@ -124,7 +124,7 @@ test("the test queries rank the instrument people mean first", async () => {
   assert.equal((await first("NIFTY")).href, "/asset/index/NIFTY");
 
   const tata = symbolsOf((await search("Tata", 10)).results);
-  for (const symbol of ["TCS", "TATAMOTORS", "TATASTEEL", "TATAPOWER"]) assert.ok(tata.includes(symbol), symbol);
+  for (const symbol of ["TCS", "TMPV", "TMCV", "TATASTEEL", "TATAPOWER"]) assert.ok(tata.includes(symbol), symbol);
 });
 
 test("Gold finds the MCX future, gold ETFs and the US ticker GOLD as distinct instruments", async () => {

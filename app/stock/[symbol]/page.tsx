@@ -13,6 +13,8 @@ import CompanyOverview from "@/components/Stock/CompanyOverview";
 import AgentAssistant from "@/components/Agent/AgentAssistant";
 import { StockAvatar } from "@/components/Markets/StockBits";
 import { getPrice } from "@/lib/services/price";
+import { indianStockHref } from "@/lib/search/canonical";
+import { retiredListing } from "@/lib/search/renames";
 import { getCompany } from "@/lib/services/company";
 import { getNews } from "@/lib/services/news";
 import type { NewsArticle } from "@/lib/types/news";
@@ -313,6 +315,32 @@ export default async function StockPage({
     asset ? getHistory(asset, "1y").catch(() => null) : Promise.resolve(null),
   ]);
   const range52w = fiftyTwoWeekRange(yearHistory);
+
+  // A listing that was renamed or demerged (an old link, a saved holding):
+  // point to what trades now instead of a page no provider can price.
+  const retired = quote ? null : retiredListing(decodeURIComponent(symbol));
+  if (retired) {
+    return (
+      <div className="sp-root">
+        <style>{SP_STYLES}</style>
+        <div className="sp-shell">
+          <div className="sp-hero" style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}>
+            <h1 className="sp-symbol">{retired.symbol}</h1>
+            <p style={{ color: "#aaa", margin: 0 }}>{retired.note}</p>
+            <ul style={{ margin: 0, paddingLeft: "18px", display: "grid", gap: "6px" }}>
+              {retired.successors.map((successor) => (
+                <li key={successor.symbol}>
+                  <Link href={indianStockHref(successor.symbol)} style={{ color: "#4ade80", fontSize: "14px" }}>
+                    {successor.name} ({successor.symbol}) →
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // No provider knows this symbol at all: say so, instead of an empty page
   // full of "N/A" that reads like a broken stock.

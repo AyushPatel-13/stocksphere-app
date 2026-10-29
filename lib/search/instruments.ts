@@ -7,6 +7,7 @@ import { isIndianEquitySymbol } from "../data/instruments/india";
 import { stocks } from "../stocks";
 import { indianStockHref } from "./canonical";
 import { companyNameTokens, matchTier } from "./rank";
+import { RETIRED_LISTINGS, isRetiredSymbol } from "./renames";
 import {
   DEFAULT_LIMIT,
   MAX_LIMIT,
@@ -150,7 +151,23 @@ function localCatalog(): Candidate[] {
     };
   });
 
-  return [...indices, ...etfs, ...crypto, ...bonds, ...commodities, ...known];
+  // What renamed or demerged companies trade as now, found by their old name
+  // or ticker too ("Zomato" → ETERNAL, "Tata Motors" → TMPV and TMCV).
+  const successors: Candidate[] = RETIRED_LISTINGS.flatMap((listing) =>
+    listing.successors.map((successor) => ({
+      id: `India:${successor.symbol}`,
+      symbol: successor.symbol,
+      name: successor.name,
+      type: "stock" as const,
+      exchange: "NSE",
+      market: "India" as const,
+      currency: "INR",
+      href: indianStockHref(successor.symbol),
+      aliases: [...listing.formerNames, listing.symbol.toLowerCase()],
+    }))
+  );
+
+  return [...indices, ...etfs, ...crypto, ...bonds, ...commodities, ...successors, ...known];
 }
 
 const LOCAL = localCatalog();
@@ -333,7 +350,12 @@ export function createInstrumentSearch(deps: SearchDeps = DEFAULT_DEPS) {
     if (hit && deps.now() - hit.at < CACHE_TTL_MS) return hit.response;
 
     const lowerQuery = text.toLowerCase().replace(/\.(ns|bse|bo)$/, "");
-    const keep = (candidate: Candidate) => matches(candidate, lowerQuery) && matchesFilters(candidate, filters);
+    // A symbol that no longer trades (TATAMOTORS, ZOMATO) is never offered: it
+    // would open a page no provider can price. Its successors are, above.
+    const keep = (candidate: Candidate) =>
+      !(candidate.market === "India" && isRetiredSymbol(candidate.symbol)) &&
+      matches(candidate, lowerQuery) &&
+      matchesFilters(candidate, filters);
     const local = LOCAL.filter(keep);
 
     let partial = false;

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { roundMarketPayload } from "@/lib/utils/roundPrice";
+
 import { getNifty50Quotes } from "@/lib/providers/market.provider";
 import { loadMarketMovers } from "@/lib/services/marketMovers";
 
@@ -60,7 +62,7 @@ export async function GET(
     }
 
     // Only a real answer is shared; a 503/500 must not be cached for a minute.
-    return NextResponse.json({ success: true, ...summary }, { headers: { "Cache-Control": CDN_CACHE } });
+    return NextResponse.json({ success: true, ...roundMarketPayload(summary) }, { headers: { "Cache-Control": CDN_CACHE } });
   } catch (error) {
     console.error("Nifty 50 market movers error:", error);
 

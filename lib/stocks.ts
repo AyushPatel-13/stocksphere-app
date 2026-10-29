@@ -22,7 +22,8 @@ export const stocks = [
   { symbol: "HAL", name: "Hindustan Aeronautics" },
   { symbol: "TRENT", name: "Trent Ltd" },
   { symbol: "ADANIPORTS", name: "Adani Ports" },
-  { symbol: "TATAMOTORS", name: "Tata Motors" },
+  { symbol: "TMPV", name: "Tata Motors Passenger Vehicles" },
+  { symbol: "TMCV", name: "Tata Motors (commercial vehicles)" },
   { symbol: "BHARTIARTL", name: "Bharti Airtel" },
   { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank" },
 ];

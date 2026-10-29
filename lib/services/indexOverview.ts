@@ -1,5 +1,5 @@
 import { ALL_INDICES, type MarketIndex } from "../data/instruments/indices";
-import { roundPercent, roundPrice } from "../utils/roundPrice";
+import { roundChange, roundPercent, roundPrice } from "../utils/roundPrice";
 import { getHistory, resolveAsset, type History } from "./history";
 
 /**
@@ -42,7 +42,7 @@ export function toOverviewRow(index: MarketIndex, history: History | null): Inde
     name: index.name,
     category: index.category,
     price: round(price),
-    change: round(change),
+    change: change === null ? null : roundChange(change, price),
     changePercent: change !== null && previous ? roundPercent((change / previous) * 100) : null,
     fiftyTwoWeekHigh: round(history?.fiftyTwoWeekHigh ?? null),
     fiftyTwoWeekLow: round(history?.fiftyTwoWeekLow ?? null),

@@ -225,9 +225,10 @@ test("success: 200 with the movers payload, unchanged in shape", async () => {
       json.unchanged,
       NIFTY_50_SYMBOLS.length - ADVANCERS - DECLINERS
     );
+    // Rounded to 2 decimals at the API boundary (lib/utils/roundPrice.ts).
     assert.equal(
       json.breadthPercent,
-      (ADVANCERS / NIFTY_50_SYMBOLS.length) * 100
+      Math.round((ADVANCERS / NIFTY_50_SYMBOLS.length) * 100 * 100) / 100
     );
     assert.equal(json.direction, "BULLISH");
 

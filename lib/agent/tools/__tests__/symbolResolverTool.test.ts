@@ -236,7 +236,7 @@ test("genuinely ambiguous queries stay ambiguous rather than silently picking on
   // Three real companies begin with "Tata". None of them IS "Tata", so the
   // resolver must not promote one of them to a confident single answer.
   const { search } = fakeSearch([
-    row("TATAMOTORS", "Tata Motors Ltd"),
+    row("TMPV", "Tata Motors Passenger Vehicles Ltd"),
     row("TATASTEEL", "Tata Steel Ltd"),
     row("TCS", "Tata Consultancy Services Ltd"),
   ]);
@@ -244,11 +244,14 @@ test("genuinely ambiguous queries stay ambiguous rather than silently picking on
 
   const result = await tool.execute({ query: "Tata" });
 
+  // TATASTEEL first: "tata" starts its ticker. TMCV comes from the local list.
   assert.deepEqual(symbolsOf(result.data?.candidates), [
-    "TATAMOTORS.NS",
     "TATASTEEL.NS",
+    "TMPV.NS",
     "TCS.NS",
+    "TMCV.NS",
   ]);
+  assert.equal(result.data?.bestMatch, null);
   assert.equal(result.data?.authoritative, false);
 });
 
