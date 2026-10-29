@@ -4,6 +4,7 @@
     { "path": "/api/predictions/resolve", "schedule": "30 11 * * *" },
     { "path": "/api/alerts/check", "schedule": "15 22 * * *" },
     { "path": "/api/community/listing", "schedule": "0 5 * * *" },
-    { "path": "/api/community/images/cleanup", "schedule": "30 3 * * *" }
+    { "path": "/api/community/images/cleanup", "schedule": "30 3 * * *" },
+    { "path": "/api/events/ingest", "schedule": "45 4 * * *" }
   ]
 }
