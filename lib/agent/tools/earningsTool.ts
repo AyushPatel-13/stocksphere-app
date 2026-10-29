@@ -33,7 +33,9 @@ export async function runEarningsTool(
   load: typeof getEarningsCalendar = getEarningsCalendar,
   now: number = Date.now()
 ): Promise<EarningsToolResult | null> {
-  const days = args.days ?? 14;
+  // A named company is looked up over the whole window: with the 14-day
+  // market-wide default, "When does Nvidia report?" missed a date 19 days out.
+  const days = args.days ?? ((args.symbols?.length ?? 0) > 0 ? 30 : 14);
   const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
   const from = iso(now);
   const to = iso(now + days * 86_400_000);
@@ -67,12 +69,12 @@ export async function runEarningsTool(
 export const earningsTool: ToolDefinition<EarningsToolArgs, EarningsToolResult> = {
   name: "get_earnings_calendar",
   description:
-    "Upcoming earnings report dates for US-listed companies over the next 1–30 days (default 14), with consensus EPS and revenue estimates. Pass tickers to check specific companies. Indian results dates are not covered — say so if asked.",
+    "Upcoming earnings report dates for US-listed companies over the next 1–30 days (default 30 for named tickers, 14 otherwise), with consensus EPS and revenue estimates. Pass tickers to check specific companies. Indian results dates are not covered — say so if asked.",
   parameters: {
     type: "object",
     properties: {
       symbols: { type: "array", items: { type: "string" }, description: "US tickers, e.g. ['AAPL','MSFT']. Omit for the busiest upcoming reports." },
-      days: { type: "integer", description: "Days ahead, 1–30 (default 14)." },
+      days: { type: "integer", description: "Days ahead, 1–30 (default 30 when tickers are given, else 14). Say the window you searched." },
     },
     required: [],
   },

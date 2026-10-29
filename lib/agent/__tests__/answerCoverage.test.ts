@@ -138,3 +138,8 @@ test("resolver: a former company name returns the current listing and says so", 
   assert.equal(result.data!.bestMatch?.symbol, "ETERNAL.NS");
   assert.match(result.data!.note ?? "", /renamed Eternal/);
 });
+
+test("prompt: 'should I' answers open with facts, never a softened verdict", () => {
+  assert.match(AGENT_SYSTEM_PROMPT, /not even softened \("can be considered", "looks attractive"\)/);
+  assert.match(AGENT_SYSTEM_PROMPT, /open with the plain facts instead/);
+});

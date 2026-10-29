@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import WatchlistButton from "../../WatchlistButton";
 import RecentSearchTracker from "@/app/RecentSearchTracker";
 import StockBoard from "@/components/Community/StockBoard";
+import StockTheses from "@/components/Theses/StockTheses";
 import StockEvents from "@/app/StockEvents";
 import StockHeader from "@/components/Stock/StockHeader";
 import PriceChart from "@/components/Charts/PriceChart";
@@ -614,6 +615,7 @@ export default async function StockPage({
             StockDiscussion, which nobody else could see. */}
         <div id="community" className="sp-anchor">
           <StockBoard symbol={symbol} />
+          <StockTheses symbol={symbol} />
         </div>
 
         <div id="events" className="sp-anchor">

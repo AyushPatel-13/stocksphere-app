@@ -90,3 +90,15 @@ test("earnings calendar: long windows are fetched a week at a time and merged", 
   assert.match(urls.at(-1)!, /symbol=AAPL/);
   assert.equal(one.length, 1);
 });
+
+test("earnings: a named ticker is searched over 30 days by default, the market-wide list over 14", async () => {
+  const windows: string[] = [];
+  const load = async (from: string, to: string) => {
+    windows.push(`${from}→${to}`);
+    return [];
+  };
+  const now = Date.parse("2026-10-29T05:00:00Z");
+  await runEarningsTool({ symbols: ["NVDA"] }, load, now);
+  await runEarningsTool({}, load, now);
+  assert.deepEqual(windows, ["2026-10-29→2026-11-28", "2026-10-29→2026-11-12"]);
+});

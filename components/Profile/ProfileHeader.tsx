@@ -114,6 +114,9 @@ export default function ProfileHeader({
           <button type="button" onClick={share} className={`${secondaryButtonClass} !px-3 !py-1.5`} aria-label="Share profile">
             <span aria-hidden="true">↗</span> <span className="hidden sm:inline">Share</span>
           </button>
+          <Link href={`/theses?user=${encodeURIComponent(member.username)}`} className={`${secondaryButtonClass} !px-3 !py-1.5`} aria-label={`Theses by @${member.username}`}>
+            <span aria-hidden="true">✎</span> <span className="hidden sm:inline">Theses</span>
+          </Link>
           {own && (
             <Link href="/community/saved" className={`${secondaryButtonClass} !px-3 !py-1.5`} aria-label="Saved posts">
               <span aria-hidden="true">★</span> <span className="hidden sm:inline">Saved</span>

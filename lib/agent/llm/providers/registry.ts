@@ -7,8 +7,8 @@ import { geminiProvider } from "./gemini";
 /**
  * Which providers the assistant may use, in order. Free tiers first:
  *
- *   groq        GROQ_API_KEY        Groq free plan               (GROQ_MODEL, then GROQ_FALLBACK_MODEL)
  *   gemini      GEMINI_API_KEY      Google AI Studio free tier   (GEMINI_MODEL, default gemini-3.5-flash-lite)
+ *   groq        GROQ_API_KEY        Groq free plan               (GROQ_MODEL, then GROQ_FALLBACK_MODEL)
  *   openrouter  OPENROUTER_API_KEY  OpenRouter free models       (OPENROUTER_MODEL, default openrouter/free)
  *   anthropic   ANTHROPIC_API_KEY   paid                         (ANTHROPIC_MODEL, default claude-opus-5-5)
  *   openai      OPENAI_API_KEY      paid                         (OPENAI_MODEL, default gpt-6-astra)
@@ -19,13 +19,15 @@ import { geminiProvider } from "./gemini";
  * the assistant runs on Groq alone. Model defaults were taken from each
  * provider's documentation in October 2026; override them by env var.
  *
- * Groq stays first, with Gemini as its fallback, until Gemini has been tested
- * here; LLM_PROVIDERS="gemini,groq" puts Gemini first. Gemini goes through the
- * official SDK (@google/genai); GEMINI_TRANSPORT=openai uses Google's
- * OpenAI-compatible endpoint instead.
+ * Gemini is first: on 2026-10-29 a 31-question set with Gemini first was
+ * answered in full (1–20 s, no provider failures), while Groq first hit its
+ * 8,000 tokens-a-minute limit on most multi-step questions and fell through
+ * anyway. Groq is the fallback. Gemini goes through the official SDK
+ * (@google/genai); GEMINI_TRANSPORT=openai uses Google's OpenAI-compatible
+ * endpoint instead.
  */
 
-export const DEFAULT_ORDER = ["groq", "gemini", "openrouter", "anthropic", "openai", "xai"] as const;
+export const DEFAULT_ORDER = ["gemini", "groq", "openrouter", "anthropic", "openai", "xai"] as const;
 export type ProviderName = (typeof DEFAULT_ORDER)[number];
 
 type Env = Record<string, string | undefined>;
