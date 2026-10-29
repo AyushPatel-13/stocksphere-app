@@ -620,6 +620,11 @@ export default async function StockPage({
 
         <div id="events" className="sp-anchor">
           <StockEvents symbol={symbol} />
+          <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+            <Link href="/earnings" className="text-[#888] hover:text-white">Earnings rooms →</Link>
+            <Link href="/impact" className="text-[#888] hover:text-white">Impact map →</Link>
+            <Link href={`/theses?symbol=${encodeURIComponent(decodeURIComponent(symbol).toUpperCase())}`} className="text-[#888] hover:text-white">Theses →</Link>
+          </p>
         </div>
           </div>
         </div>
