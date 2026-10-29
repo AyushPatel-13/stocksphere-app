@@ -59,9 +59,10 @@ const OFFICIAL_HOSTS = new Set(["www.nseindia.com", "nseindia.com", "nsearchives
 
 const STOCK_PATH = /^\/stock\/[A-Z0-9][A-Z0-9&-]{0,19}$/;
 const IPO_COMMUNITY_PATH = /^\/community\/ipo\/[a-z0-9-]{1,120}$/;
+const NEW_THESIS_PATH = /^\/theses\/new\?symbol=[A-Z0-9][A-Z0-9&.-]{0,24}$/;
 
 export function isKnownInternalPath(path: string): boolean {
-  return PAGE_PATHS.includes(path) || STOCK_PATH.test(path) || IPO_COMMUNITY_PATH.test(path);
+  return PAGE_PATHS.includes(path) || STOCK_PATH.test(path) || IPO_COMMUNITY_PATH.test(path) || NEW_THESIS_PATH.test(path);
 }
 
 /**

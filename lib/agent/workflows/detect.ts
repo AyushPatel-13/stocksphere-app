@@ -14,9 +14,10 @@ export type Workflow =
   | { type: "research"; query: string }
   | { type: "explain_move"; query: string }
   | { type: "compare"; queries: string[] }
-  | { type: "portfolio" };
+  | { type: "portfolio" }
+  | { type: "debate"; query: string };
 
-export const WORKFLOW_TYPES = ["research", "explain_move", "compare", "portfolio"] as const;
+export const WORKFLOW_TYPES = ["research", "explain_move", "compare", "portfolio", "debate"] as const;
 
 /** Things that aren't one company: these questions belong to the tool loop. */
 const NOT_A_COMPANY =
@@ -53,6 +54,17 @@ export function detectWorkflow(message: string): Workflow | null {
     /^(?:how (?:is|are)|how's)\s+my\s+(?:portfolio|holdings|investments)\b/i.test(text)
   ) {
     return { type: "portfolio" };
+  }
+
+  // A debate: both sides argued from the same evidence. Checked before compare and
+  // research: "bull vs bear case for X" isn't a comparison, "debate X" isn't a report.
+  const debate =
+    text.match(/^\s*(?:please\s+)?debate\s+(?:the\s+)?(?:bull\s+(?:and|vs\.?|versus)\s+bear\s+cases?\s+(?:for|on|of)\s+)?(.+?)[\s?.!]*$/i) ??
+    text.match(/^\s*(?:give me\s+|what(?:'s| is| are)\s+)?(?:the\s+)?bull\s+(?:and|vs\.?|versus)\s+bear\s+cases?\s+(?:for|on|of)\s+(.+?)[\s?.!]*$/i) ??
+    text.match(/^\s*argue\s+both\s+sides\s+(?:of|on|for)\s+(.+?)[\s?.!]*$/i);
+  if (debate) {
+    const query = clean(debate[1]);
+    return query ? { type: "debate", query } : null;
   }
 
   const compare =

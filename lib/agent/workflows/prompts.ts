@@ -45,6 +45,16 @@ const SECTIONS: Record<Workflow["type"], Section[]> = {
     ["Not comparable or missing", "metrics missing for one company or from different sources/periods."],
     ["Research next", "3 questions."],
   ],
+  debate: [
+    ["The question", "one sentence: what the debate is about, and the as-of date of the data."],
+    ["Bull case", "3 points, each grounded in a cited figure or news item."],
+    ["Bear case", "3 points, each grounded in a cited figure or news item."],
+    ["Rebuttals", "the strongest reply each side would make to the other's best point; label it interpretation."],
+    ["Assumptions", "what each side has to assume that the data doesn't show."],
+    ["Missing or contradicting evidence", "data that was unavailable, and any figures in EVIDENCE that point in different directions."],
+    ["What would settle it", "3 measurable things to watch, with where they'd come from."],
+    ["Synthesis", "2–3 balanced sentences on where the evidence is stronger and weaker. Don't pick a side, don't recommend buying or selling."],
+  ],
   portfolio: [
     ["Overview", "total value, invested amount and P/L per currency, called \"calculated by StockSphere\". A paper-trading account, if present, gets its own paragraph called virtual money: cash, open positions at cost and realised P/L. Never add it to real holdings and never give it a current value."],
     ["Allocation", "a table: Holding | Weight | P/L % | Price as of."],

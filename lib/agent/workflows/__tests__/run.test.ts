@@ -268,3 +268,24 @@ test("the prompts forbid unfetched averages and unit conversion", async () => {
   assert.match(system, /Never quote or compare against index, sector, peer or market averages that aren't in EVIDENCE/);
   assert.match(system, /convert units/);
 });
+
+test("debate: fixed evidence set, no Finnhub earnings call, debate sections, and a link to write a thesis", async () => {
+  const h = harness({ reply: "## Bull case\nCheap at P/E 17.64 [E3].\n## Bear case\nDown 17.68% in a year [E4].\nThis is general information, not investment advice." });
+  const result = await runWorkflow({ type: "debate", query: "TCS" }, "Debate the bull and bear case for TCS", CTX, h.deps, "c-debate");
+  assert.ok(result);
+  assert.deepEqual(h.calls.map((c) => c.name).sort(), ["get_company", "get_financials", "get_news", "get_performance", "get_price", "resolve_symbol"]);
+  assert.ok(!h.calls.some((c) => c.name === "get_earnings_calendar"));
+  const system = h.seen[0].messages[0].content ?? "";
+  for (const heading of ["## Bull case", "## Bear case", "## Rebuttals", "## Missing or contradicting evidence", "## What would settle it", "## Synthesis"]) assert.ok(system.includes(heading), heading);
+  assert.match(h.seen[0].messages[1].content ?? "", /analyst estimates and earnings dates \(not included in debates\)/);
+  assert.deepEqual(h.seen[0].tools, []);
+  const link = result.links?.find((l) => l.href.startsWith("/theses/new"));
+  assert.equal(link?.href, "/theses/new?symbol=TCS.NS");
+  assert.match(result.answer, /not investment advice/);
+});
+
+test("debate on a company that can't be identified falls back to the tool loop", async () => {
+  const h = harness();
+  assert.equal(await runWorkflow({ type: "debate", query: "nonsense co" }, "debate nonsense co", CTX, h.deps), null);
+  assert.equal(h.seen.length, 0);
+});

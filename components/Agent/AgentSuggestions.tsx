@@ -16,6 +16,7 @@ function suggestionsFor(symbol: string | null): string[] {
       "Research Reliance Industries",
       "Why did TCS move?",
       "Compare TCS and Infosys",
+      "Debate the bull and bear case for HDFC Bank",
       "Analyze my portfolio",
       "Explain the P/E ratio with an example",
     ];
@@ -24,6 +25,7 @@ function suggestionsFor(symbol: string | null): string[] {
   return [
     `Research ${symbol}`,
     `Why did ${symbol} move?`,
+    `Debate the bull and bear case for ${symbol}`,
     `What's the current price of ${symbol}?`,
     `${symbol} recent news`,
     `What are the key financials for ${symbol}?`,

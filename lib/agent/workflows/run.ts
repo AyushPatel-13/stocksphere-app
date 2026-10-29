@@ -6,7 +6,8 @@ import { dateContext } from "../llm/prompts";
 import { executeWithTimeout, TOOL_TIMEOUT_MS } from "../orchestrator";
 import { getToolByName } from "../tools";
 import type { ToolResult } from "../types";
-import type { AgentResponse, AgentToolCallTrace } from "@/lib/types/agent";
+import type { AgentLink, AgentResponse, AgentToolCallTrace } from "@/lib/types/agent";
+import { safeLink } from "../links";
 import { UNSOURCED_NOTE, findUnsourcedComparisons, marketCapRefs, verifyMarketCaps, type MarketCapRef } from "../guards";
 import { buildLinks, type ToolEvidence } from "../navigation";
 import { ensureDisclaimer, renderCitations, serialiseEvidence, type Evidence } from "./citations";
@@ -184,6 +185,37 @@ async function gatherResearch(g: Gatherer, query: string): Promise<string | null
   return `${name} (${symbol})`;
 }
 
+/**
+ * A debate argues both sides from one fixed set of evidence: five tool calls
+ * after the symbol is resolved, no follow-up rounds. It leaves out the
+ * earnings calendar, which comes only from Finnhub, whose licence doesn't
+ * cover new public features.
+ */
+async function gatherDebate(g: Gatherer, query: string): Promise<{ subject: string; symbol: string } | null> {
+  const company = await resolve(g, query);
+  if (!company) return null;
+  const { symbol, name } = company;
+  const [price, profile, financials, performance, news] = await Promise.all([
+    g.call("get_price", { symbol }),
+    g.call("get_company", { symbol }),
+    g.call("get_financials", { symbol }),
+    g.call("get_performance", { stocks: [symbol], period: "1y" }),
+    g.call("get_news", { symbol, limit: 6 }),
+  ]);
+  addPrice(g, price, name);
+  addCompany(g, profile, name);
+  addFinancials(g, financials, name);
+  addPerformance(g, performance, "1 year");
+  addNews(g, news, name, 6);
+  g.missing.push("analyst estimates and earnings dates (not included in debates)");
+  return { subject: `${name} (${symbol})`, symbol };
+}
+
+/** "/theses/new?symbol=TCS.NS" for the debate's "write your own thesis" link. */
+export function thesisLinkFor(symbol: string): AgentLink {
+  return { label: `Write your own thesis on ${symbol.replace(/\.NS$/i, "")}`, href: `/theses/new?symbol=${encodeURIComponent(symbol.toUpperCase())}`, kind: "internal", note: "Turn the debate into your own case, with risks and what would prove it wrong." };
+}
+
 async function gatherMove(g: Gatherer, query: string): Promise<string | null> {
   const company = await resolve(g, query);
   if (!company) return null;
@@ -302,17 +334,23 @@ export async function runWorkflow(
 ): Promise<AgentResponse | null> {
   const g = new Gatherer(deps);
   const started = deps.now();
+  const extraLinks: AgentLink[] = [];
   const respond = (answer: string, warnings: string[] = []): AgentResponse => ({
     answer,
     toolCalls: g.trace,
     sources: Array.from(g.sources),
-    links: buildLinks(question, g.calls),
+    links: [...buildLinks(question, g.calls), ...extraLinks],
     warnings,
     conversationId,
   });
 
   let subject: string | null;
-  if (workflow.type === "portfolio") {
+  if (workflow.type === "debate") {
+    const debate = await gatherDebate(g, workflow.query);
+    subject = debate?.subject ?? null;
+    const link = debate ? safeLink(thesisLinkFor(debate.symbol)) : null;
+    if (link) extraLinks.push(link);
+  } else if (workflow.type === "portfolio") {
     const outcome = await gatherPortfolio(g, ctx, deps);
     if (outcome === "unavailable") return respond("I couldn't read your holdings just now. Please try again, or open the Portfolio page to check they load.");
     if (outcome === "empty") return respond("You haven't added any holdings or made any paper trades yet. Add holdings on the Portfolio page, or place a paper trade, and I can review allocation, concentration and returns for you.");
