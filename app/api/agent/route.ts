@@ -35,6 +35,7 @@ const workflowSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("explain_move"), query: companyQuery }),
   z.object({ type: z.literal("compare"), queries: z.array(companyQuery).min(2).max(3) }),
   z.object({ type: z.literal("portfolio") }),
+  z.object({ type: z.literal("debate"), query: companyQuery }),
 ]);
 
 const requestSchema = z.object({

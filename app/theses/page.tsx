@@ -1,6 +1,6 @@
 import ThesesList from "@/components/Theses/ThesesList";
 
-export const metadata = { title: "Theses · StockSphere" };
+export const metadata = { title: "Theses" };
 
 export default async function ThesesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams;

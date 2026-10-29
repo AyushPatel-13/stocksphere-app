@@ -58,3 +58,13 @@ test("the stock page's context line is understood", () => {
   assert.deepEqual(detectWorkflow(`${ctx} research this stock`), { type: "research", query: "TCS" });
   assert.equal(detectWorkflow(`${ctx} What's the current price of TCS?`), null);
 });
+
+test("debate phrasings start a debate on one company, before research", () => {
+  assert.deepEqual(detectWorkflow("Debate the bull and bear case for HDFC Bank"), { type: "debate", query: "HDFC Bank" });
+  assert.deepEqual(detectWorkflow("debate TCS"), { type: "debate", query: "TCS" });
+  assert.deepEqual(detectWorkflow("What's the bull vs bear case for Infosys?"), { type: "debate", query: "Infosys" });
+  assert.deepEqual(detectWorkflow("argue both sides of Zomato stock"), { type: "debate", query: "Zomato" });
+  assert.deepEqual(detectWorkflow("[Context: user is viewing TCS; page: stock] Debate the bull and bear case for this stock"), { type: "debate", query: "TCS" });
+  // Not one company: left to the tool loop.
+  assert.equal(detectWorkflow("debate the market"), null);
+});
