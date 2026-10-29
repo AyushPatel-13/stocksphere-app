@@ -5,7 +5,7 @@ import { GET as listRoute, PATCH as patchRoute, POST as postRoute } from "@/app/
 import { pickSpans, type MentionPick } from "../mentionInput";
 import { POST_MAX_LENGTH, TITLE_MAX_LENGTH, checkTitle, isPostKind } from "../rules";
 import { createPost, editPost, readPostMeta, toPostView, type CommunityStore, type EditablePost, type ListQuery, type NewPostRow, type PostEdit } from "../service";
-import { linkPreviews, normaliseLinkInput } from "../tokens";
+import { linkPreviews, normaliseLinkInput, thesisPath } from "../tokens";
 import type { PostView } from "../types";
 
 /** The full composer: titles, post types, links, preview spans, and the server rules behind them. */
@@ -321,4 +321,14 @@ test("the preview highlights exactly the tags still in the text", () => {
       ["instrument", "@SBIN"],
     ]
   );
+});
+
+test("a link to a thesis on StockSphere opens in the site; look-alike hosts stay external", () => {
+  const id = "0b6f1c9e-3d2a-4c5b-9e8f-1a2b3c4d5e6f";
+  assert.equal(thesisPath(`https://stocksphere-theta.vercel.app/theses/${id}`), `/theses/${id}`);
+  assert.equal(thesisPath(`http://localhost:3001/theses/${id.toUpperCase()}/`), `/theses/${id}`);
+  assert.equal(thesisPath(`https://stocksphere-theta.vercel.app.evil.com/theses/${id}`), null);
+  assert.equal(thesisPath(`https://evil.com/theses/${id}`), null);
+  assert.equal(thesisPath("https://stocksphere-theta.vercel.app/theses/new"), null);
+  assert.equal(thesisPath(`https://stocksphere-theta.vercel.app/theses/${id}/edit`), null);
 });

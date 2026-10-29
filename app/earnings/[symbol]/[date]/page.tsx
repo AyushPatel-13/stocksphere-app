@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
 import StockTheses from "@/components/Theses/StockTheses";
 import { EmptyState, Notice, PageShell, secondaryButtonClass } from "@/components/ui/Page";
@@ -20,16 +21,19 @@ const STATE_TEXT: Record<EarningsRoom["state"], (room: EarningsRoom) => string> 
 export default async function EarningsRoomPage({ params }: { params: Promise<{ symbol: string; date: string }> }) {
   const { symbol: rawSymbol, date } = await params;
   const symbol = decodeURIComponent(rawSymbol).toUpperCase();
+  if (!isValidSymbol(symbol)) notFound();
   const store = getMarketEventStore();
-  const room = store && isValidSymbol(symbol) ? await getRoom(store, symbol, date, Date.now()).catch(() => null) : null;
+  // A failed lookup isn't a missing room: say so instead of answering 404.
+  const room = store ? await getRoom(store, symbol, date, Date.now()).catch(() => undefined) : undefined;
 
-  if (!room) {
+  if (room === undefined) {
     return (
       <PageShell>
-        <EmptyState title="Earnings room not found" description="There's no NSE results meeting stored for this company on that date." action={<Link href="/earnings" className={secondaryButtonClass}>All earnings rooms</Link>} />
+        <EmptyState title="Earnings rooms are unavailable right now" description="Try again in a minute." action={<Link href="/earnings" className={secondaryButtonClass}>All earnings rooms</Link>} />
       </PageShell>
     );
   }
+  if (!room) notFound();
 
   const day = new Date(`${room.meetingDate}T12:00:00Z`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const nseQuote = `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(room.symbol)}`;

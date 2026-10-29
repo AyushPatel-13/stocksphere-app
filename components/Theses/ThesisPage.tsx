@@ -246,9 +246,12 @@ export default function ThesisPage({ id }: { id: string }) {
             </section>
           )}
 
-          <Link href={`${stockHref(thesis)}#community`} className={`${secondaryButtonClass} w-full`}>
-            Discuss {thesis.symbol} in the community
-          </Link>
+          {/* Drafts are private, so only a published thesis is offered for a post. */}
+          {thesis.status !== "draft" && (
+            <Link href={`${stockHref(thesis)}?thesis=${thesis.id}#community`} className={`${secondaryButtonClass} w-full`}>
+              Discuss this thesis in the community
+            </Link>
+          )}
         </aside>
       </div>
     </PageShell>

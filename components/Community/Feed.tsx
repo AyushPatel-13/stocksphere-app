@@ -111,6 +111,7 @@ export default function Feed({
   bond,
   assetFilters = false,
   label,
+  draft,
   onPosted,
 }: {
   user: CommunityUser;
@@ -123,6 +124,8 @@ export default function Feed({
   assetFilters?: boolean;
   /** How the board's instrument is named to people (e.g. "NIFTY 50"). */
   label?: string;
+  /** The composer's starting text. */
+  draft?: string;
   onPosted?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
@@ -228,10 +231,13 @@ export default function Feed({
   return (
     <div>
       <Composer
+        // A draft read from the URL after the first render starts the box afresh.
+        key={draft ?? ""}
         user={user}
         symbol={symbol}
         ipoId={ipoId}
         seed={bond?.seed}
+        draft={draft}
         label={label}
         onPosted={(post) => {
           // A new post shows at the top of the list it belongs in.

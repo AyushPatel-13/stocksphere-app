@@ -9,6 +9,8 @@ import { ipoCommunityPath } from "@/lib/community/paths";
 import type { PublicCommunity } from "@/lib/community/ipoCommunity";
 import type { SentimentSummary } from "@/lib/community/types";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * One stock's discussion board: the community's bullish/bearish split from
  * real posts in the last week, then the post box and the stock's posts.
@@ -100,6 +102,13 @@ export default function StockBoard({ symbol, label }: { symbol: string; label?: 
     };
   }, [clean]);
 
+  // "Discuss this thesis" arrives as ?thesis=<id>: start a post that links it.
+  const [draft, setDraft] = useState<string>();
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("thesis");
+    if (id && UUID.test(id)) setDraft(`My thesis on ${name}: ${window.location.origin}/theses/${id.toLowerCase()} `);
+  }, [name]);
+
   return (
     <section id="community" aria-labelledby="board-title" className="mt-6">
       <div className="mb-3 flex items-baseline justify-between">
@@ -122,7 +131,7 @@ export default function StockBoard({ symbol, label }: { symbol: string; label?: 
         <SentimentMeter symbol={clean} refresh={refresh} />
       </div>
 
-      <Feed user={user} symbol={clean} label={name} onPosted={() => setRefresh((n) => n + 1)} />
+      <Feed user={user} symbol={clean} label={name} draft={draft} onPosted={() => setRefresh((n) => n + 1)} />
     </section>
   );
 }
