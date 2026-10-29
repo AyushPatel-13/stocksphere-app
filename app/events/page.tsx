@@ -221,6 +221,11 @@ function NseEvents() {
               <span className="min-w-0 flex-1 truncate text-xs text-[#777]" title={e.purpose}>
                 {e.purpose}
               </span>
+              {e.kind === "results" && e.symbol && e.eventDate && (
+                <Link href={`/earnings/${encodeURIComponent(e.symbol)}/${e.eventDate}`} className="text-[11px] text-[#4ade80] hover:underline">
+                  Room
+                </Link>
+              )}
               <a href={e.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#888] hover:text-white">
                 NSE ↗
               </a>
