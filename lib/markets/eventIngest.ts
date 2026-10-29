@@ -147,6 +147,19 @@ export function toMarketEvent(row: MarketEventRow & { id: string }): MarketEvent
   };
 }
 
+/**
+ * One entry per announced event: NSE files a board meeting both as a PDF and
+ * as XBRL, which are two stored items (two raw hashes) but one meeting. The
+ * first of each (source, company, kind, purpose, date) is kept, in order.
+ */
+export function distinctEvents(events: MarketEvent[]): MarketEvent[] {
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    const key = JSON.stringify([event.source, event.company.toLowerCase(), event.kind, event.purpose.toLowerCase(), event.eventDate]);
+    return !seen.has(key) && (seen.add(key), true);
+  });
+}
+
 /* ------------------------------------------------------------ store */
 
 export interface MarketEventStore {
@@ -222,6 +235,7 @@ export async function ingestNseEvents(
 }
 
 const INGEST_EVERY_MS = 10 * 60_000;
+const RETRY_AFTER_FAILURE_MS = 60_000;
 let lastIngestAt = 0;
 let running: Promise<unknown> | null = null;
 
@@ -233,7 +247,11 @@ export async function ingestIfDue(store: MarketEventStore, now: number = Date.no
   if (!running && now - lastIngestAt >= INGEST_EVERY_MS) {
     lastIngestAt = now;
     running = ingest(store)
-      .catch((error) => console.error("NSE event ingest failed:", error))
+      .catch((error) => {
+        // A failed run is retried after a minute, not after the full interval.
+        lastIngestAt = now - INGEST_EVERY_MS + RETRY_AFTER_FAILURE_MS;
+        console.error("NSE event ingest failed:", (error as { message?: string })?.message ?? error);
+      })
       .finally(() => {
         running = null;
       });

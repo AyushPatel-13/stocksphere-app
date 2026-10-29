@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getMarketEventStore, ingestIfDue, type MarketEventStore } from "@/lib/markets/eventIngest";
+import { distinctEvents, getMarketEventStore, ingestIfDue, type MarketEventStore } from "@/lib/markets/eventIngest";
 import { isValidSymbol } from "@/lib/validation/symbol";
 import { isMissingTable } from "@/lib/watchlistRules";
 
@@ -39,7 +39,7 @@ export async function GET(
 
   try {
     await refresh(store);
-    const events = await store.list({ symbol, from, to, limit: symbol ? 50 : 300 });
+    const events = distinctEvents(await store.list({ symbol, from, to, limit: symbol ? 50 : 300 }));
     return NextResponse.json(
       { success: true, from, to, source: "NSE", events },
       { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" } }

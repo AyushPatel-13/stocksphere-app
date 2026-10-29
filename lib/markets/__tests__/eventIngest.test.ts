@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parseNseEquityMaster } from "../../apis/nseEquityMaster";
 import {
   buildEventRows,
+  distinctEvents,
   ingestIfDue,
   ingestNseEvents,
   resetIngestThrottle,
@@ -84,6 +85,17 @@ test("a link that isn't an NSE page is replaced by the feed's own address", () =
   assert.equal(row.symbol, "ADOR");
 });
 
+test("a meeting filed as both PDF and XBRL is listed once", () => {
+  const base: MarketEvent = {
+    id: "a", source: "nse_board_meetings", kind: "board_meeting", company: "Patel Engineering Limited", mapped: true, unmappedReason: null,
+    symbol: "PATELENG", isin: "INE244B01030", exchange: "NSE", purpose: "Board Meeting Intimation", eventDate: "2026-11-05", recordDate: null,
+    publishedAt: null, sourceUrl: "https://nsearchives.nseindia.com/corporate/PATELENG_29102026110542_x.pdf",
+  };
+  const xbrl = { ...base, id: "b", sourceUrl: "https://nsearchives.nseindia.com/corporate/xbrl/PRIOR_INTIMATION_1_WebXMLFile_x.xml" };
+  const results = { ...base, id: "c", kind: "results" as const, purpose: "Financial Results" };
+  assert.deepEqual(distinctEvents([base, xbrl, results]).map((e) => e.id), ["a", "c"]);
+});
+
 test("re-ingesting the same feeds stores nothing new", async () => {
   const { store, rows } = memoryStore();
   const first = await ingestNseEvents(store, feeds(), async () => MASTER);
@@ -105,19 +117,27 @@ test("without the equity list nothing is stored; one feed down still stores the 
   assert.ok([...rows.values()].every((r) => r.source === "nse_corporate_actions"));
 });
 
-test("ingestIfDue runs at most once per ten minutes and never throws", async () => {
+test("ingestIfDue runs at most once per ten minutes, retries a failure after a minute, and never throws", async () => {
   resetIngestThrottle();
   const { store } = memoryStore();
   let runs = 0;
+  let fail = false;
   const ingest = async () => {
     runs++;
-    throw new Error("NSE down");
+    if (fail) throw new Error("NSE down");
+    return { read: 0, inserted: 0, unmapped: 0, feedsFailed: [] };
   };
-  await ingestIfDue(store, 1_000_000, 50, ingest);
-  await ingestIfDue(store, 1_000_000 + 60_000, 50, ingest);
+  const t0 = 1_000_000;
+  await ingestIfDue(store, t0, 50, ingest);
+  await ingestIfDue(store, t0 + 60_000, 50, ingest);
   assert.equal(runs, 1);
-  await ingestIfDue(store, 1_000_000 + 11 * 60_000, 50, ingest);
+  fail = true;
+  await ingestIfDue(store, t0 + 11 * 60_000, 50, ingest);
   assert.equal(runs, 2);
+  await ingestIfDue(store, t0 + 11 * 60_000 + 30_000, 50, ingest);
+  assert.equal(runs, 2);
+  await ingestIfDue(store, t0 + 12 * 60_000 + 1_000, 50, ingest);
+  assert.equal(runs, 3);
   resetIngestThrottle();
 });
 
