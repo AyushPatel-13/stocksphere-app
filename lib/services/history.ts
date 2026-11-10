@@ -56,6 +56,8 @@ export type ResolvedAsset = {
   name: string | null;
   /** Bare NSE symbol when Upstox can serve as a fallback. */
   upstoxSymbol: string | null;
+  /** Upstox instrument key, for Indian indices (which have no NSE equity symbol). */
+  upstoxKey?: string | null;
 };
 
 /** Map StockSphere's (type, symbol) to a provider symbol, or null if unknown. */
@@ -71,7 +73,7 @@ export function resolveAsset(
     const indian = INDIAN_INDEX_YAHOO[symbol];
     const indianMeta = INDIAN_INDICES.find((index) => index.symbol === symbol);
     if (indian) {
-      return { type, symbol, yahoo: indian, unit: "points", currency: "INR", name: indianMeta?.name ?? null, upstoxSymbol: null };
+      return { type, symbol, yahoo: indian, unit: "points", currency: "INR", name: indianMeta?.name ?? null, upstoxSymbol: null, upstoxKey: indianMeta?.instrumentKey ?? null };
     }
     const global = GLOBAL_INDICES.find((index) => index.symbol === symbol);
     return global
@@ -138,6 +140,8 @@ export interface HistoryDeps {
   getYahooSeries: typeof getYahooSeries;
   /** Daily candles from Upstox for a bare NSE symbol, ascending; null if unavailable. */
   getUpstoxDaily: (symbol: string, days: number) => Promise<Candle[] | null>;
+  /** The same, by Upstox instrument key (Indian indices). Optional: without it, indices use Yahoo's daily series. */
+  getUpstoxDailyByKey?: (instrumentKey: string, days: number) => Promise<Candle[] | null>;
   now: () => number;
 }
 
@@ -145,12 +149,19 @@ async function getUpstoxDaily(symbol: string, days: number): Promise<Candle[] | 
   try {
     const instrument = await searchUpstoxEquity(symbol);
     if (!instrument?.instrument_key) return null;
+    return await getUpstoxDailyByKey(instrument.instrument_key, days);
+  } catch {
+    return null;
+  }
+}
 
+async function getUpstoxDailyByKey(instrumentKey: string, days: number): Promise<Candle[] | null> {
+  try {
     const to = new Date();
     const from = new Date(to.getTime() - Math.min(days || 3650, 3650) * 86_400_000);
     const iso = (date: Date) => date.toISOString().slice(0, 10);
 
-    const rows = await getUpstoxHistoricalCandles(instrument.instrument_key, iso(from), iso(to));
+    const rows = await getUpstoxHistoricalCandles(instrumentKey, iso(from), iso(to));
     if (!rows) return null;
 
     return rows
@@ -167,7 +178,7 @@ async function getUpstoxDaily(symbol: string, days: number): Promise<Candle[] | 
   }
 }
 
-const DEFAULT_DEPS: HistoryDeps = { getYahooSeries, getUpstoxDaily, now: Date.now };
+const DEFAULT_DEPS: HistoryDeps = { getYahooSeries, getUpstoxDaily, getUpstoxDailyByKey, now: Date.now };
 
 const MAX_CACHE = 400;
 
@@ -184,17 +195,54 @@ export function previousDailyClose(daily: Candle[], sessionStart: number): numbe
   return earlier.at(-1)?.c ?? null;
 }
 
+const IST_OFFSET_MS = 5.5 * 3_600_000;
+const istDay = (t: number) => Math.floor((t + IST_OFFSET_MS) / 86_400_000);
+
+/**
+ * The close of the last Upstox daily candle dated before the day (in India)
+ * that `sessionStart` falls on.
+ *
+ * Upstox stamps a daily candle at midnight IST, so the session's own candle
+ * is "earlier" than its 09:15 open by the clock; the comparison is by date.
+ * Unlike Yahoo's daily series, Upstox's includes special sessions: Yahoo had
+ * no candle for the Diwali Muhurat session of Sunday 8 Nov 2026, so on 9 Nov
+ * it measured RELIANCE from Friday's 1320 (+0.33%) while the exchange's
+ * previous close was Sunday's 1324 (+0.03%).
+ */
+export function previousUpstoxClose(daily: Candle[], sessionStart: number): number | null {
+  const day = istDay(sessionStart);
+  return daily.filter((candle) => istDay(candle.t) < day).at(-1)?.c ?? null;
+}
+
+/** Days of Upstox daily candles asked for: enough to span a long holiday break. */
+const PREVIOUS_CLOSE_LOOKBACK_DAYS = 12;
+
 export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
   const cache = new Map<string, { at: number; history: History }>();
   const dailyCloses = new Map<string, { at: number; close: number | null }>();
 
   // One small daily request per symbol and session, kept for 10 minutes.
-  async function dailyPreviousClose(yahoo: string, sessionStart: number): Promise<number | null> {
-    const key = `${yahoo}|${sessionStart}`;
+  // Indian assets ask Upstox first, so the 1D change here matches the quote's
+  // (the stock header, the index bar, movers); Yahoo's daily series is the
+  // fallback, and the only source for everything else.
+  async function dailyPreviousClose(asset: ResolvedAsset, sessionStart: number): Promise<number | null> {
+    const key = `${asset.yahoo}|${sessionStart}`;
     const hit = dailyCloses.get(key);
     if (hit && deps.now() - hit.at < 10 * 60_000) return hit.close;
-    const daily = await deps.getYahooSeries(yahoo, "5d", "1d");
-    const close = daily ? previousDailyClose(daily.candles, sessionStart) : null;
+
+    let close: number | null = null;
+    // A BSE chart (.BO) keeps Yahoo's BSE closes: the Upstox symbol is the NSE listing.
+    if ((asset.upstoxKey || asset.upstoxSymbol) && !asset.yahoo.endsWith(".BO")) {
+      const upstox = await (asset.upstoxKey
+        ? deps.getUpstoxDailyByKey?.(asset.upstoxKey, PREVIOUS_CLOSE_LOOKBACK_DAYS)
+        : deps.getUpstoxDaily(asset.upstoxSymbol!, PREVIOUS_CLOSE_LOOKBACK_DAYS)
+      )?.catch(() => null);
+      if (upstox) close = previousUpstoxClose(upstox, sessionStart);
+    }
+    if (close === null) {
+      const daily = await deps.getYahooSeries(asset.yahoo, "5d", "1d");
+      close = daily ? previousDailyClose(daily.candles, sessionStart) : null;
+    }
     if (dailyCloses.size >= MAX_CACHE) dailyCloses.delete(dailyCloses.keys().next().value as string);
     if (close !== null) dailyCloses.set(key, { at: deps.now(), close });
     return close;
@@ -239,7 +287,7 @@ export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
 
     const previousClose =
       range === "1d" && source === "Yahoo"
-        ? (await dailyPreviousClose(asset.yahoo, candles[0].t)) ?? series.previousClose
+        ? (await dailyPreviousClose(asset, candles[0].t)) ?? series.previousClose
         : series.previousClose;
 
     const history: History = {

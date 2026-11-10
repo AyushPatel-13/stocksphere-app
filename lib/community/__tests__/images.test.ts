@@ -15,6 +15,7 @@ import {
   readPostImages,
   singleAspect,
   sniffImage,
+  stripImageMetadata,
 } from "../images";
 import { cleanUpImages, removeImages, uploadImage, type ImageStore, type UploadRecord } from "../imageService";
 import { createPost, toPostView, type CommunityStore, type NewPostRow } from "../service";
@@ -39,13 +40,35 @@ function png(width: number, height: number): Uint8Array {
 }
 
 function jpeg(width: number, height: number): Uint8Array {
-  // SOI, an APP0 segment (as cameras write), then SOF0 with the size.
+  // SOI, an APP0 segment (as cameras write), SOF0 with the size, then a scan and EOI.
   return new Uint8Array([
     0xff, 0xd8,
     0xff, 0xe0, 0x00, 0x06, 0x4a, 0x46, 0x49, 0x46,
     0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ...SCAN,
+    0xff, 0xd9,
   ]);
 }
+
+/** A start-of-scan header and some compressed data, including a stuffed 0xFF00 and a restart marker. */
+const SCAN = [0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56];
+
+const segment = (marker: number, body: number[] | Uint8Array) => [0xff, marker, (body.length + 2) >> 8, (body.length + 2) & 0xff, ...body];
+const pngChunk = (type: string, data: number[] | Uint8Array) => {
+  const b = new Uint8Array(12 + data.length);
+  new DataView(b.buffer).setUint32(0, data.length);
+  b.set(Buffer.from(type), 4);
+  b.set(data, 8);
+  return [...b]; // the CRC is left at 0: nothing here checks it, and a strip must keep it as it was
+};
+const riffChunk = (type: string, data: number[]) => [...Buffer.from(type), data.length & 0xff, (data.length >> 8) & 0xff, 0, 0, ...data, ...(data.length & 1 ? [0] : [])];
+function riff(chunks: number[]): Uint8Array {
+  const size = 4 + chunks.length;
+  return new Uint8Array([...Buffer.from("RIFF"), size & 0xff, (size >> 8) & 0xff, 0, 0, ...Buffer.from("WEBP"), ...chunks]);
+}
+const has = (bytes: Uint8Array, text: string) => Buffer.from(bytes).includes(Buffer.from(text));
+/** What a phone writes into EXIF: its make and the place the photo was taken. */
+const GPS = [...Buffer.from("Exif\0\0"), ...Buffer.from("Pixel 9 GPSLatitude 22.7196N 75.8577E")];
 
 function webp(kind: "VP8 " | "VP8L" | "VP8X", width: number, height: number): Uint8Array {
   const b = new Uint8Array(40);
@@ -76,6 +99,102 @@ test("anything else is refused, whatever it's called", () => {
   for (const bytes of [gif, svg, pdf, new Uint8Array(0), png(1200, 800).subarray(0, 20), jpeg(10, 10).subarray(0, 12), png(0, 10), png(30000, 10)]) {
     assert.equal(sniffImage(bytes), null);
   }
+});
+
+test("a JPEG loses its EXIF location, XMP, comments, JFIF thumbnail and trailing data, and keeps its pixels and colour profile", () => {
+  const icc = [...Buffer.from("ICC_PROFILE\0"), 1, 1, 9, 9];
+  const jfifWithThumb = [...Buffer.from("JFIF\0"), 1, 2, 0, 0, 1, 0, 1, 1, 1, 0xaa, 0xbb, 0xcc];
+  const dqt = [0x00, ...Array(64).fill(1)];
+  const sof = [0x08, 0x02, 0x58, 0x03, 0x20, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  const original = new Uint8Array([
+    0xff, 0xd8,
+    ...segment(0xe0, jfifWithThumb),
+    ...segment(0xe1, GPS),
+    ...segment(0xe1, [...Buffer.from("http://ns.adobe.com/xap/1.0/\0"), ...Buffer.from("<x:xmpmeta>Indore</x:xmpmeta>")]),
+    ...segment(0xed, [...Buffer.from("Photoshop 3.0\0"), ...Buffer.from("IPTC byline Ayush")]),
+    ...segment(0xe2, icc),
+    ...segment(0xfe, [...Buffer.from("taken at home")]),
+    ...segment(0xdb, dqt),
+    ...segment(0xc0, sof),
+    ...SCAN,
+    // A second (progressive) scan, with metadata smuggled in between the scans.
+    ...segment(0xe1, GPS),
+    ...SCAN,
+    0xff, 0xd9,
+    ...Buffer.from("appended GPSLatitude"),
+  ]);
+
+  const clean = stripImageMetadata(original, "image/jpeg");
+  assert.ok(clean);
+  for (const leak of ["GPSLatitude", "Pixel 9", "Exif", "xmpmeta", "IPTC", "taken at home", "appended"]) assert.equal(has(clean, leak), false, leak);
+  assert.equal(Buffer.from(clean).includes(Buffer.from([0xaa, 0xbb, 0xcc])), false, "JFIF thumbnail");
+  assert.deepEqual(
+    [...clean],
+    [
+      0xff, 0xd8,
+      ...segment(0xe0, [...Buffer.from("JFIF\0"), 1, 2, 0, 0, 1, 0, 1, 0, 0]),
+      ...segment(0xe2, icc),
+      ...segment(0xdb, dqt),
+      ...segment(0xc0, sof),
+      ...SCAN,
+      ...SCAN,
+      0xff, 0xd9,
+    ]
+  );
+  assert.deepEqual(sniffImage(clean), sniffImage(original));
+  // Already clean stays the same.
+  assert.deepEqual(stripImageMetadata(clean, "image/jpeg"), clean);
+});
+
+test("a PNG loses its EXIF and text chunks and anything after IEND; a WebP loses EXIF and XMP and its header flags say so", () => {
+  const ihdr = [0, 0, 0, 40, 0, 0, 0, 30, 8, 6, 0, 0, 0];
+  const original = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ...pngChunk("IHDR", ihdr),
+    ...pngChunk("eXIf", GPS),
+    ...pngChunk("tEXt", [...Buffer.from("Comment\0GPSLatitude 22.7")]),
+    ...pngChunk("iTXt", [...Buffer.from("XML:com.adobe.xmp\0\0\0\0\0<x:xmpmeta/>")]),
+    ...pngChunk("tIME", [7, 234, 10, 28, 12, 0, 0]),
+    ...pngChunk("sRGB", [0]),
+    ...pngChunk("IDAT", [1, 2, 3, 4]),
+    ...pngChunk("IEND", []),
+    ...Buffer.from("trailing GPSLatitude"),
+  ]);
+  const clean = stripImageMetadata(original, "image/png");
+  assert.ok(clean);
+  assert.deepEqual(
+    [...clean],
+    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...pngChunk("IHDR", ihdr), ...pngChunk("sRGB", [0]), ...pngChunk("IDAT", [1, 2, 3, 4]), ...pngChunk("IEND", [])]
+  );
+  assert.deepEqual(sniffImage(clean), { mime: "image/png", ext: "png", width: 40, height: 30 });
+
+  // VP8X with the ICC (0x20), alpha (0x10), EXIF (0x08) and XMP (0x04) flags set.
+  const vp8x = [0x3c, 0, 0, 0, 0x27, 0, 0, 0x1d, 0, 0];
+  const webpImage = riff([
+    ...riffChunk("VP8X", vp8x),
+    ...riffChunk("ICCP", [5, 5, 5]),
+    ...riffChunk("VP8L", [0x2f, 0x27, 0x40, 0x07, 0x00]),
+    ...riffChunk("EXIF", GPS),
+    ...riffChunk("XMP ", [...Buffer.from("<x:xmpmeta>Indore</x:xmpmeta>")]),
+  ]);
+  const cleanWebp = stripImageMetadata(webpImage, "image/webp");
+  assert.ok(cleanWebp);
+  assert.deepEqual(
+    [...cleanWebp],
+    [...riff([...riffChunk("VP8X", [0x30, 0, 0, 0, 0x27, 0, 0, 0x1d, 0, 0]), ...riffChunk("ICCP", [5, 5, 5]), ...riffChunk("VP8L", [0x2f, 0x27, 0x40, 0x07, 0x00])])]
+  );
+  assert.deepEqual(sniffImage(cleanWebp), { mime: "image/webp", ext: "webp", width: 40, height: 30 });
+});
+
+test("a file that isn't well formed can't be cleaned, so it isn't accepted", () => {
+  const truncated: [Uint8Array, "image/jpeg" | "image/png" | "image/webp"][] = [
+    [jpeg(10, 10).subarray(0, 30), "image/jpeg"], // stops inside the scan
+    [new Uint8Array([0xff, 0xd8, ...segment(0xc0, [8, 0, 1, 0, 1, 1, 0, 0, 0]), 0xff, 0xd9]), "image/jpeg"], // no scan at all
+    [new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x40, 0x00, 1, 2]), "image/jpeg"], // a segment longer than the file
+    [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...pngChunk("IHDR", [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0])]), "image/png"], // no IEND
+    [riff(riffChunk("VP8L", [0x2f, 0, 0, 0, 0])).subarray(0, 22), "image/webp"], // RIFF size past the end
+  ];
+  for (const [bytes, mime] of truncated) assert.equal(stripImageMetadata(bytes, mime), null, `${mime} ${bytes.length}`);
 });
 
 test("photo names live in the owner's folder and can't escape it", () => {
@@ -145,6 +264,27 @@ test("an upload is stored under the uploader's own folder with a random name", a
   const result = await uploadImage({ token: "good", bytes: jpeg(800, 600) }, s, NOW, () => ID1);
   assert.deepEqual(result, { ok: true, image: { path: `${ME}/${ID1}.jpg`, width: 800, height: 600 } });
   assert.deepEqual(s.saved, [`${ME}/${ID1}.jpg`]);
+});
+
+test("the server stores the photo without its metadata, even when the upload skipped the composer", async () => {
+  // As a script posting straight to /api/community/images would send it.
+  const fromPhone = new Uint8Array([0xff, 0xd8, ...segment(0xe1, GPS), ...jpeg(800, 600).subarray(2)]);
+  let stored: Uint8Array | undefined;
+  const s = imageStore({
+    save: async (_path, bytes) => {
+      stored = bytes;
+    },
+  });
+  const result = await uploadImage({ token: "good", bytes: fromPhone }, s, NOW, () => ID1);
+  assert.deepEqual(result, { ok: true, image: { path: `${ME}/${ID1}.jpg`, width: 800, height: 600 } });
+  assert.ok(stored);
+  assert.equal(has(stored, "GPSLatitude"), false);
+  assert.deepEqual([...stored], [...stripImageMetadata(jpeg(800, 600), "image/jpeg")!]);
+  assert.deepEqual(sniffImage(stored), sniffImage(fromPhone));
+
+  // A damaged file is refused rather than stored with its metadata.
+  const damaged = await uploadImage({ token: "good", bytes: jpeg(800, 600).subarray(0, 30) }, imageStore(), NOW, () => ID1);
+  assert.equal(!damaged.ok && damaged.status, 415);
 });
 
 test("uploads are refused when signed out, switched off, the wrong type, too big or over the limits", async () => {

@@ -293,3 +293,78 @@ test("1D day change comes from the daily series, not the stale intraday previous
   });
   assert.equal((await fallback(resolveAsset("index", "NIFTY")!, "1d"))?.previousClose, 100);
 });
+
+import { previousUpstoxClose } from "@/lib/services/history";
+import { toWatchlistRow } from "@/lib/services/watchlistRows";
+
+test("after a special session (Diwali Muhurat, Sun 8 Nov 2026) the 1D change is measured from that session's close, as the quote is", async () => {
+  const open = (date: string) => Date.parse(`${date}T03:45:00Z`); // 09:15 IST
+  const midnight = (date: string) => Date.parse(`${date}T00:00:00+05:30`); // how Upstox stamps a daily candle
+  const bar = (t: number, c: number) => ({ t, o: null, h: null, l: null, c, v: null });
+
+  // Upstox has a candle for Sunday's session; Yahoo's daily series goes from Friday to Monday.
+  const upstoxDaily = [bar(midnight("2026-11-05"), 1313.4), bar(midnight("2026-11-06"), 1320), bar(midnight("2026-11-08"), 1324), bar(midnight("2026-11-09"), 1324.4)];
+  const yahooDaily = [bar(open("2026-11-05"), 1313.4), bar(open("2026-11-06"), 1320), bar(open("2026-11-09"), 1324.4)];
+
+  // The session's own candle (stamped at midnight, before the open) is never the previous close.
+  assert.equal(previousUpstoxClose(upstoxDaily, open("2026-11-09")), 1324);
+  assert.equal(previousUpstoxClose(upstoxDaily.slice(0, 3), open("2026-11-09")), 1324);
+  assert.equal(previousUpstoxClose(upstoxDaily, open("2026-11-08") + 9 * 3_600_000), 1320); // the evening session itself
+  assert.equal(previousUpstoxClose([], open("2026-11-09")), null);
+
+  const yahoo = async (_symbol: string, _range: string, interval: string) => ({
+    name: null, currency: "INR", exchangeTimezone: "Asia/Kolkata", fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null,
+    regularMarketPrice: 1324.4, marketTime: null, sessionStart: null, sessionEnd: null,
+    previousClose: 1307.9,
+    candles: interval === "1d" ? yahooDaily : [bar(open("2026-11-09"), 1317), bar(open("2026-11-09") + 60_000, 1324.4)],
+  });
+  const asked: string[] = [];
+  const deps = {
+    getYahooSeries: yahoo as never,
+    getUpstoxDaily: async (symbol: string) => {
+      asked.push(symbol);
+      return upstoxDaily;
+    },
+    getUpstoxDailyByKey: async (key: string) => {
+      asked.push(key);
+      return [bar(midnight("2026-11-06"), 25030.35), bar(midnight("2026-11-08"), 24986.4), bar(midnight("2026-11-09"), 25044.65)];
+    },
+    now: () => open("2026-11-10"),
+  };
+
+  // A stock: chart, watchlist and screener rows now say +0.40 (0.03%), like the header.
+  const stock = await createHistoryLoader(deps)(resolveAsset("stock", "RELIANCE")!, "1d");
+  assert.equal(stock?.previousClose, 1324);
+  const row = toWatchlistRow("RELIANCE", stock);
+  assert.equal(Number(row.change?.toFixed(2)), 0.4);
+  assert.equal(Number(row.changePercent?.toFixed(2)), 0.03);
+
+  // An index goes by its Upstox instrument key.
+  const index = await createHistoryLoader(deps)(resolveAsset("index", "NIFTY")!, "1d");
+  assert.equal(index?.previousClose, 24986.4);
+  assert.deepEqual(asked, ["RELIANCE", "NSE_INDEX|Nifty 50"]);
+
+  // Upstox down or empty: Yahoo's daily series, as before. Never nothing.
+  for (const getUpstoxDaily of [async () => null, async () => [], async () => Promise.reject(new Error("429"))]) {
+    const fallback = await createHistoryLoader({ ...deps, getUpstoxDaily: getUpstoxDaily as never })(resolveAsset("stock", "RELIANCE")!, "1d");
+    assert.equal(fallback?.previousClose, 1320);
+  }
+
+  // US stocks and BSE charts never ask Upstox.
+  asked.length = 0;
+  await createHistoryLoader(deps)(resolveAsset("stock", "AAPL")!, "1d");
+  await createHistoryLoader(deps)(resolveAsset("stock", "RELIANCE.BO")!, "1d");
+  assert.deepEqual(asked, []);
+});
+
+import { formatChange } from "../format";
+
+test("a change is written to the price's precision, not its own", () => {
+  assert.equal(formatChange(0.40002441, 1324.4, "currency", "INR"), "₹0.40");
+  assert.equal(formatChange(0.05, 1324.4, "currency", "INR"), "₹0.05");
+  assert.equal(formatChange(14.3, 25044.65, "points", null), "14.30");
+  assert.equal(formatChange(2.4199, 348.05, "currency", "USD"), "$2.42");
+  // A sub-1 price keeps its digits.
+  assert.equal(formatChange(0.00000123, 0.0000245, "currency", "USD"), formatValue(0.00000123, "currency", "USD"));
+  assert.equal(formatChange(null, 10, "currency", "INR"), "—");
+});
