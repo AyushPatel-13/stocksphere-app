@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import { useMarketCalendar } from "@/lib/client/useMarketCalendar";
+import { marketSession, type Market } from "@/lib/markets/session";
 import type { LiveIndex } from "@/lib/services/indices";
 import { formatIndexValue } from "@/lib/utils/format";
 
@@ -25,8 +27,53 @@ type BarState =
   | { status: "error" }
   | { status: "ready"; indices: LiveIndex[] };
 
-export default function IndicesBar() {
+/** "9 Nov, 4:00 pm" in the exchange's own time zone, or null for a missing or unreadable time. */
+export function formatExchangeTime(iso: string | null | undefined, market: Market): string | null {
+  const at = Date.parse(iso ?? "");
+  if (!Number.isFinite(at)) return null;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: market === "IN" ? "Asia/Kolkata" : "America/New_York",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(at));
+}
+
+/**
+ * Whether each market is open, why not when it's closed for a holiday, and
+ * the time the figures above are from: a holiday's prices are the last
+ * session's, and the strip shouldn't leave that to be guessed.
+ */
+function MarketStatusLine({ indices, now }: { indices: Map<string, LiveIndex>; now: number }) {
+  const calendar = useMarketCalendar();
+  const markets: { market: Market; name: string; zone: string; symbol: string }[] = [
+    { market: "IN", name: "NSE", zone: "IST", symbol: "NIFTY" },
+    { market: "US", name: "US", zone: "ET", symbol: "SPX" },
+  ];
+
+  return (
+    <div className="mx-auto mt-2 flex w-full max-w-[1080px] flex-wrap gap-x-5 gap-y-1 px-1 text-[12px] text-[#8a8a8a]">
+      {markets.map(({ market, name, zone, symbol }) => {
+        const status = marketSession(market, now, calendar);
+        const asOf = formatExchangeTime(indices.get(symbol)?.lastUpdated, market);
+        return (
+          <span key={market} className="inline-flex items-center gap-1.5">
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${status.scheduled === "open" ? "bg-[#22c55e]" : "bg-[#555]"}`} />
+            <span className="text-[#bdbdbd]">{name}:</span> {status.label}
+            {asOf && <span className="text-[#6f6f6f]">· prices as of {asOf} {zone}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function IndicesBar({ showStatus = true }: { showStatus?: boolean }) {
   const [state, setState] = useState<BarState>({ status: "loading" });
+  // Set after mount: the server's clock and the browser's would disagree in the first render.
+  const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,6 +84,8 @@ export default function IndicesBar() {
         const result = await response.json();
 
         if (cancelled) return;
+        // The clock the open/closed line is judged by, refreshed with the figures.
+        setNow(Date.now());
 
         if (!result?.success || !Array.isArray(result.data)) {
           // Keep the last good figures on a failed refresh; only the first
@@ -140,6 +189,8 @@ export default function IndicesBar() {
           </span>
         </Link>
       </div>
+
+      {showStatus && now !== null && state.status === "ready" && <MarketStatusLine indices={bySymbol} now={now} />}
     </section>
   );
 }

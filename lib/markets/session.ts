@@ -1,14 +1,18 @@
+import { usMarketHoliday, type ExchangeDay } from "./holidays";
+
 /**
- * Regular trading hours for the two markets StockSphere covers, from the
- * clock alone.
+ * Trading hours for the two markets StockSphere covers.
  *
  *   India (NSE/BSE)  Mon–Fri 09:15–15:30 Asia/Kolkata
  *   US (NYSE/Nasdaq) Mon–Fri 09:30–16:00 America/New_York
  *
- * Exchange holidays aren't known here, so this is the *schedule*, not proof
- * the market is trading. Callers pair it with the newest quote time: during
- * scheduled hours a quote that hasn't moved for a while means the exchange is
- * probably closed for a holiday, and `scheduledOpenButQuiet` says so.
+ * US holidays are computed from NYSE's rules. Indian holidays and special
+ * sessions (the Diwali Muhurat evening) come from the exchange calendar the
+ * caller passes in (lib/services/marketCalendar.ts, from Upstox); without it
+ * India falls back to the weekday timetable alone, and callers pair that
+ * with the newest quote time: during scheduled hours a quote that hasn't
+ * moved for a while means the exchange is probably closed, and
+ * `scheduledOpenButQuiet` says so.
  */
 
 export type Market = "IN" | "US";
@@ -21,6 +25,14 @@ export type SessionStatus = {
   label: string;
   /** Exchange-local time, e.g. "14:05 IST". */
   localTime: string;
+  /** The holiday or special session behind today's hours, e.g. "Diwali-Balipratipada". */
+  occasion?: string;
+};
+
+/** What's known beyond the weekday timetable. */
+export type SessionCalendar = {
+  /** NSE's holidays and special sessions; omitted or empty when the calendar couldn't be loaded. */
+  india?: ExchangeDay[];
 };
 
 const MARKETS: Record<Market, { zone: string; tz: string; open: number; close: number }> = {
@@ -32,19 +44,48 @@ function localParts(now: number, zone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: zone,
     weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(new Date(now));
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")) };
+  return {
+    weekday: get("weekday"),
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
 }
 
-export function marketSession(market: Market, now: number): SessionStatus {
+const clock = (at: number, zone: string) => {
+  const { hour, minute } = localParts(at, zone);
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+};
+
+export function marketSession(market: Market, now: number, calendar: SessionCalendar = {}): SessionStatus {
   const { zone, tz, open, close } = MARKETS[market];
-  const { weekday, hour, minute } = localParts(now, zone);
+  const { weekday, date, hour, minute } = localParts(now, zone);
   const minutes = hour * 60 + minute;
   const localTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${tz}`;
+
+  if (market === "US") {
+    const holiday = usMarketHoliday(date);
+    if (holiday) return { market, scheduled: "closed", label: `Closed · ${holiday}`, localTime, occasion: holiday };
+  } else {
+    const day = calendar.india?.find((entry) => entry.date === date);
+    if (day?.session) {
+      // A special session replaces the day's regular hours, weekend or not.
+      const { start, end } = day.session;
+      const hours = `${clock(start, zone)}–${clock(end, zone)}`;
+      return now >= start && now < end
+        ? { market, scheduled: "open", label: `Open · special session until ${clock(end, zone)}`, localTime, occasion: day.description }
+        : { market, scheduled: "closed", label: `Closed · special session ${hours}`, localTime, occasion: day.description };
+    }
+    if (day?.closed) return { market, scheduled: "closed", label: `Closed · ${day.description}`, localTime, occasion: day.description };
+  }
 
   if (weekday === "Sat" || weekday === "Sun") {
     return { market, scheduled: "closed", label: "Closed · weekend", localTime };
