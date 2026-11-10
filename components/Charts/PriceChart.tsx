@@ -18,7 +18,7 @@ import {
 
 import type { Candle } from "@/lib/apis/yahooChart";
 import { ema, rsi, sma } from "@/lib/charts/indicators";
-import { formatCompactVolume, formatValue } from "@/lib/charts/format";
+import { formatChange, formatCompactVolume, formatValue } from "@/lib/charts/format";
 import type { AssetType, ValueUnit } from "@/lib/data/assets";
 
 /**
@@ -332,7 +332,7 @@ export default function PriceChart({
             <p className="text-[28px] font-semibold tabular-nums leading-tight tracking-tight">{fmt(focus.c)}</p>
             <p className="mt-0.5 text-sm font-medium tabular-nums" style={{ color: focusUp ? UP : DOWN }}>
               {change !== null &&
-                `${focusUp ? "+" : "-"}${unit === "percent" ? `${Math.abs(change).toFixed(3)} pts` : fmt(Math.abs(change)).replace("-", "")}`}
+                `${focusUp ? "+" : "-"}${unit === "percent" ? `${Math.abs(change).toFixed(3)} pts` : formatChange(Math.abs(change), focus?.c, unit, currency)}`}
               {changePct !== null && ` (${Math.abs(changePct).toFixed(2)}%)`}
               <span className="ml-1.5 font-normal text-[#777]">
                 {hover !== null && rows[hover] ? timeLabel(rows[hover].t, range, indian) : rangeLabel}

@@ -32,6 +32,23 @@ export function formatValue(
   }).format(value);
 }
 
+/**
+ * A change in a value, written to the precision of the value itself: a
+ * ₹1,324.40 stock that moved 0.40002 reads ₹0.40, not ₹0.40002 (formatValue
+ * alone would give a sub-1 figure the extra digits it gives a sub-1 price).
+ * A price below 1 keeps its own digits, so a SHIB-sized move isn't rounded away.
+ */
+export function formatChange(
+  change: number | null | undefined,
+  price: number | null | undefined,
+  unit: ValueUnit,
+  currency: string | null
+): string {
+  if (change === null || change === undefined || !Number.isFinite(change)) return "—";
+  const priced = typeof price === "number" && Math.abs(price) >= 1;
+  return formatValue(priced ? Math.round(change * 100) / 100 : change, unit, currency);
+}
+
 /** Compact volume: 1.2Cr / 45.6L for India, 1.2M / 45.6K otherwise. */
 export function formatCompactVolume(value: number | null | undefined, indian: boolean): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
