@@ -33,6 +33,7 @@ export type PostImage = { path: string; width: number; height: number; alt: stri
 const u16be = (b: Uint8Array, i: number) => (b[i] << 8) | b[i + 1];
 const u32be = (b: Uint8Array, i: number) => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
 const u24le = (b: Uint8Array, i: number) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16);
+const u32le = (b: Uint8Array, i: number) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
 const ascii = (b: Uint8Array, i: number, n: number) => String.fromCharCode(...b.subarray(i, i + n));
 
 function size(mime: ImageMime, width: number, height: number): ImageInfo | null {
@@ -94,7 +95,148 @@ export function sniffImage(bytes: Uint8Array): ImageInfo | null {
   return null;
 }
 
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/**
+ * The same photo without the metadata cameras and phones write into it —
+ * EXIF (which can hold the GPS position it was taken at, and a thumbnail of
+ * the uncropped original), XMP, IPTC, comments, text chunks, and anything
+ * appended after the image ends — or null when the file isn't well formed.
+ *
+ * The composer's re-encode already drops all of this; this is the server's
+ * guarantee for an upload that skipped the composer. Image data and the
+ * colour profile are kept byte for byte, so nothing is re-compressed. EXIF
+ * orientation goes with the rest: the composer has already applied it.
+ */
+export function stripImageMetadata(bytes: Uint8Array, mime: ImageMime): Uint8Array | null {
+  if (mime === "image/jpeg") return stripJpeg(bytes);
+  if (mime === "image/png") return stripPng(bytes);
+  return stripWebp(bytes);
+}
+
+function concat(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}
+
+/** JPEG segments kept: JFIF (without its thumbnail), Adobe's colour transform, and the ICC colour profile. */
+function keptJpegSegment(marker: number, segment: Uint8Array): Uint8Array | null {
+  const data = segment.subarray(4);
+  if (marker === 0xfe) return null; // comment
+  if (marker < 0xe0 || marker > 0xef) return segment; // not an APPn: tables, frame header, restart interval
+  if (marker === 0xe0 && data.length >= 14 && ascii(data, 0, 5) === "JFIF\0") {
+    const jfif = new Uint8Array(18);
+    jfif.set([0xff, 0xe0, 0x00, 0x10]);
+    jfif.set(data.subarray(0, 12), 4); // version, units, density; thumbnail size left at 0 × 0
+    return jfif;
+  }
+  if (marker === 0xee && ascii(data, 0, 5) === "Adobe") return segment;
+  if (marker === 0xe2 && ascii(data, 0, 12) === "ICC_PROFILE\0") return segment;
+  return null;
+}
+
+function stripJpeg(b: Uint8Array): Uint8Array | null {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
+  const parts: Uint8Array[] = [b.subarray(0, 2)];
+  let scanned = false;
+  let i = 2;
+  while (i + 1 < b.length) {
+    if (b[i] !== 0xff) return null;
+    const marker = b[i + 1];
+    if (marker === 0xff) {
+      i++; // fill byte
+      continue;
+    }
+    if (marker === 0xd9) {
+      // End of image: anything after it is dropped.
+      if (!scanned) return null;
+      parts.push(b.subarray(i, i + 2));
+      return concat(parts);
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      parts.push(b.subarray(i, i + 2));
+      i += 2;
+      continue;
+    }
+    if (i + 4 > b.length) return null;
+    const end = i + 2 + u16be(b, i + 2);
+    if (end < i + 4 || end > b.length) return null;
+    const kept = keptJpegSegment(marker, b.subarray(i, end));
+    if (kept) parts.push(kept);
+    i = end;
+    if (marker === 0xda) {
+      // The scan's compressed data runs to the next marker that isn't a
+      // stuffed 0xFF00 or a restart marker. Progressive files have several
+      // scans, so segments after this one are checked too.
+      scanned = true;
+      let j = i;
+      while (j + 1 < b.length && !(b[j] === 0xff && b[j + 1] !== 0x00 && !(b[j + 1] >= 0xd0 && b[j + 1] <= 0xd7))) j++;
+      if (j + 1 >= b.length) return null;
+      parts.push(b.subarray(i, j));
+      i = j;
+    }
+  }
+  return null;
+}
+
+/** PNG chunks dropped: EXIF, the three text kinds (where XMP and comments live) and the last-modified time. */
+const PNG_DROPPED = new Set(["eXIf", "tEXt", "zTXt", "iTXt", "tIME"]);
+
+function stripPng(b: Uint8Array): Uint8Array | null {
+  if (b.length < 8 || b[0] !== 0x89 || ascii(b, 1, 3) !== "PNG") return null;
+  const parts: Uint8Array[] = [b.subarray(0, 8)];
+  let i = 8;
+  while (i + 12 <= b.length) {
+    const type = ascii(b, i + 4, 4);
+    const end = i + 12 + u32be(b, i);
+    if (end > b.length) return null;
+    if (!PNG_DROPPED.has(type)) parts.push(b.subarray(i, end));
+    if (type === "IEND") return concat(parts); // anything after it is dropped
+    i = end;
+  }
+  return null;
+}
+
+/** VP8X header flags for the EXIF and XMP chunks, cleared once those chunks are dropped. */
+const VP8X_EXIF = 0x08;
+const VP8X_XMP = 0x04;
+
+function stripWebp(b: Uint8Array): Uint8Array | null {
+  if (b.length < 20 || ascii(b, 0, 4) !== "RIFF" || ascii(b, 8, 4) !== "WEBP") return null;
+  const riffEnd = 8 + u32le(b, 4);
+  if (riffEnd < 20 || riffEnd > b.length) return null;
+  const parts: Uint8Array[] = [];
+  let i = 12;
+  while (i + 8 <= riffEnd) {
+    const type = ascii(b, i, 4);
+    const size = u32le(b, i + 4);
+    if (i + 8 + size > riffEnd) return null;
+    const end = Math.min(i + 8 + size + (size & 1), riffEnd); // chunks are padded to an even length
+    if (type !== "EXIF" && type !== "XMP ") {
+      let chunk = b.subarray(i, end);
+      if (type === "VP8X" && size >= 1) {
+        chunk = chunk.slice();
+        chunk[8] &= ~(VP8X_EXIF | VP8X_XMP);
+      }
+      parts.push(chunk);
+    }
+    i = end;
+  }
+  if (i !== riffEnd || parts.length === 0) return null;
+
+  const body = concat(parts);
+  const out = new Uint8Array(12 + body.length);
+  out.set(b.subarray(0, 4));
+  new DataView(out.buffer).setUint32(4, 4 + body.length, true);
+  out.set(b.subarray(8, 12), 8);
+  out.set(body, 12);
+  return out;
+}
+
+const UUID ="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const PATH = new RegExp(`^(${UUID})/(${UUID})\\.(jpg|png|webp)$`);
 
 /** `<owner id>/<random id>.<ext>`: nothing guessable, nothing outside the owner's folder. */

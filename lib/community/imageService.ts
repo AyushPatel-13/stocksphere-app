@@ -8,13 +8,15 @@ import {
   imagePath,
   isImagePath,
   sniffImage,
+  stripImageMetadata,
   type ImageInfo,
 } from "./images";
 
 /**
  * Community photo uploads, on the server. Members never write to Storage
  * themselves: this checks the session, reads the file's real type and size
- * from its bytes, applies the upload limits, then stores it with the service
+ * from its bytes, strips its metadata (EXIF location and the like), applies
+ * the upload limits, then stores it with the service
  * role under `<member id>/<random id>.<ext>` and records it in
  * community_uploads. A post can only use the author's own unused uploads
  * (createPost checks that), and anything left unused is removed.
@@ -64,13 +66,16 @@ export async function uploadImage(
   if (input.bytes.length > MAX_IMAGE_BYTES) return { ok: false, status: 413, error: "That photo is over 4 MB, even after resizing. Try a smaller one.", code: "TOO_LARGE" };
   const info = sniffImage(input.bytes);
   if (!info) return { ok: false, status: 415, error: "Only JPG, PNG and WebP photos can be added.", code: "BAD_TYPE" };
+  // Location and camera details go even when the upload skipped the composer's re-encode.
+  const clean = stripImageMetadata(input.bytes, info.mime);
+  if (!clean) return { ok: false, status: 415, error: "That photo looks damaged. Try saving it again, then add it.", code: "BAD_TYPE" };
 
   const [recent, unused] = await Promise.all([store.countSince(userId, new Date(now - 3_600_000).toISOString()), store.countUnused(userId)]);
   if (recent >= UPLOADS_PER_HOUR) return { ok: false, status: 429, error: "You've added a lot of photos in the last hour. Please wait a bit.", code: "RATE_LIMITED" };
   if (unused >= MAX_UNUSED_UPLOADS) return { ok: false, status: 429, error: "Post or remove the photos you've already added first.", code: "RATE_LIMITED" };
 
   const path = imagePath(userId, newId(), info.ext);
-  await store.save(path, input.bytes, info, userId);
+  await store.save(path, clean, info, userId);
   return { ok: true, image: { path, width: info.width, height: info.height } };
 }
 
