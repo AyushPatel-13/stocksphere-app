@@ -29,7 +29,7 @@ export default function AgentPanel({
   symbol: string | null;
   chat: UseAgentChat;
 }) {
-  const { messages, isSending, failure, inputLimit, send, retry, reset } = chat;
+  const { messages, isSending, failure, inputLimit, send, retry, reset, answerConsent } = chat;
 
   useEffect(() => {
     if (!open) return;
@@ -81,6 +81,7 @@ export default function AgentPanel({
         symbol={symbol}
         onSelect={send}
         onRetry={retry}
+        onConsent={answerConsent}
       />
 
       <AgentInput

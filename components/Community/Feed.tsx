@@ -96,7 +96,7 @@ type State =
   | { status: "ranking-off" }
   | { status: "signed-out" }
   | { status: "error" }
-  | { status: "ready"; posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows" };
+  | { status: "ready"; posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows"; fallback?: "most-discussed" };
 
 /**
  * A post box over a stream of posts: one stock's board when `symbol` is set,
@@ -172,7 +172,7 @@ export default function Feed({
             result.code === "NOT_CONFIGURED" ? (ranked ? "ranking-off" : "not-configured") : result.code === "SIGNED_OUT" ? "signed-out" : "error",
         });
       } else {
-        setState({ status: "ready", posts: result.posts, hasMore: result.hasMore, next: result.next, empty: result.empty });
+        setState({ status: "ready", posts: result.posts, hasMore: result.hasMore, next: result.next, empty: result.empty, fallback: result.fallback });
       }
     });
 
@@ -432,6 +432,12 @@ export default function Feed({
                   : "Start the conversation."}
             </p>
           </div>
+        )}
+
+        {state.status === "ready" && state.posts.length > 0 && state.fallback === "most-discussed" && (
+          <p className="border-b border-[#1d1d1d] px-5 py-3 text-sm text-[#999]" role="status">
+            Nothing is trending in the last 24 hours. Showing the most discussed posts of the last 30 days instead.
+          </p>
         )}
 
         {state.status === "ready" && state.posts.length > 0 && (

@@ -20,6 +20,8 @@ export interface ChatMessage {
   links?: AgentLink[];
   warnings?: string[];
   tools?: string[];
+  /** Set on the notice shown before the member's own data is used; the panel offers Allow / Not now. */
+  consent?: "portfolio";
   /** Set on a user turn whose request failed, so the panel can offer a retry. */
   failed?: boolean;
 }

@@ -141,11 +141,44 @@ test("portfolio answers are never served from or stored in the shared cache", as
   const tokens: Record<string, string> = { "tok-a": "user-a", "tok-b": "user-b" };
   const access: AgentAccess = { verifyToken: async (t) => tokens[t] ?? null, takeSlot: async () => ({ ok: true, shared: true }) };
 
-  const a = await POST(makeRequest({ message: "Analyze my portfolio" }, "tok-a"), undefined, access, fakeRun, wf.impl);
-  const b = await POST(makeRequest({ message: "Analyze my portfolio" }, "tok-b"), undefined, access, fakeRun, wf.impl);
+  const a = await POST(makeRequest({ message: "Analyze my portfolio", portfolioConsent: true }, "tok-a"), undefined, access, fakeRun, wf.impl);
+  const b = await POST(makeRequest({ message: "Analyze my portfolio", portfolioConsent: true }, "tok-b"), undefined, access, fakeRun, wf.impl);
   assert.equal((await a.json()).answer, "portfolio of user-a");
   assert.equal((await b.json()).answer, "portfolio of user-b");
   assert.deepEqual(wf.calls.map((c) => c.userId), ["user-a", "user-b"]);
+});
+
+test("a portfolio review reads nothing and calls no AI until the member has agreed", async () => {
+  const { access, calls } = fakeAccess();
+  const wf = fakeWorkflow(() => "your portfolio");
+  let ran = false;
+  const run = (async (input: Parameters<typeof fakeRun>[0]) => { ran = true; return fakeRun(input); }) as typeof fakeRun;
+
+  // Typed, chosen in the UI, or with consent spelled any way but true: the notice, and nothing else happens.
+  for (const body of [
+    { message: "Analyze my portfolio" },
+    { message: "x", workflow: { type: "portfolio" } },
+    { message: "Analyze my portfolio", portfolioConsent: false },
+  ]) {
+    const json = await (await POST(makeRequest(body), undefined, access, run, wf.impl)).json();
+    assert.equal(json.needsConsent, "portfolio");
+    assert.match(json.answer, /sends your holdings .* to our AI provider/);
+    assert.match(json.answer, /Nothing is sent unless you allow it/);
+  }
+  assert.equal((await POST(makeRequest({ message: "Analyze my portfolio", portfolioConsent: "yes" }), undefined, access, run, wf.impl)).status, 400);
+  assert.deepEqual(wf.calls, []);
+  assert.equal(ran, false);
+  assert.equal(calls.length, 0); // no allowance used
+
+  // With consent it runs, for the verified account.
+  const allowed = await (await POST(makeRequest({ message: "Analyze my portfolio", portfolioConsent: true }), undefined, access, run, wf.impl)).json();
+  assert.equal(allowed.answer, "your portfolio");
+  assert.equal(allowed.needsConsent, undefined);
+  assert.deepEqual(wf.calls, [{ type: "portfolio", userId: "user-1" }]);
+
+  // Other questions never need it.
+  const research = await (await POST(makeRequest({ message: "Research TCS for the consent test" }), undefined, access, run, wf.impl)).json();
+  assert.equal(research.needsConsent, undefined);
 });
 
 test("an explicit workflow is validated, and the body can't choose whose data is read", async () => {
@@ -155,7 +188,7 @@ test("an explicit workflow is validated, and the body can't choose whose data is
   assert.equal(bad.status, 400);
   const unknown = await POST(makeRequest({ message: "x", workflow: { type: "run_sql", query: "drop table" } }), undefined, access, fakeRun, wf.impl);
   assert.equal(unknown.status, 400);
-  const sneaky = await POST(makeRequest({ message: "my portfolio please", workflow: { type: "portfolio" }, userId: "victim" }), undefined, access, fakeRun, wf.impl);
+  const sneaky = await POST(makeRequest({ message: "my portfolio please", workflow: { type: "portfolio" }, portfolioConsent: true, userId: "victim" }), undefined, access, fakeRun, wf.impl);
   assert.equal((await sneaky.json()).answer, "for user-1");
 });
 

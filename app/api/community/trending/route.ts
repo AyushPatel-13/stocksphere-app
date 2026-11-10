@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { getSupabaseStore, getTrending, type CommunityStore } from "@/lib/community/service";
+import { getSupabaseStore, getTrendingWindow, type CommunityStore } from "@/lib/community/service";
 
-/** GET /api/community/trending — most-discussed stocks in the last 24 hours. */
+/**
+ * GET /api/community/trending — most-discussed stocks in the last 24 hours;
+ * on a quiet day, in the last 7 or 30. `windowDays` says which.
+ */
 export async function GET(
   _request?: Request,
   _context?: unknown,
@@ -14,7 +17,7 @@ export async function GET(
 
   try {
     return NextResponse.json(
-      { success: true, trending: await getTrending(store) },
+      { success: true, ...(await getTrendingWindow(store)) },
       { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=60" } }
     );
   } catch (error) {

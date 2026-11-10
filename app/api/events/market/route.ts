@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { distinctEvents, getMarketEventStore, ingestIfDue, type MarketEventStore } from "@/lib/markets/eventIngest";
+import { distinctEvents, getMarketEventStore, type MarketEventStore } from "@/lib/markets/eventIngest";
+import { ingestAfterResponse } from "@/lib/markets/ingestAfterResponse";
 import { isValidSymbol } from "@/lib/validation/symbol";
 import { isMissingTable } from "@/lib/watchlistRules";
 
@@ -16,7 +17,7 @@ export async function GET(
   _context?: unknown,
   store: MarketEventStore | null = getMarketEventStore(),
   now: () => number = Date.now,
-  refresh: (store: MarketEventStore) => Promise<void> = (s) => ingestIfDue(s)
+  refresh: (store: MarketEventStore) => Promise<void> = ingestAfterResponse
 ) {
   if (!store) {
     return NextResponse.json({ success: false, error: "Market events aren't set up yet.", code: "NOT_CONFIGURED" }, { status: 503 });

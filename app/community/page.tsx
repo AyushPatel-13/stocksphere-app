@@ -18,11 +18,14 @@ import type { TrendingSymbol } from "@/lib/community/types";
 
 function Trending({ refresh }: { refresh: number }) {
   const [trending, setTrending] = useState<TrendingSymbol[] | null | undefined>(undefined);
+  const [windowDays, setWindowDays] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
     fetchTrending().then((result) => {
-      if (!cancelled) setTrending(result);
+      if (cancelled) return;
+      setTrending(result ? result.items : null);
+      if (result) setWindowDays(result.windowDays);
     });
     return () => {
       cancelled = true;
@@ -33,7 +36,7 @@ function Trending({ refresh }: { refresh: number }) {
 
   return (
     <section className="rounded-2xl border border-[#222] bg-[#111]">
-      <h2 className="border-b border-[#1d1d1d] px-5 py-3.5 font-semibold">🔥 Trending today</h2>
+      <h2 className="border-b border-[#1d1d1d] px-5 py-3.5 font-semibold">{windowDays <= 1 ? "🔥 Trending today" : `🔥 Most discussed, last ${windowDays} days`}</h2>
       {trending === undefined ? (
         <div className="space-y-2 p-4">
           {Array.from({ length: 4 }).map((_, i) => (

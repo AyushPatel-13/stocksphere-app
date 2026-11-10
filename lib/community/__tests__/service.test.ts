@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   createPost,
   getTrending,
+  getTrendingWindow,
   type CommunityStore,
   type NewPostRow,
 } from "../service";
@@ -252,4 +253,27 @@ test("moderation routes pass the bearer token through", async () => {
   );
   assert.equal(acted.status, 200);
   assert.equal((await moderationPost(new Request("http://x", { method: "POST", body: "{bad" }), undefined, store)).status, 400);
+});
+
+test("most-discussed stocks widen from a day to a week to a month, and say which window was used", async () => {
+  const windows: number[] = [];
+  const within = (days: number) =>
+    store({
+      recentSymbols: async (sinceIso) => {
+        const asked = Math.round((NOW - Date.parse(sinceIso)) / 86_400_000);
+        windows.push(asked);
+        return asked >= days ? [["TCS"], ["TCS", "INFY"]] : [];
+      },
+    });
+
+  assert.deepEqual(await getTrendingWindow(within(1), NOW), { trending: [{ symbol: "TCS", posts: 2 }, { symbol: "INFY", posts: 1 }], windowDays: 1 });
+  assert.deepEqual(windows, [1]);
+
+  windows.length = 0;
+  assert.equal((await getTrendingWindow(within(7), NOW)).windowDays, 7);
+  assert.deepEqual(windows, [1, 7]);
+
+  assert.equal((await getTrendingWindow(within(30), NOW)).windowDays, 30);
+  // Nothing in a month: empty, reported as the normal 24-hour window.
+  assert.deepEqual(await getTrendingWindow(within(999), NOW), { trending: [], windowDays: 1 });
 });

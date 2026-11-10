@@ -176,3 +176,41 @@ test("feed views: which are ranked, how they page, and where a new post appears"
   assert.equal(showsNewPost(view("top"), false), false);
   assert.equal(showsNewPost(view("latest", "discussed"), true), false);
 });
+
+test("a quiet Trending tab shows the month's most discussed posts, says so, and is one page", async () => {
+  const asked: { sort: string; since?: string; offset: number }[] = [];
+  const quiet = store({
+    rankPosts: async (query) => {
+      asked.push({ sort: query.sort, since: query.since, offset: query.offset });
+      return query.sort === "trending" ? [] : ["p1", "p2", "p3"];
+    },
+  });
+  const result = await getFeed(quiet, input({ feed: "trending", sentiment: "bullish", limit: 3 }), NOW);
+  assert.ok(result.ok);
+  assert.equal(result.fallback, "most-discussed");
+  assert.equal(result.posts.length, 3);
+  // A full page, but no second page: it is a stand-in, not another feed.
+  assert.equal(result.hasMore, false);
+  assert.equal(result.next, null);
+  assert.deepEqual(asked.map((q) => q.sort), ["trending", "discussed"]);
+  assert.equal(asked[1].since, new Date(NOW - 30 * 86_400_000).toISOString());
+
+  // Real trending posts are shown as trending, with no label.
+  const busy = await getFeed(store({ rankPosts: async () => ["p1"] }), input({ feed: "trending" }), NOW);
+  assert.ok(busy.ok);
+  assert.equal(busy.fallback, undefined);
+
+  // Running out on a later page is just the end of Trending, and other tabs never fall back.
+  asked.length = 0;
+  const later = await getFeed(quiet, input({ feed: "trending", offset: 20 }), NOW);
+  assert.ok(later.ok);
+  assert.deepEqual([later.posts.length, later.fallback, asked.length], [0, undefined, 1]);
+  const latest = await getFeed(store({ rankPosts: async () => [] }), input({ feed: "latest" }), NOW);
+  assert.ok(latest.ok);
+  assert.equal(latest.fallback, undefined);
+
+  // No posts at all in the month: still empty, never padded.
+  const none = await getFeed(store({ rankPosts: async () => [] }), input({ feed: "trending" }), NOW);
+  assert.ok(none.ok);
+  assert.deepEqual([none.posts.length, none.fallback], [0, undefined]);
+});

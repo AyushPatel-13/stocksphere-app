@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 function defaultNavigate(message: string, conversationId?: string) {
   return answerNavigation(message, { runTool: runAllowlistedTool }, conversationId ?? randomUUID());
 }
-import { AgentErrorResponse } from "@/lib/types/agent";
+import { PORTFOLIO_CONSENT_NOTICE, type AgentErrorResponse, type AgentResponse } from "@/lib/types/agent";
 
 // The agent finishes within AGENT_DEADLINE_MS (50 s); this lets the platform
 // run it that long (Vercel's default limit can be shorter).
@@ -43,6 +43,7 @@ const requestSchema = z.object({
   conversationId: z.string().trim().min(1).max(100).optional(),
   history: z.array(historyMessageSchema).max(MAX_HISTORY_MESSAGES).optional(),
   workflow: workflowSchema.optional(),
+  portfolioConsent: z.boolean().optional(),
 });
 
 /**
@@ -100,6 +101,20 @@ export async function POST(
   const cached = cacheable ? answerCache.get(parsed.data.message) : null;
   if (cached) {
     return NextResponse.json({ ...cached, conversationId: parsed.data.conversationId ?? cached.conversationId });
+  }
+
+  // A portfolio review sends the member's holdings to an outside AI provider.
+  // Until they've agreed, nothing is read, no AI call is made and no allowance is used.
+  if (chosen?.type === "portfolio" && parsed.data.portfolioConsent !== true) {
+    const body: AgentResponse = {
+      answer: PORTFOLIO_CONSENT_NOTICE,
+      toolCalls: [],
+      sources: [],
+      warnings: [],
+      conversationId: parsed.data.conversationId ?? randomUUID(),
+      needsConsent: "portfolio",
+    };
+    return NextResponse.json(body);
   }
 
   // A request to open a page needs no AI answer, so it doesn't use the member's allowance.

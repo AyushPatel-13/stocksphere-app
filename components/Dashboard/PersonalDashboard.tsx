@@ -22,6 +22,7 @@ import { buildWatchtower, parseStoredSnapshots, rollSnapshots, type Snapshot, ty
 import { summariseHoldings, toHoldingView, type HoldingRow } from "@/lib/client/holdings";
 import { formatMoney, formatPercent, useQuotes } from "@/lib/client/useQuotes";
 import { marketSession, scheduledOpenButQuiet, type SessionStatus } from "@/lib/markets/session";
+import { useMarketCalendar } from "@/lib/client/useMarketCalendar";
 import { getPortfolio } from "@/lib/portfolio";
 import { supabase } from "@/lib/supabase";
 import { getWatchlist } from "@/lib/watchlist";
@@ -309,6 +310,7 @@ export default function PersonalDashboard() {
       )
     : null;
 
+  const calendar = useMarketCalendar();
   const isNewUser = lists.status === "ready" && followed.length === 0;
   const greeting = name ? `Welcome back, ${name}` : "Your dashboard";
 
@@ -321,14 +323,14 @@ export default function PersonalDashboard() {
         actions={
           now !== null ? (
             <div className="flex flex-col items-start gap-1.5 sm:items-end">
-              <SessionBadge status={marketSession("IN", now)} quiet={scheduledOpenButQuiet(marketSession("IN", now), latestQuoteTime, now)} />
-              <SessionBadge status={marketSession("US", now)} quiet={false} />
+              <SessionBadge status={marketSession("IN", now, calendar)} quiet={scheduledOpenButQuiet(marketSession("IN", now, calendar), latestQuoteTime, now)} />
+              <SessionBadge status={marketSession("US", now, calendar)} quiet={false} />
             </div>
           ) : undefined
         }
       />
 
-      <IndicesBar />
+      <IndicesBar showStatus={false} />
 
       <SectionTitle aside={moversData ? `Prices as of ${formatAsOf(moversData.gainers[0]?.lastUpdated) ?? "latest session"}` : undefined}>
         Today&apos;s briefing

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { MiniRange } from "@/components/Markets/Sparkline";
-import { StockAvatar, absPercent, toneClass } from "@/components/Markets/StockBits";
+import { StockAvatar, signedPercent, toneClass } from "@/components/Markets/StockBits";
 import { PageHeader, PageShell, secondaryButtonClass } from "@/components/ui/Page";
 import {
   EMPTY_CRITERIA,
@@ -362,7 +362,7 @@ export default function ScreenerPage() {
                             </Link>
                           </td>
                           <td className="px-3 py-3 text-right tabular-nums">{formatMoney(row.price!, row.currency ?? (row.market === "us" ? "USD" : "INR"))}</td>
-                          <td className={`px-3 py-3 text-right font-medium tabular-nums ${toneClass(row.changePercent)}`}>{absPercent(row.changePercent)}</td>
+                          <td className={`px-3 py-3 text-right font-medium tabular-nums ${toneClass(row.changePercent)}`}>{signedPercent(row.changePercent)}</td>
                           <td className="hidden px-3 py-3 text-right tabular-nums text-[#ccc] md:table-cell">{formatVolume(row.volume, row.currency ?? undefined)}</td>
                           <td className="hidden w-40 px-3 py-3 xl:table-cell">
                             <MiniRange low={row.fiftyTwoWeekLow} high={row.fiftyTwoWeekHigh} value={row.price} />

@@ -1146,8 +1146,11 @@ export type FeedInput = {
 };
 
 export type FeedResult =
-  | { ok: true; posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows" }
+  | { ok: true; posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows"; fallback?: "most-discussed" }
   | { ok: false; status: number; error: string; code?: string };
+
+/** How far back Trending looks for its stand-in when the last 24 hours were quiet. */
+export const TRENDING_FALLBACK_DAYS = 30;
 
 /**
  * One feed implementation for every tab and board: it works out whom and
@@ -1199,10 +1202,20 @@ export async function getFeed(store: CommunityStore | null, input: FeedInput, no
     }
     throw error;
   }
+  // A quiet day: Trending would be an empty tab while posts exist. Its first
+  // page becomes the most-discussed posts of the last month instead, marked
+  // `fallback` so the page says what it is showing. One page only: it is a
+  // stand-in, not a second feed.
+  let fallback = false;
+  if (!ids.length && sort === "trending" && input.offset === 0) {
+    ids = await store.rankPosts({ ...query, sort: "discussed", since: new Date(now - TRENDING_FALLBACK_DAYS * 86_400_000).toISOString() });
+    fallback = ids.length > 0;
+  }
   if (!ids.length) return { ok: true, posts: [], hasMore: false, next: null };
 
   const byId = new Map((await store.listPosts({ ids, limit: ids.length })).map((post) => [post.id, post]));
   const posts = ids.flatMap((id) => byId.get(id) ?? []);
+  if (fallback) return { ok: true, posts, hasMore: false, next: null, fallback: "most-discussed" };
   const hasMore = ids.length === input.limit;
   return { ok: true, posts, hasMore, next: hasMore ? String(input.offset + ids.length) : null };
 }
@@ -1284,9 +1297,10 @@ export async function getSentiment(
 export async function getTrending(
   store: CommunityStore,
   now: number = Date.now(),
-  top = 10
+  top = 10,
+  days = 1
 ): Promise<TrendingSymbol[]> {
-  const rows = await store.recentSymbols(new Date(now - 86_400_000).toISOString(), 500);
+  const rows = await store.recentSymbols(new Date(now - days * 86_400_000).toISOString(), 500);
   const counts = new Map<string, number>();
 
   for (const symbols of rows) {
@@ -1297,4 +1311,25 @@ export async function getTrending(
     .map(([symbol, posts]) => ({ symbol, posts }))
     .sort((a, b) => b.posts - a.posts || a.symbol.localeCompare(b.symbol))
     .slice(0, top);
+}
+
+/** The windows tried for the most-discussed stocks, shortest first. */
+export const TRENDING_WINDOWS_DAYS = [1, 7, 30] as const;
+
+/**
+ * Most-discussed symbols in the last 24 hours, or, when nobody posted about a
+ * stock in that time, in the last week, then the last month. `windowDays`
+ * says which, so the page can label it honestly instead of calling a
+ * week-old count "today".
+ */
+export async function getTrendingWindow(
+  store: CommunityStore,
+  now: number = Date.now(),
+  top = 10
+): Promise<{ trending: TrendingSymbol[]; windowDays: number }> {
+  for (const days of TRENDING_WINDOWS_DAYS) {
+    const trending = await getTrending(store, now, top, days);
+    if (trending.length > 0) return { trending, windowDays: days };
+  }
+  return { trending: [], windowDays: TRENDING_WINDOWS_DAYS[0] };
 }

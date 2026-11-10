@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import AuthGuard from "@/components/AuthGuard";
 import MarketsNav from "@/components/Markets/MarketsNav";
 import { MiniRange, Sparkline, rangePosition } from "@/components/Markets/Sparkline";
-import { StockAvatar, absPercent, toneClass } from "@/components/Markets/StockBits";
+import { StockAvatar, absPercent, signedPercent, toneClass } from "@/components/Markets/StockBits";
 import SearchBox from "@/components/Search/SearchBox";
 import { EmptyState, PageShell, primaryButtonClass, secondaryButtonClass } from "@/components/ui/Page";
 import { formatMoney, formatVolume } from "@/lib/client/useQuotes";
@@ -156,7 +156,7 @@ function TrendingSuggestions({ onAdd, isAdded }: { onAdd: (symbol: string) => vo
               <StockAvatar symbol={item.symbol} size={30} />
               <Link href={`/stock/${encodeURIComponent(item.symbol)}`} className="min-w-0 flex-1 hover:text-[#22c55e]">
                 <span className="block truncate text-sm font-semibold">{item.symbol}</span>
-                <span className={`text-xs tabular-nums ${toneClass(item.changePercent)}`}>{absPercent(item.changePercent)}</span>
+                <span className={`text-xs tabular-nums ${toneClass(item.changePercent)}`}>{signedPercent(item.changePercent)}</span>
               </Link>
               <button
                 type="button"
@@ -647,7 +647,7 @@ export default function WatchlistPage() {
                           ) : priced ? (
                             <>
                               <span className="block font-medium tabular-nums">{formatMoney(row.price!, row.currency ?? "INR")}</span>
-                              <span className={`block text-xs tabular-nums sm:hidden ${toneClass(row.change)}`}>{absPercent(row.changePercent)}</span>
+                              <span className={`block text-xs tabular-nums sm:hidden ${toneClass(row.change)}`}>{signedPercent(row.changePercent)}</span>
                             </>
                           ) : (
                             <span className="text-xs text-[#777]">Unavailable</span>
