@@ -50,13 +50,16 @@ function Skeleton() {
 
 export default function HomeStats() {
   const [trending, setTrending] = useState<Load<TrendingSymbol>>({ status: "loading" });
+  const [windowDays, setWindowDays] = useState(1);
   const [leaders, setLeaders] = useState<Load<LeaderRow>>({ status: "loading" });
 
   useEffect(() => {
     let cancelled = false;
 
-    fetchTrending().then((items) => {
-      if (!cancelled) setTrending(items ? { status: "ready", items: items.slice(0, 5) } : { status: "off" });
+    fetchTrending().then((result) => {
+      if (cancelled) return;
+      setTrending(result ? { status: "ready", items: result.items.slice(0, 5) } : { status: "off" });
+      if (result) setWindowDays(result.windowDays);
     });
     fetchLeaderboard().then((result) => {
       if (!cancelled) setLeaders(Array.isArray(result) ? { status: "ready", items: result.slice(0, 5) } : { status: "off" });
@@ -72,7 +75,10 @@ export default function HomeStats() {
       <Card title="🔥 Most discussed" href="/trending">
         {trending.status === "loading" && <Skeleton />}
         {trending.status === "off" && <Note>Discussions are launching soon.</Note>}
-        {trending.status === "ready" && trending.items.length === 0 && <Note>No discussions in the last 24 hours.</Note>}
+        {trending.status === "ready" && trending.items.length === 0 && <Note>No discussions yet.</Note>}
+        {trending.status === "ready" && trending.items.length > 0 && windowDays > 1 && (
+          <p className="mb-2 text-xs text-[#888]">Quiet today: counted over the last {windowDays} days.</p>
+        )}
         {trending.status === "ready" && trending.items.length > 0 && (
           <ul className="space-y-1">
             {trending.items.map((entry, index) => (

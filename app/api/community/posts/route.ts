@@ -245,7 +245,7 @@ export async function GET(
         limit,
       });
       if (!result.ok) return NextResponse.json({ success: false, error: result.error, code: result.code }, { status: result.status });
-      return NextResponse.json({ success: true, posts: await withExtras(result.posts), hasMore: result.hasMore, next: result.next, ...(result.empty ? { empty: result.empty } : {}) });
+      return NextResponse.json({ success: true, posts: await withExtras(result.posts), hasMore: result.hasMore, next: result.next, ...(result.empty ? { empty: result.empty } : {}), ...(result.fallback ? { fallback: result.fallback } : {}) });
     }
 
     const posts = await store.listPosts({ symbol, community, parentId, sentiment, kind, exchange, before, limit, ...(floor && asset ? { asset } : {}) });

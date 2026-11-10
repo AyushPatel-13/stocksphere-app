@@ -14,11 +14,14 @@ import type { TrendingSymbol } from "@/lib/community/types";
  */
 export default function TrendingPage() {
   const [trending, setTrending] = useState<TrendingSymbol[] | null | undefined>(undefined);
+  const [windowDays, setWindowDays] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
     fetchTrending().then((result) => {
-      if (!cancelled) setTrending(result);
+      if (cancelled) return;
+      setTrending(result ? result.items : null);
+      if (result) setWindowDays(result.windowDays);
     });
     return () => {
       cancelled = true;
@@ -32,7 +35,11 @@ export default function TrendingPage() {
       <PageHeader
         eyebrow="Trending"
         title="Most discussed stocks"
-        description="Ranked by how many community posts mentioned each stock in the last 24 hours."
+        description={
+          windowDays <= 1
+            ? "Ranked by how many community posts mentioned each stock in the last 24 hours."
+            : `Nobody posted about a stock in the last 24 hours, so this counts posts from the last ${windowDays} days.`
+        }
       />
 
       {trending === undefined && (

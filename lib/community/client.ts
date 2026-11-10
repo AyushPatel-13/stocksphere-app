@@ -51,7 +51,7 @@ export async function fetchPosts(params: {
   /** Ranked feeds page by offset: the previous page's `next`. */
   offset?: string;
   limit?: number;
-}): Promise<{ posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows" } | ApiError> {
+}): Promise<{ posts: PostView[]; hasMore: boolean; next: string | null; empty?: "no-follows"; fallback?: "most-discussed" } | ApiError> {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== "") query.set(key, String(value));
@@ -65,7 +65,7 @@ export async function fetchPosts(params: {
     const response = await fetch(`/api/community/posts?${query.toString()}`, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
     const data = await response.json();
     return data?.success
-      ? { posts: data.posts as PostView[], hasMore: Boolean(data.hasMore), next: (data.next as string | null) ?? null, ...(data.empty ? { empty: data.empty } : {}) }
+      ? { posts: data.posts as PostView[], hasMore: Boolean(data.hasMore), next: (data.next as string | null) ?? null, ...(data.empty ? { empty: data.empty } : {}), ...(data.fallback ? { fallback: data.fallback } : {}) }
       : { error: data?.error ?? "Couldn't load posts.", code: data?.code };
   } catch {
     return { error: "Couldn't load posts." };
@@ -248,10 +248,14 @@ export async function fetchStockCommunity(symbol: string): Promise<PublicCommuni
   }
 }
 
-export async function fetchTrending(): Promise<TrendingSymbol[] | null> {
+export type Trending = { items: TrendingSymbol[]; windowDays: number };
+
+/** The most-discussed stocks and the window they were counted over (1 day; 7 or 30 on a quiet site). */
+export async function fetchTrending(): Promise<Trending | null> {
   try {
     const data = await (await fetch("/api/community/trending")).json();
-    return data?.success ? (data.trending as TrendingSymbol[]) : null;
+    if (!data?.success) return null;
+    return { items: data.trending as TrendingSymbol[], windowDays: typeof data.windowDays === "number" ? data.windowDays : 1 };
   } catch {
     return null;
   }
