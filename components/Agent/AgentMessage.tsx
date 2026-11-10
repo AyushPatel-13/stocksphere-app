@@ -10,7 +10,14 @@ import AgentMarkdown from "./AgentMarkdown";
  * right-aligned bubble, the agent's is a wider left-aligned card with room for
  * formatted financial content.
  */
-export default function AgentMessage({ message }: { message: ChatMessage }) {
+export default function AgentMessage({
+  message,
+  onConsent,
+}: {
+  message: ChatMessage;
+  /** Given for the latest turn only, so an old notice can't be answered twice. */
+  onConsent?: (allow: boolean) => void;
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -48,6 +55,25 @@ export default function AgentMessage({ message }: { message: ChatMessage }) {
           <AgentMarkdown content={message.content} />
 
           {message.links && message.links.length > 0 && <AgentLinks links={message.links} />}
+
+          {message.consent && onConsent && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onConsent(true)}
+                className="min-h-9 rounded-lg bg-green-500 px-3.5 py-1.5 text-[12.5px] font-semibold text-black hover:bg-green-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-400"
+              >
+                Allow and review my portfolio
+              </button>
+              <button
+                type="button"
+                onClick={() => onConsent(false)}
+                className="min-h-9 rounded-lg border border-[#333] px-3.5 py-1.5 text-[12.5px] text-[#ccc] hover:border-[#555] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-400"
+              >
+                Not now
+              </button>
+            </div>
+          )}
 
           {(sources.length > 0 || tools.length > 0) && (
             <div className="mt-3 space-y-2 border-t border-[#222] pt-2.5">

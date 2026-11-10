@@ -8,6 +8,17 @@ import { buildHistory, composeMessage, maxQuestionLength } from "./contract";
 import { AgentRequestError, sendAgentMessage } from "./request";
 import type { ChatFailure, ChatMessage } from "./types";
 
+/** Remembered per browser, so the member is asked once here and can clear it with their site data. */
+export const PORTFOLIO_CONSENT_KEY = "stocksphere.ai.portfolioConsent";
+
+function hasPortfolioConsent(): boolean {
+  try {
+    return window.localStorage.getItem(PORTFOLIO_CONSENT_KEY) === "yes";
+  } catch {
+    return false;
+  }
+}
+
 let messageCounter = 0;
 
 function nextId(role: string): string {
@@ -30,6 +41,8 @@ export interface UseAgentChat {
   send: (text: string) => void;
   retry: () => void;
   reset: () => void;
+  /** Answer the portfolio notice: allow re-asks the question with consent; decline leaves a note. */
+  answerConsent: (allow: boolean) => void;
 }
 
 /**
@@ -60,6 +73,9 @@ export function useAgentChat({
   const inFlight = useRef(false);
   // Mirrors `messages` for the async send, which must not read a stale closure.
   const transcript = useRef<ChatMessage[]>([]);
+
+  // Consent given in this panel, for when localStorage is unavailable.
+  const consented = useRef(false);
 
   const runTurn = useCallback(
     async (text: string) => {
@@ -103,6 +119,7 @@ export function useAgentChat({
               ? { conversationId: conversationId.current }
               : {}),
             ...(history.length > 0 ? { history } : {}),
+            ...(consented.current || hasPortfolioConsent() ? { portfolioConsent: true } : {}),
           },
           undefined,
           undefined,
@@ -123,6 +140,7 @@ export function useAgentChat({
             links: response.links,
             warnings: response.warnings,
             tools: response.toolCalls.map((call) => call.tool),
+            ...(response.needsConsent ? { consent: response.needsConsent } : {}),
           },
         ];
         setMessages(transcript.current);
@@ -175,6 +193,37 @@ export function useAgentChat({
     void runTurn(last.content);
   }, [runTurn]);
 
+  const answerConsent = useCallback(
+    (allow: boolean) => {
+      if (inFlight.current) return;
+      const turns = transcript.current;
+      const notice = turns[turns.length - 1];
+      const question = turns[turns.length - 2];
+      if (!notice?.consent || question?.role !== "user") return;
+
+      if (!allow) {
+        transcript.current = [
+          ...turns.slice(0, -1),
+          { id: nextId("assistant"), role: "assistant", content: "No problem. Nothing was sent. You can still ask about any stock, or open the Portfolio page to see your allocation there." },
+        ];
+        setMessages(transcript.current);
+        return;
+      }
+
+      consented.current = true;
+      try {
+        window.localStorage.setItem(PORTFOLIO_CONSENT_KEY, "yes");
+      } catch {
+        // Private mode: consent holds for this panel only.
+      }
+      // Drop the question and the notice, then ask again; the question reappears once.
+      transcript.current = turns.slice(0, -2);
+      setMessages(transcript.current);
+      void runTurn(question.content);
+    },
+    [runTurn]
+  );
+
   const reset = useCallback(() => {
     if (inFlight.current) return;
 
@@ -192,5 +241,6 @@ export function useAgentChat({
     send,
     retry,
     reset,
+    answerConsent,
   };
 }

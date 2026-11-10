@@ -82,6 +82,7 @@ export default function AgentMessages({
   symbol,
   onSelect,
   onRetry,
+  onConsent,
 }: {
   messages: ChatMessage[];
   isSending: boolean;
@@ -89,6 +90,7 @@ export default function AgentMessages({
   symbol: string | null;
   onSelect: (question: string) => void;
   onRetry: () => void;
+  onConsent: (allow: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -128,8 +130,12 @@ export default function AgentMessages({
         </div>
       ) : (
         <div className="space-y-4">
-          {messages.map((message) => (
-            <AgentMessage key={message.id} message={message} />
+          {messages.map((message, index) => (
+            <AgentMessage
+              key={message.id}
+              message={message}
+              onConsent={index === messages.length - 1 && !isSending ? onConsent : undefined}
+            />
           ))}
 
           {isSending && <Thinking />}
