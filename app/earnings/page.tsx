@@ -3,6 +3,7 @@ import Link from "next/link";
 import { EmptyState, Notice, PageHeader, PageShell, secondaryButtonClass } from "@/components/ui/Page";
 import { ROOM_STATE_LABEL, listRooms, roomHref, type EarningsRoom } from "@/lib/earnings/rooms";
 import { getMarketEventStore } from "@/lib/markets/eventIngest";
+import { ingestAfterResponse } from "@/lib/markets/ingestAfterResponse";
 import { isMissingTable } from "@/lib/watchlistRules";
 
 export const metadata = { title: "Earnings rooms" };
@@ -16,7 +17,7 @@ async function load(): Promise<{ rooms: EarningsRoom[] } | { error: string }> {
   const store = getMarketEventStore();
   if (!store) return { error: "Earnings rooms aren't set up yet." };
   try {
-    return { rooms: await listRooms(store, Date.now()) };
+    return { rooms: await listRooms(store, Date.now(), ingestAfterResponse) };
   } catch (error) {
     return { error: isMissingTable(error as { code?: string }) ? "Earnings rooms are launching soon." : "Earnings rooms are unavailable right now." };
   }

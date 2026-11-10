@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import Feed from "@/components/Community/Feed";
 import { fetchSentiment, fetchStockCommunity, useCommunityUser } from "@/lib/community/client";
@@ -81,6 +81,12 @@ export function SentimentMeter({ symbol, ipoId, refresh }: { symbol?: string; ip
   );
 }
 
+/** The page's query string only changes on navigation. */
+function subscribeToUrl(onChange: () => void) {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+}
+
 export default function StockBoard({ symbol, label }: { symbol: string; label?: string }) {
   const clean = decodeURIComponent(symbol).trim().toUpperCase();
   // Shown to people: the instrument's name, never "$SYMBOL" — a "$" reads
@@ -103,11 +109,11 @@ export default function StockBoard({ symbol, label }: { symbol: string; label?: 
   }, [clean]);
 
   // "Discuss this thesis" arrives as ?thesis=<id>: start a post that links it.
-  const [draft, setDraft] = useState<string>();
-  useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("thesis");
-    if (id && UUID.test(id)) setDraft(`My thesis on ${name}: ${window.location.origin}/theses/${id.toLowerCase()} `);
-  }, [name]);
+  const search = useSyncExternalStore(subscribeToUrl, () => window.location.search, () => "");
+  const draft = useMemo(() => {
+    const id = new URLSearchParams(search).get("thesis");
+    return id && UUID.test(id) ? `My thesis on ${name}: ${window.location.origin}/theses/${id.toLowerCase()} ` : undefined;
+  }, [search, name]);
 
   return (
     <section id="community" aria-labelledby="board-title" className="mt-6">

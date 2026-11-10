@@ -2,7 +2,8 @@ import Link from "next/link";
 
 import { EmptyState, Notice, PageHeader, PageShell, secondaryButtonClass } from "@/components/ui/Page";
 import { buildImpactMap, macroInWindow, type ImpactMap } from "@/lib/impact/map";
-import { getMarketEventStore, ingestIfDue, type MarketEvent } from "@/lib/markets/eventIngest";
+import { getMarketEventStore, type MarketEvent } from "@/lib/markets/eventIngest";
+import { ingestAfterResponse } from "@/lib/markets/ingestAfterResponse";
 
 export const metadata = { title: "Impact map" };
 export const dynamic = "force-dynamic";
@@ -10,14 +11,14 @@ export const dynamic = "force-dynamic";
 const DAY = 86_400_000;
 const istDay = (t: number) => new Date(t + 5.5 * 3_600_000).toISOString().slice(0, 10);
 
-async function load(now: number): Promise<{ map: ImpactMap; marketError: boolean }> {
+async function load(now: number = Date.now()): Promise<{ map: ImpactMap; marketError: boolean }> {
   const from = istDay(now);
   let market: MarketEvent[] = [];
   let marketError = false;
   const store = getMarketEventStore();
   if (store) {
     try {
-      await ingestIfDue(store);
+      await ingestAfterResponse(store);
       market = await store.list({ from, to: istDay(now + 30 * DAY), limit: 300 });
     } catch {
       marketError = true;
@@ -66,7 +67,7 @@ function MapSvg({ map }: { map: ImpactMap }) {
 }
 
 export default async function ImpactPage() {
-  const { map, marketError } = await load(Date.now());
+  const { map, marketError } = await load();
   const targets = new Map(map.targets.map((t) => [t.id, t]));
 
   return (

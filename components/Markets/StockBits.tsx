@@ -78,6 +78,18 @@ export function absPercent(value: number | null) {
   return value === null || !Number.isFinite(value) ? "—" : `${Math.abs(value).toFixed(2)}%`;
 }
 
+/**
+ * "+12.30%" / "−4.10%" — for a change shown on its own. Colour alone doesn't
+ * say which way it went to someone who can't tell red from green, or to a
+ * screen reader. Use absPercent only beside a signed amount.
+ */
+export function signedPercent(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const rounded = Math.abs(value).toFixed(2);
+  if (Number(rounded) === 0) return "0.00%";
+  return `${value > 0 ? "+" : "−"}${rounded}%`;
+}
+
 /** "+12.30 (1.05%)" in green or red; "—" when the provider gave nothing. */
 export function Change({
   change,

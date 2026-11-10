@@ -18,13 +18,18 @@ const STATE_TEXT: Record<EarningsRoom["state"], (room: EarningsRoom) => string> 
   archived: () => "This meeting was more than two weeks ago.",
 };
 
+/** undefined when the lookup itself failed, which isn't the same as a room that doesn't exist. */
+async function loadRoom(symbol: string, date: string, now: number = Date.now()) {
+  const store = getMarketEventStore();
+  return store ? getRoom(store, symbol, date, now).catch(() => undefined) : undefined;
+}
+
 export default async function EarningsRoomPage({ params }: { params: Promise<{ symbol: string; date: string }> }) {
   const { symbol: rawSymbol, date } = await params;
   const symbol = decodeURIComponent(rawSymbol).toUpperCase();
   if (!isValidSymbol(symbol)) notFound();
-  const store = getMarketEventStore();
   // A failed lookup isn't a missing room: say so instead of answering 404.
-  const room = store ? await getRoom(store, symbol, date, Date.now()).catch(() => undefined) : undefined;
+  const room = await loadRoom(symbol, date);
 
   if (room === undefined) {
     return (
