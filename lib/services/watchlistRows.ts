@@ -1,5 +1,5 @@
 import { downsample } from "./indexOverview";
-import { getHistory, resolveAsset, type History } from "./history";
+import { getHistory, resolveAsset, sessionVolume, type History } from "./history";
 import { isValidSymbol } from "../validation/symbol";
 
 /**
@@ -22,7 +22,7 @@ export type WatchlistRow = {
   price: number | null;
   change: number | null;
   changePercent: number | null;
-  /** Sum of today's intraday bar volumes; null when the source reports none. */
+  /** The session's volume: the provider's own total, else worked out from the intraday bars; null when neither is known. */
   volume: number | null;
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;
@@ -57,8 +57,8 @@ export function toWatchlistRow(symbol: string, history: History | null): Watchli
   const price = last.c > 0 ? last.c : null;
   const previous = history.previousClose !== null && history.previousClose > 0 ? history.previousClose : null;
   const change = price !== null && previous !== null ? price - previous : null;
-  const volumes = candles.map((c) => c.v).filter((v): v is number => typeof v === "number" && v >= 0);
-  const volume = volumes.length > 0 ? volumes.reduce((a, b) => a + b, 0) : null;
+  const reported = typeof history.volume === "number" && history.volume > 0 ? history.volume : null;
+  const volume = reported ?? sessionVolume(candles);
 
   return {
     symbol,
@@ -67,7 +67,7 @@ export function toWatchlistRow(symbol: string, history: History | null): Watchli
     price,
     change,
     changePercent: change !== null && previous ? (change / previous) * 100 : null,
-    volume: volume && volume > 0 ? volume : null,
+    volume,
     fiftyTwoWeekHigh: history.fiftyTwoWeekHigh,
     fiftyTwoWeekLow: history.fiftyTwoWeekLow,
     spark: downsample(candles.map((c) => c.c)),

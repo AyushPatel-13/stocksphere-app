@@ -103,3 +103,45 @@ test("named lists: names are cleaned and a missing table means single-list mode"
   assert.equal(isMissingTable({ code: "42501", message: "permission denied" }), false);
   assert.equal(isMissingTable(null), false);
 });
+
+import { createHistoryLoader, resolveAsset, sessionVolume, withoutCumulativeLastBar } from "../history";
+
+test("a day's volume is the provider's total, never the bars added to a cumulative last bar", async () => {
+  // SBIN on 9 Nov 2026 as Yahoo served it after the close: 360 one-minute
+  // bars, then a last bar holding the whole day's volume.
+  const minute = 61_749; // 360 of these make 2,22,29,640
+  const bars = Array.from({ length: 360 }, (_, i) => ({ t: Date.parse("2026-11-09T03:45:00Z") + i * 60_000, o: null, h: null, l: null, c: 1040, v: minute }));
+  const cumulative = { t: Date.parse("2026-11-09T09:58:00Z"), o: null, h: null, l: null, c: 1042, v: 24_062_689 };
+  const afterClose = [...bars, cumulative];
+
+  // Added up, it's nearly double the truth: the bug.
+  assert.equal(afterClose.reduce((sum, bar) => sum + bar.v, 0), 46_292_329);
+  assert.equal(sessionVolume(afterClose), 24_062_689);
+  // During the session the bars are what they say and do add up.
+  assert.equal(sessionVolume(bars), 360 * minute);
+  assert.equal(sessionVolume([...bars, { v: 0 }]), 360 * minute);
+  assert.equal(sessionVolume([{ v: 500 }, { v: 1000 }]), 1500);
+  assert.equal(sessionVolume([{ v: null }]), null);
+  assert.equal(sessionVolume([]), null);
+
+  // The chart's volume panel doesn't draw the cumulative bar as a minute's volume.
+  const cleaned = withoutCumulativeLastBar(afterClose);
+  assert.equal(cleaned.at(-1)?.v, null);
+  assert.equal(cleaned.at(-1)?.c, 1042);
+  assert.equal(cleaned.length, afterClose.length);
+  assert.equal(withoutCumulativeLastBar(bars), bars);
+
+  const series = (regularMarketVolume: number | null | undefined) => ({
+    name: null, currency: "INR", exchangeTimezone: "Asia/Kolkata", previousClose: 1016, fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null,
+    regularMarketPrice: 1042, regularMarketVolume, marketTime: null, sessionStart: null, sessionEnd: null, candles: afterClose,
+  });
+  const load = (regularMarketVolume: number | null | undefined) =>
+    createHistoryLoader({ getYahooSeries: (async () => series(regularMarketVolume)) as never, getUpstoxDaily: async () => null, now: () => Date.parse("2026-11-10T00:00:00Z") });
+
+  // Yahoo's own total wins; without one, the bars are read with the cumulative bar understood.
+  const reported = await load(24_065_897)(resolveAsset("stock", "SBIN")!, "1d");
+  assert.equal(toWatchlistRow("SBIN", reported).volume, 24_065_897);
+  assert.equal(reported?.candles.at(-1)?.v, null);
+  const unreported = await load(undefined)(resolveAsset("stock", "SBIN")!, "1d");
+  assert.equal(toWatchlistRow("SBIN", unreported).volume, 24_062_689);
+});
