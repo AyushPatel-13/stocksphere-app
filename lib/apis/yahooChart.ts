@@ -138,6 +138,8 @@ export type ChartSeries = {
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;
   regularMarketPrice: number | null;
+  /** The session's total volume as Yahoo reports it (not a sum of the bars below). */
+  regularMarketVolume?: number | null;
   marketTime: string | null;
   /** The exchange's regular session (epoch ms), for a full-day 1D axis. */
   sessionStart: number | null;
@@ -192,6 +194,7 @@ export function parseChartSeries(body: unknown): ChartSeries | null {
     fiftyTwoWeekHigh: num(meta.fiftyTwoWeekHigh),
     fiftyTwoWeekLow: num(meta.fiftyTwoWeekLow),
     regularMarketPrice: num(meta.regularMarketPrice),
+    regularMarketVolume: num(meta.regularMarketVolume),
     marketTime: time !== null ? new Date(time * 1000).toISOString() : null,
     ...regularSession(meta),
     candles,

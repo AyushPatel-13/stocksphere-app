@@ -130,11 +130,32 @@ export type History = {
   previousClose: number | null;
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;
+  /** The latest session's total volume as the provider reports it; absent when it doesn't. */
+  volume?: number | null;
   marketTime: string | null;
   sessionStart: number | null;
   sessionEnd: number | null;
   source: "Yahoo" | "Upstox";
 };
+
+/**
+ * A session's volume from its 1-minute bars, for when the provider gives no
+ * total of its own.
+ *
+ * The bars can't simply be added up. After the close Yahoo's last bar for an
+ * NSE stock holds the whole day's volume, not that minute's: on 10 Nov 2026
+ * SBIN's bars summed to 4,62,92,174 while the day's volume was 2,40,65,897,
+ * and 2,40,62,689 of the sum was that one last bar. So a last bar at least as
+ * large as most of the rest put together is taken as the day's total.
+ */
+export function sessionVolume(candles: { v: number | null }[]): number | null {
+  const volumes = candles.map((c) => c.v).filter((v): v is number => typeof v === "number" && v >= 0);
+  if (volumes.length === 0) return null;
+  const last = volumes[volumes.length - 1];
+  const rest = volumes.slice(0, -1).reduce((a, b) => a + b, 0);
+  const total = volumes.length > 10 && last >= rest * 0.8 ? Math.max(last, rest) : rest + last;
+  return total > 0 ? total : null;
+}
 
 export interface HistoryDeps {
   getYahooSeries: typeof getYahooSeries;
@@ -217,6 +238,21 @@ export function previousUpstoxClose(daily: Candle[], sessionStart: number): numb
 /** Days of Upstox daily candles asked for: enough to span a long holiday break. */
 const PREVIOUS_CLOSE_LOOKBACK_DAYS = 12;
 
+/**
+ * After the close, Yahoo's last 1-minute bar for an NSE stock carries the
+ * whole day's volume instead of that minute's (see sessionVolume in
+ * watchlistRows.ts). Left in, it draws one bar a hundred times taller than
+ * the rest on the 1D volume panel, so its volume is blanked: unknown, not a
+ * made-up minute figure. The day's total is still reported in `volume`.
+ */
+export function withoutCumulativeLastBar(candles: Candle[]): Candle[] {
+  if (candles.length <= 10) return candles;
+  const last = candles[candles.length - 1];
+  if (typeof last.v !== "number" || last.v <= 0) return candles;
+  const rest = candles.slice(0, -1).reduce((sum, candle) => sum + (candle.v ?? 0), 0);
+  return last.v >= rest * 0.8 ? [...candles.slice(0, -1), { ...last, v: null }] : candles;
+}
+
 export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
   const cache = new Map<string, { at: number; history: History }>();
   const dailyCloses = new Map<string, { at: number; close: number | null }>();
@@ -280,10 +316,13 @@ export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
 
     if (!series || series.candles.length === 0) return null;
 
-    const candles = config.trimDays
+    const kept = config.trimDays
       ? series.candles.filter((candle) => candle.t >= deps.now() - config.trimDays * 86_400_000)
       : series.candles;
-    if (candles.length === 0) return null;
+    if (kept.length === 0) return null;
+    // The day's total from the bars, before the cumulative one is blanked, for a series without its own.
+    const barVolume = range === "1d" ? sessionVolume(kept) : null;
+    const candles = range === "1d" ? withoutCumulativeLastBar(kept) : kept;
 
     const previousClose =
       range === "1d" && source === "Yahoo"
@@ -303,6 +342,7 @@ export function createHistoryLoader(deps: HistoryDeps = DEFAULT_DEPS) {
       previousClose,
       fiftyTwoWeekHigh: series.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: series.fiftyTwoWeekLow,
+      volume: range === "1d" ? series.regularMarketVolume ?? barVolume : null,
       marketTime: series.marketTime,
       sessionStart: series.sessionStart,
       sessionEnd: series.sessionEnd,
