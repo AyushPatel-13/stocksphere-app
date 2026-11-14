@@ -19,6 +19,13 @@ export type Dated = { value: number; asOf: string };
 export type YahooFundamentals = {
   epsTtm: Dated | null;
   sharesOutstanding: Dated | null;
+  /**
+   * Net income of the last reported fiscal year, when positive. Market cap ÷
+   * this is a P/E that a split or bonus issue can't distort: Yahoo's trailing
+   * EPS isn't always restated for one (on 14 Nov 2026 it gave HDFC Bank ₹87
+   * a share, twice what its reported profit and share count imply).
+   */
+  netIncomeFy?: Dated | null;
   currency: string | null;
 };
 
@@ -53,12 +60,14 @@ export function parseFundamentalsTimeseries(body: unknown): YahooFundamentals {
   const eps = latest(byType("trailingDilutedEPS"), "trailingDilutedEPS");
   const quarterly = latest(byType("quarterlyOrdinarySharesNumber"), "quarterlyOrdinarySharesNumber");
   const annual = latest(byType("annualOrdinarySharesNumber"), "annualOrdinarySharesNumber");
+  const netIncome = latest(byType("annualNetIncome"), "annualNetIncome");
   const shares = [quarterly, annual].filter((s): s is NonNullable<typeof s> => s !== null).sort((a, b) => b.asOf.localeCompare(a.asOf))[0] ?? null;
 
   return {
     epsTtm: eps ? { value: eps.value, asOf: eps.asOf } : null,
     sharesOutstanding: shares ? { value: shares.value, asOf: shares.asOf } : null,
-    currency: eps?.currency ?? null,
+    netIncomeFy: netIncome ? { value: netIncome.value, asOf: netIncome.asOf } : null,
+    currency: eps?.currency ?? netIncome?.currency ?? null,
   };
 }
 
@@ -80,7 +89,8 @@ export function parseDividends(body: unknown, now: number): YahooDividends | nul
 const fundamentalsCache = new Map<string, { at: number; value: YahooFundamentals | null }>();
 const dividendsCache = new Map<string, { at: number; value: YahooDividends | null }>();
 
-async function fetchJson(url: string, fetcher: typeof fetch): Promise<unknown | null> {
+/** GET a Yahoo JSON endpoint; null on any failure. Shared with yahooStatements.ts. */
+export async function fetchYahooJson(url: string, fetcher: typeof fetch): Promise<unknown | null> {
   try {
     const response = await fetcher(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
@@ -103,11 +113,11 @@ export async function getYahooFundamentals(yahooSymbol: string, fetcher: typeof 
   if (hit && now - hit.at < CACHE_MS) return hit.value;
 
   const params = new URLSearchParams({
-    type: "trailingDilutedEPS,quarterlyOrdinarySharesNumber,annualOrdinarySharesNumber",
+    type: "trailingDilutedEPS,quarterlyOrdinarySharesNumber,annualOrdinarySharesNumber,annualNetIncome",
     period1: String(Math.floor(now / 1000) - 3 * 365 * 86_400),
     period2: String(Math.floor(now / 1000)),
   });
-  const body = await fetchJson(
+  const body = await fetchYahooJson(
     `https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${encodeURIComponent(yahooSymbol)}?${params.toString()}`,
     fetcher
   );
@@ -121,7 +131,7 @@ export async function getYahooDividends(yahooSymbol: string, fetcher: typeof fet
   const hit = dividendsCache.get(yahooSymbol);
   if (hit && now - hit.at < CACHE_MS) return hit.value;
 
-  const body = await fetchJson(
+  const body = await fetchYahooJson(
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=1y&interval=1d&events=div`,
     fetcher
   );

@@ -11,6 +11,8 @@ import PriceChart from "@/components/Charts/PriceChart";
 import TradePanel from "@/components/Stock/TradePanel";
 import { exchangeLabel } from "@/lib/paper/ticket";
 import CompanyOverview from "@/components/Stock/CompanyOverview";
+import Financials from "@/components/Stock/Financials";
+import Peers from "@/components/Stock/Peers";
 import AgentAssistant from "@/components/Agent/AgentAssistant";
 import { StockAvatar } from "@/components/Markets/StockBits";
 import { getPrice } from "@/lib/services/price";
@@ -507,6 +509,7 @@ export default async function StockPage({
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
         <nav aria-label="Sections" className="sp-tabs">
           <a href="#overview">Overview</a>
+          <a href="#financials">Financials</a>
           <a href="#news">News</a>
           <a href="#community">Community</a>
           <a href="#events">Events</a>
@@ -581,6 +584,12 @@ export default async function StockPage({
 
         <CompanyOverview company={overview} source={!company?.description && wiki ? { label: "Wikipedia", url: wiki.url } : null} />
         </div>
+
+        <div id="financials" className="sp-anchor">
+          <Financials symbol={symbol} />
+        </div>
+
+        <Peers symbol={symbol} />
 
         <AgentAssistant symbol={symbol} companyName={company?.name} />
 

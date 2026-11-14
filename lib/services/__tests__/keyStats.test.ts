@@ -22,7 +22,7 @@ test("fundamentals: the latest EPS and the most recent share count", () => {
   assert.deepEqual(f.epsTtm, { value: 55.22, asOf: "2026-06-30" });
   assert.deepEqual(f.sharesOutstanding, { value: 13532472634, asOf: "2026-03-31" });
   assert.equal(f.currency, "INR");
-  assert.deepEqual(parseFundamentalsTimeseries({}), { epsTtm: null, sharesOutstanding: null, currency: null });
+  assert.deepEqual(parseFundamentalsTimeseries({}), { epsTtm: null, sharesOutstanding: null, netIncomeFy: null, currency: null });
 });
 
 test("dividends: only those paid in the last 12 months count", () => {
