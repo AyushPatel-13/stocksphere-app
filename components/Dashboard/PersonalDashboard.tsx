@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import IndicesBar from "@/components/IndicesBar";
 import { Change, StockAvatar, toneClass } from "@/components/Markets/StockBits";
@@ -150,7 +150,7 @@ function MoverList({ title, items }: { title: string; items: Mover[] }) {
   );
 }
 
-export default function PersonalDashboard() {
+export default function PersonalDashboard({ top, eyebrow = "Dashboard" }: { top?: ReactNode; eyebrow?: string } = {}) {
   const [name, setName] = useState("");
   const [lists, setLists] = useState<Load<{ watchlist: string[]; holdings: HoldingRow[] }>>({ status: "loading" });
   const [movers, setMovers] = useState<Load<MoversData>>({ status: "loading" });
@@ -316,8 +316,9 @@ export default function PersonalDashboard() {
 
   return (
     <PageShell>
+      {top}
       <PageHeader
-        eyebrow="Dashboard"
+        eyebrow={eyebrow}
         title={greeting}
         description="Your markets, holdings and watchlist in one place, with live prices."
         actions={
