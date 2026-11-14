@@ -9,6 +9,8 @@ import HomeStats from "./HomeStats";
 import HomeNews from "@/components/Markets/HomeNews";
 import AgentHome from "@/components/Agent/AgentHome";
 import IndicesBar from "@/components/IndicesBar";
+import PersonalDashboard from "@/components/Dashboard/PersonalDashboard";
+import { useSignedIn } from "@/lib/client/useSignedIn";
 
 /**
  * One figure in the US market row: a small label over the provider's price and
@@ -159,7 +161,35 @@ function UnavailableNote({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The home page. A visitor gets the welcome page below; a signed-in member
+ * gets their own dashboard here (watchlist, holdings, briefing, alerts), with
+ * search and the assistant kept at the top, instead of being greeted like a
+ * stranger. /dashboard still works and shows the same thing.
+ */
 export default function Home() {
+  return useSignedIn() ? <MemberHome /> : <VisitorHome />;
+}
+
+function MemberHome() {
+  return (
+    <PersonalDashboard
+      eyebrow="Home"
+      top={
+        <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative min-w-0 flex-1">
+            <SearchBox variant="hero" />
+          </div>
+          <div className="shrink-0 self-end sm:self-auto">
+            <AgentHome />
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
+function VisitorHome() {
   const [marketData, setMarketData] =
   useState<{
     success: boolean;
@@ -253,7 +283,7 @@ useEffect(() => {
       {/* Navbar */}
 
       {/* Hero */}
-<section className="px-4 pt-12 pb-8 text-center sm:px-6 sm:pt-16 lg:px-8">
+<section className="px-4 pt-12 pb-6 text-center sm:px-6 sm:pt-16 lg:px-8">
 
   {/* StockSphere AI. The agent's entry point sits directly under the navbar,
       at the right: an assistant available whenever it is wanted, rather than a
@@ -281,7 +311,7 @@ useEffect(() => {
       exactly what the shorter pill no longer occupies. The row's block takes
       the same height it did before, so nothing below it moves: the logo, the
       headline and every section keep their existing positions. */}
-  <div className="-mx-4 -mt-8 mb-[66px] sm:-mx-6 sm:-mt-12 sm:mb-[88px] lg:-mx-8">
+  <div className="-mx-4 -mt-8 mb-6 sm:-mx-6 sm:-mt-12 sm:mb-8 lg:-mx-8">
     <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-5">
       <AgentHome />
     </div>
@@ -290,36 +320,36 @@ useEffect(() => {
   <div className="mx-auto w-full max-w-[1080px]">
 
     {/* Logo */}
-    <div className="flex justify-center mb-6">
+    <div className="flex justify-center mb-4">
       <Image
         src="/stocksphere-logo.png"
         alt="StockSphere Logo"
-        width={110}
-        height={110}
+        width={72}
+        height={72}
         className="rounded-2xl"
       />
     </div>
 
     {/* Heading */}
-    <h1 className="text-4xl md:text-6xl font-bold tracking-tight">
+    <h1 className="text-4xl md:text-5xl font-bold tracking-tight">
   <span className="text-white">Invest. Track. </span>
   <span className="text-green-500">Understand. Discuss.</span>
 </h1>
 
     {/* Subtitle */}
-    <p className="mx-auto mt-4 max-w-2xl text-base text-[#888] md:text-lg">
+    <p className="mx-auto mt-3 max-w-2xl text-base text-[#888] md:text-lg">
       Explore stocks, ETFs, crypto, indices and global markets.
     </p>
 
     {/* Search: instrument autocomplete across Indian and US stocks, ETFs,
         indices, crypto and bonds (components/Search/SearchBox.tsx). It
         replaces a filter over a hardcoded list of 23 stocks. */}
-    <div className="relative mx-auto mt-8 max-w-2xl">
+    <div className="relative mx-auto mt-6 max-w-2xl">
       <SearchBox variant="hero" />
     </div>
 
     {/* Trending */}
-    <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-sm">
+    <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-sm">
 
       <span className="mr-1 text-[#777]">
         Trending
