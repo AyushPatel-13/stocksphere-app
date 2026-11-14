@@ -548,7 +548,12 @@ export default function AlertsPage() {
 
               <section id="notifications" className="overflow-hidden rounded-2xl border border-[#222] bg-[#111]">
                 <div className="flex items-center justify-between border-b border-[#1d1d1d] px-5 py-3">
-                  <p className="font-semibold">Notifications</p>
+                  <p className="font-semibold">
+                    Notifications{" "}
+                    <Link href="/notifications" className="ml-2 text-xs font-normal text-[#4ade80] hover:underline">
+                      See all →
+                    </Link>
+                  </p>
                   {notes && typeof notes !== "string" && notes.items.some((n) => !n.readAt) && (
                     <button type="button" onClick={readAll} className={secondaryButtonClass}>
                       Mark all read
