@@ -15,10 +15,16 @@ import {
   type PresetId,
   type ScreenCriteria,
   type ScreenSortKey,
+  deriveFundamentals,
+  formatCap,
+  normaliseCriteria,
 } from "@/lib/analytics/screener";
 import { formatMoney, formatVolume } from "@/lib/client/useQuotes";
 import { NIFTY_50_SYMBOLS } from "@/lib/data/instruments/india";
 import type { WatchlistRow } from "@/lib/services/watchlistRows";
+import type { ScreenerFundamentals } from "@/lib/services/screenerFundamentals";
+import { accountScreens } from "@/lib/screener/accountScreens";
+import { loadScreens, removeScreen, saveScreen, type SavedScreens } from "@/lib/screener/savedScreens";
 import { supabase } from "@/lib/supabase";
 import { addToWatchlist, getWatchlist } from "@/lib/watchlist";
 
@@ -59,28 +65,6 @@ function WatchCell({ symbol, state, onAdd }: { symbol: string; state: WatchState
 type Universe = { status: "loading" } | { status: "error" } | { status: "ready"; rows: (WatchlistRow & { market: "india" | "us" })[] };
 
 const ROWS_PER_REQUEST = 50;
-const SAVED_KEY = "stocksphere.screener.saved";
-
-type SavedScreen = { name: string; criteria: ScreenCriteria };
-
-function readSaved(): SavedScreen[] {
-  try {
-    const raw = window.localStorage.getItem(SAVED_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeSaved(screens: SavedScreen[]) {
-  try {
-    window.localStorage.setItem(SAVED_KEY, JSON.stringify(screens.slice(0, 10)));
-  } catch {
-    /* storage unavailable: saved screens just don't persist */
-  }
-}
-
 async function loadUniverse(): Promise<(WatchlistRow & { market: "india" | "us" })[]> {
   // /api/watchlist/rows takes at most 50 symbols per request.
   const fetchRows = async (symbols: string[], market: "india" | "us") => {
@@ -126,7 +110,26 @@ export default function ScreenerPage() {
   const [preset, setPreset] = useState<PresetId | "custom">("all");
   const [criteria, setCriteria] = useState<ScreenCriteria>(EMPTY_CRITERIA);
   const [sort, setSort] = useState<{ key: ScreenSortKey; desc: boolean }>({ key: "change", desc: true });
-  const [saved, setSaved] = useState<SavedScreen[]>([]);
+  // With the member's account when signed in (so they follow them), in this browser otherwise.
+  const [saved, setSaved] = useState<SavedScreens>({ where: "device", screens: [] });
+  const [saveNote, setSaveNote] = useState<string | null>(null);
+  // Shares, EPS and sector for the universe. "off" when they couldn't be loaded: the price filters still work.
+  const [fundamentals, setFundamentals] = useState<{ status: "loading" } | { status: "off" } | { status: "ready"; data: ScreenerFundamentals }>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/screener/fundamentals")
+      .then((response) => response.json())
+      .then((data) => {
+        if (!cancelled) setFundamentals(data?.success ? { status: "ready", data } : { status: "off" });
+      })
+      .catch(() => {
+        if (!cancelled) setFundamentals({ status: "off" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,11 +140,11 @@ export default function ScreenerPage() {
       .catch(() => {
         if (!cancelled) setUniverse({ status: "error" });
       });
-    // Saved screens live in this browser only (a per-device convenience).
-    const timer = window.setTimeout(() => setSaved(readSaved()), 0);
+    loadScreens(accountScreens, window.localStorage).then((result) => {
+      if (!cancelled) setSaved(result);
+    });
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
     };
   }, [attempt]);
 
@@ -183,8 +186,11 @@ export default function ScreenerPage() {
 
   const results = useMemo(() => {
     if (universe.status !== "ready") return [];
-    return sortScreen(applyScreen(universe.rows, criteria, preset === "big_movers"), sort.key, sort.desc);
-  }, [universe, criteria, preset, sort]);
+    const bySymbol = fundamentals.status === "ready" ? fundamentals.data.bySymbol : {};
+    const rows = universe.rows.map((row) => ({ ...row, ...deriveFundamentals(row.price, bySymbol[row.symbol.toUpperCase()]) }));
+    return sortScreen(applyScreen(rows, criteria, preset === "big_movers"), sort.key, sort.desc);
+  }, [universe, fundamentals, criteria, preset, sort]);
+  const usesFundamentals = criteria.minPe !== null || criteria.maxPe !== null || criteria.minMarketCapCr !== null || criteria.minMarketCapUsdBn !== null || criteria.sector !== null;
 
   function choosePreset(id: PresetId) {
     const p = PRESETS.find((entry) => entry.id === id)!;
@@ -198,12 +204,21 @@ export default function ScreenerPage() {
     setCriteria((current) => ({ ...current, ...patch }));
   }
 
-  function saveCurrent() {
-    const name = window.prompt("Name this screen", "My screen")?.trim();
-    if (!name) return;
-    const next = [{ name: name.slice(0, 40), criteria }, ...saved.filter((s) => s.name !== name)].slice(0, 10);
-    setSaved(next);
-    writeSaved(next);
+  async function saveCurrent() {
+    const name = window.prompt("Name this screen", "My screen");
+    if (name === null) return;
+    const result = await saveScreen(name, criteria, accountScreens, window.localStorage);
+    if (result.ok) {
+      setSaved(result.saved);
+      setSaveNote(result.saved.where === "account" ? "Saved to your account." : "Saved on this device.");
+    } else {
+      setSaveNote(result.reason === "full" ? "You can keep up to 10 saved screens. Remove one first." : "Give the screen a name to save it.");
+    }
+  }
+
+  async function removeSaved(name: string) {
+    setSaved(await removeScreen(name, accountScreens, window.localStorage));
+    setSaveNote(null);
   }
 
   function sortBy(key: ScreenSortKey) {
@@ -226,7 +241,7 @@ export default function ScreenerPage() {
       <PageHeader
         eyebrow="Screener"
         title="Stock screener"
-        description="Filter the NIFTY 50 and 20 US large caps by today's move, 52-week position and volume. Every result shows why it matched."
+        description="Filter the NIFTY 50 and 20 US large caps by today's move, 52-week position, volume, P/E, market cap and sector. Every result shows why it matched."
       />
 
       <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -246,25 +261,39 @@ export default function ScreenerPage() {
                 </button>
               ))}
             </div>
-            {saved.length > 0 && (
+            {saved.screens.length > 0 && (
               <>
-                <p className="mb-2 mt-4 text-xs text-[#888]">Saved on this device</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {saved.map((s) => (
-                    <button
-                      key={s.name}
-                      type="button"
-                      onClick={() => {
-                        setPreset("custom");
-                        setCriteria(s.criteria);
-                      }}
-                      className="rounded-full border border-[#2a2a2a] px-3 py-1 text-xs text-[#ccc] hover:text-white"
-                    >
-                      {s.name}
-                    </button>
+                <p className="mb-2 mt-4 text-xs text-[#888]">{saved.where === "account" ? "Saved to your account" : "Saved on this device"}</p>
+                <ul className="flex flex-wrap gap-1.5">
+                  {saved.screens.map((s) => (
+                    <li key={s.name} className="inline-flex items-center rounded-full border border-[#2a2a2a] text-xs text-[#ccc]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreset("custom");
+                          setCriteria(normaliseCriteria(s.criteria));
+                        }}
+                        className="rounded-l-full py-1 pl-3 pr-1.5 hover:text-white"
+                      >
+                        {s.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeSaved(s.name)}
+                        aria-label={`Remove saved screen ${s.name}`}
+                        className="rounded-r-full py-1 pl-1 pr-2.5 text-[#777] hover:text-red-300"
+                      >
+                        ×
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ul>
               </>
+            )}
+            {saveNote && (
+              <p className="mt-3 text-xs text-[#999]" role="status">
+                {saveNote}
+              </p>
             )}
           </section>
 
@@ -290,6 +319,37 @@ export default function ScreenerPage() {
             <NumberField label="Within … of 52W high" value={criteria.withinOfHighPct} onChange={(v) => update({ withinOfHighPct: v })} suffix="%" />
             <NumberField label="Within … of 52W low" value={criteria.withinOfLowPct} onChange={(v) => update({ withinOfLowPct: v })} suffix="%" />
             <NumberField label="Volume at least" value={criteria.minVolume} onChange={(v) => update({ minVolume: v })} />
+
+            <p className="border-t border-[#1d1d1d] pt-3 text-sm font-semibold">Fundamentals</p>
+            {fundamentals.status === "off" ? (
+              <p className="text-xs text-[#888]">Fundamentals couldn&apos;t be loaded right now, so these filters are off. The filters above still work.</p>
+            ) : (
+              <fieldset disabled={fundamentals.status !== "ready"} className="space-y-3 disabled:opacity-50">
+                <legend className="sr-only">Fundamental filters</legend>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberField label="P/E ≥" value={criteria.minPe} onChange={(v) => update({ minPe: v })} />
+                  <NumberField label="P/E ≤" value={criteria.maxPe} onChange={(v) => update({ maxPe: v })} />
+                </div>
+                <NumberField label="Market cap at least (India)" value={criteria.minMarketCapCr} onChange={(v) => update({ minMarketCapCr: v })} suffix="₹ Cr" />
+                <NumberField label="Market cap at least (US)" value={criteria.minMarketCapUsdBn} onChange={(v) => update({ minMarketCapUsdBn: v })} suffix="$ B" />
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[#888]">Sector (NIFTY 50)</span>
+                  <select
+                    value={criteria.sector ?? ""}
+                    onChange={(e) => update({ sector: e.target.value || null })}
+                    className="w-full rounded-lg border border-[#2a2a2a] bg-black px-2.5 py-1.5 text-sm text-white outline-none focus:border-[#22c55e]/60"
+                  >
+                    <option value="">Any sector</option>
+                    {(fundamentals.status === "ready" ? fundamentals.data.sectors : []).map((sector) => (
+                      <option key={sector} value={sector}>
+                        {sector}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {fundamentals.status === "loading" && <p className="text-xs text-[#888]">Loading fundamentals…</p>}
+              </fieldset>
+            )}
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => choosePreset("all")} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-[#aaa] hover:bg-[#1a1a1a]">
                 Reset
@@ -340,6 +400,8 @@ export default function ScreenerPage() {
                         {header("Company", "symbol", "pl-4 text-left")}
                         {header("Price", "price", "text-right")}
                         {header("1D change", "change", "text-right")}
+                        {header("Market cap", "marketCap", "hidden text-right lg:table-cell")}
+                        {header("P/E", "pe", "hidden text-right lg:table-cell")}
                         {header("Volume", "volume", "hidden text-right md:table-cell")}
                         {header("52W position", "position", "hidden text-left xl:table-cell")}
                         <th className="py-3 pl-2 pr-4 text-right font-medium">
@@ -356,13 +418,17 @@ export default function ScreenerPage() {
                               <span className="min-w-0 max-w-[11rem] sm:max-w-[16rem]">
                                 <span className="block truncate font-semibold group-hover:text-[#22c55e]">{row.symbol}</span>
                                 <span className="block truncate text-xs text-[#777]">
-                                  {row.reasons.length > 0 ? `Matched: ${row.reasons.join(" · ")}` : row.name ?? ""}
+                                  {row.reasons.length > 0 ? `Matched: ${row.reasons.join(" · ")}` : [row.name, row.sector].filter(Boolean).join(" · ")}
                                 </span>
                               </span>
                             </Link>
                           </td>
                           <td className="px-3 py-3 text-right tabular-nums">{formatMoney(row.price!, row.currency ?? (row.market === "us" ? "USD" : "INR"))}</td>
                           <td className={`px-3 py-3 text-right font-medium tabular-nums ${toneClass(row.changePercent)}`}>{signedPercent(row.changePercent)}</td>
+                          <td className="hidden whitespace-nowrap px-3 py-3 text-right tabular-nums text-[#ccc] lg:table-cell">
+                            {row.marketCap ? formatCap(row.marketCap, row.market === "us" ? "USD" : "INR") : "—"}
+                          </td>
+                          <td className="hidden px-3 py-3 text-right tabular-nums text-[#ccc] lg:table-cell">{row.pe ? row.pe.toFixed(1) : "—"}</td>
                           <td className="hidden px-3 py-3 text-right tabular-nums text-[#ccc] md:table-cell">{formatVolume(row.volume, row.currency ?? undefined)}</td>
                           <td className="hidden w-40 px-3 py-3 xl:table-cell">
                             <MiniRange low={row.fiftyTwoWeekLow} high={row.fiftyTwoWeekHigh} value={row.price} />
@@ -377,7 +443,9 @@ export default function ScreenerPage() {
                 )}
               </div>
               <p className="mt-3 text-[11px] text-[#666]">
-                Prices from Yahoo Finance; may be delayed. Screens describe today&apos;s data — they aren&apos;t recommendations.
+                Prices from Yahoo Finance; may be delayed. Market cap is price × shares outstanding and P/E is market cap ÷ the last fiscal year&apos;s net income (Yahoo Finance); a company with a loss has no P/E.
+                {fundamentals.status === "ready" && fundamentals.data.sectorSource ? ` Sector: ${fundamentals.data.sectorSource}; US stocks have none here.` : ""}
+                {usesFundamentals ? " A stock whose figure couldn't be sourced doesn't match a filter on it." : ""} Screens describe today&apos;s data — they aren&apos;t recommendations.
               </p>
             </>
           )}

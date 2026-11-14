@@ -38,6 +38,7 @@ const TEST_ROOTS = [
   "lib/paper",
   "lib/analytics",
   "lib/markets",
+  "lib/screener",
   "lib/theses",
   "lib/reputation",
   "lib/earnings",

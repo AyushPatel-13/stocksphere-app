@@ -184,6 +184,12 @@ export async function unreadCount(): Promise<number | null> {
   return count ?? 0;
 }
 
+/** Mark one notification read. RLS limits the update to the member's own rows. */
+export async function markRead(id: string): Promise<void> {
+  const { error } = await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", id).is("read_at", null);
+  if (error) throw error;
+}
+
 export async function markAllRead(): Promise<void> {
   const { error } = await supabase.from("notifications").update({ read_at: new Date().toISOString() }).is("read_at", null);
   if (error) throw error;
